@@ -1,0 +1,31 @@
+{
+  "name": "occupational-rehab-system",
+  "version": "1.0.0",
+  "description": "Professional Occupational Rehabilitation Management System",
+  "main": "index.js",
+  "scripts": {
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "server": "cd backend && npm run dev",
+    "client": "cd frontend && npm start",
+    "build": "cd frontend && npm run build",
+    "install-all": "npm install && cd backend && npm install && cd ../frontend && npm install",
+    "prepare-github": "npm run clean && npm run build",
+    "clean": "rm -rf node_modules backend/node_modules frontend/node_modules backend/uploads/* frontend/build"
+  },
+  "keywords": [
+    "react",
+    "typescript",
+    "mongodb",
+    "occupational",
+    "rehabilitation"
+  ],
+  "author": "Professional Development Team",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "dependencies": {
+    "@types/js-cookie": "^3.0.6",
+    "js-cookie": "^3.0.5"
+  }
+}

@@ -1,0 +1,165 @@
+/* Modern Dashboard Styles */
+
+/* Smooth transitions for all interactive elements */
+* {
+  transition: all 0.3s ease;
+}
+
+/* Custom scrollbar for webkit browsers */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(135deg, #7B68EE 0%, #20B2AA 100%);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(135deg, #6A5ACD 0%, #008B8B 100%);
+}
+
+/* Card hover animations */
+.dashboard-card {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.dashboard-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+}
+
+/* Gradient text effect */
+.gradient-text {
+  background: linear-gradient(135deg, #7B68EE 0%, #20B2AA 100%);
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-size: 200% 200%;
+  animation: gradientShift 3s ease infinite;
+}
+
+@keyframes gradientShift {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+/* Pulse animation for active elements */
+.pulse {
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(123, 104, 238, 0.7);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(123, 104, 238, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(123, 104, 238, 0);
+  }
+}
+
+/* Floating action button */
+.floating-action {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 1000;
+  box-shadow: 0 4px 20px rgba(123, 104, 238, 0.3);
+}
+
+/* Mobile responsive adjustments */
+@media (max-width: 768px) {
+  .dashboard-card {
+    margin-bottom: 16px;
+  }
+  
+  .floating-action {
+    bottom: 16px;
+    right: 16px;
+  }
+}
+
+/* Loading skeleton animation */
+.skeleton {
+  background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+  background-size: 200% 100%;
+  animation: loading 1.5s infinite;
+}
+
+@keyframes loading {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* Custom button styles */
+.modern-button {
+  background: linear-gradient(135deg, #7B68EE 0%, #9B7FFF 100%);
+  border: none;
+  border-radius: 12px;
+  color: white;
+  font-weight: 600;
+  padding: 12px 24px;
+  box-shadow: 0 4px 12px rgba(123, 104, 238, 0.3);
+  transition: all 0.3s ease;
+}
+
+.modern-button:hover {
+  background: linear-gradient(135deg, #6A5ACD 0%, #8A7FFF 100%);
+  box-shadow: 0 6px 16px rgba(123, 104, 238, 0.4);
+  transform: translateY(-2px);
+}
+
+/* Status indicators */
+.status-online {
+  color: #20B2AA;
+}
+
+.status-warning {
+  color: #FF8C00;
+}
+
+.status-error {
+  color: #FF6B6B;
+}
+
+.status-info {
+  color: #7B68EE;
+}
+
+/* Glass morphism effect */
+.glass-card {
+  background: rgba(255, 255, 255, 0.25);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  .glass-card {
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+  }
+}
+
+
+
