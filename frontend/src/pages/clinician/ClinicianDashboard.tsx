@@ -33,6 +33,7 @@ import {
   IconButton,
   Tooltip,
   Grid,
+  Pagination,
 } from '@mui/material';
 import {
   CheckCircle,
@@ -250,7 +251,11 @@ const ClinicianDashboard: React.FC = () => {
 
   // Memoized calculations for better performance
   const activeRehabPlans = useMemo(() => 
-    rehabPlans.filter(plan => plan.status === 'active'), 
+    rehabPlans.filter(plan => 
+      plan.status === 'active' && 
+      plan.case && 
+      plan.case.status !== 'closed'
+    ), 
     [rehabPlans]
   );
 
@@ -280,31 +285,67 @@ const ClinicianDashboard: React.FC = () => {
   // Case detail viewing
   const [selectedCase, setSelectedCase] = useState<Case | null>(null);
   const [caseDetailDialog, setCaseDetailDialog] = useState(false);
+  const [isUpdatingCase, setIsUpdatingCase] = useState(false);
+  
+  // Pagination states for My Cases
+  const [casesCurrentPage, setCasesCurrentPage] = useState(1);
+  const [casesPageSize, setCasesPageSize] = useState(10);
+  const [totalCases, setTotalCases] = useState(0);
+  
+  // Pagination handlers for My Cases
+  const handleCasesPageChange = useCallback((page: number) => {
+    setCasesCurrentPage(page);
+  }, []);
+
+  const handleCasesPageSizeChange = useCallback((newPageSize: number) => {
+    setCasesPageSize(newPageSize);
+    setCasesCurrentPage(1); // Reset to first page when changing page size
+  }, []);
   
   // Handle case detail viewing
   const handleViewCaseDetails = async (caseId: string) => {
     try {
-      console.log('🔍 Fetching case details for ID:', caseId);
       const response = await api.get(`/cases/${caseId}`);
-      console.log('✅ Case details response:', response.data);
-      console.log('📋 Incident data:', response.data.case.incident);
-      console.log('📸 Photos data:', response.data.case.incident?.photos);
       setSelectedCase(response.data.case);
       setCaseDetailDialog(true);
-      console.log('📋 Case detail dialog opened');
     } catch (error) {
       console.error('❌ Error fetching case details:', error);
     }
   };
 
-  // Debug dialog state changes
-  useEffect(() => {
-    console.log('🔍 Dialog state changed - open:', caseDetailDialog, 'selectedCase:', selectedCase);
-    if (selectedCase) {
-      console.log('🔍 Selected case incident:', selectedCase.incident);
-      console.log('🔍 Incident photos:', selectedCase.incident?.photos);
+  // Handle case status update
+  const handleUpdateCaseStatus = async (caseId: string, newStatus: string, notes?: string) => {
+    try {
+      setIsUpdatingCase(true);
+      
+      const response = await api.put(`/cases/${caseId}/update-status`, {
+        status: newStatus,
+        notes: notes || `Status updated to ${newStatus} by clinician`
+      });
+      
+      
+      // Update the selected case in the dialog
+      if (selectedCase && selectedCase._id === caseId) {
+        setSelectedCase(response.data.case);
+      }
+      
+      // Refresh the cases list
+      fetchClinicianData();
+      
+      // Show success message
+      setSuccessMessage(`Case status updated to ${newStatus.replace('_', ' ')} successfully!`);
+      
+      // Clear success message after 3 seconds
+      setTimeout(() => setSuccessMessage(''), 3000);
+      
+    } catch (error: any) {
+      console.error('Error updating case status:', error);
+      setError(error.response?.data?.message || 'Failed to update case status');
+    } finally {
+      setIsUpdatingCase(false);
     }
-  }, [caseDetailDialog, selectedCase]);
+  };
+
   
   // Form states
   const [planForm, setPlanForm] = useState({
@@ -363,7 +404,6 @@ const ClinicianDashboard: React.FC = () => {
       
       // Only update if the hash has changed (meaning there's new data)
       if (newHash !== lastProgressHash) {
-        console.log('Progress data changed, updating...');
         setHasNewData(true);
         
         // Fetch progress stats for each active plan
@@ -401,7 +441,7 @@ const ClinicianDashboard: React.FC = () => {
         setTimeout(() => setHasNewData(false), 3000);
       }
     } catch (err) {
-      console.log('Smart refresh failed:', err);
+      // Smart refresh failed silently
     }
   };
 
@@ -414,7 +454,14 @@ const ClinicianDashboard: React.FC = () => {
     }, 60000);
     
     return () => clearInterval(interval);
-  }, [lastProgressHash]);
+  }, []); // Empty dependency array - only run once on mount
+
+  // Separate effect for pagination changes
+  useEffect(() => {
+    if (casesCurrentPage || casesPageSize) {
+      fetchClinicianData();
+    }
+  }, [casesCurrentPage, casesPageSize]);
 
   const fetchProgressData = async (planId: string) => {
     try {
@@ -441,11 +488,14 @@ const ClinicianDashboard: React.FC = () => {
       // Fetch essential data first (reduced API calls)
       const [rehabPlansRes, casesRes] = await Promise.all([
         api.get('/rehabilitation-plans'),
-        api.get('/cases')
+        api.get(`/cases?page=${casesCurrentPage}&limit=${casesPageSize}`)
       ]);
 
       const plans = rehabPlansRes.data.plans || [];
       const cases = casesRes.data.cases || [];
+      const totalCasesCount = casesRes.data.pagination?.total || cases.length;
+      
+      setTotalCases(totalCasesCount);
       
       // Ensure progress stats are included for each plan
       const plansWithProgress = await Promise.all(
@@ -521,7 +571,9 @@ const ClinicianDashboard: React.FC = () => {
           setNotifications(notificationsRes.data.notifications || []);
           setUnreadNotificationCount(notificationsRes.data.unreadCount || 0);
         })
-        .catch(err => console.warn('Failed to fetch notifications:', err));
+        .catch(err => {
+          // Failed to fetch notifications silently
+        });
       
 
     } catch (err: any) {
@@ -750,7 +802,6 @@ const ClinicianDashboard: React.FC = () => {
     try {
       return new Date(dateString).toLocaleDateString();
     } catch (e) {
-      console.error('Error formatting date:', e);
       return 'TBD';
     }
   };
@@ -769,26 +820,87 @@ const ClinicianDashboard: React.FC = () => {
   return (
     <Layout>
       <Box sx={{ 
-        background: 'linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%)',
+        background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)',
         minHeight: '100vh',
-        p: { xs: 2, md: 3 }
+        p: { xs: 0, sm: 1, md: 2 },
+        pb: { xs: 2, sm: 3, md: 4 }
       }}>
-        {/* Header Section */}
-        <Box sx={{ mb: { xs: 3, md: 4 } }}>
-          <Typography variant="h4" component="h1" sx={{ 
-            fontWeight: 700, 
-            color: '#2d3748',
-            mb: 1,
-            fontSize: { xs: '1.5rem', md: '2.125rem' }
+        {/* Mobile-First Header Section */}
+        <Box sx={{ 
+          mb: { xs: 2, sm: 3, md: 4 },
+          px: { xs: 2, sm: 3 },
+          pt: { xs: 2, sm: 3 }
+        }}>
+          <Box sx={{
+            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            borderRadius: { xs: 3, sm: 4 },
+            p: { xs: 3, sm: 4 },
+            color: 'white',
+            boxShadow: '0 8px 32px rgba(102, 126, 234, 0.3)',
+            position: 'relative',
+            overflow: 'hidden',
+            '&::before': {
+              content: '""',
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              background: 'linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.05) 100%)',
+              borderRadius: 'inherit'
+            }
           }}>
-            Welcome back, Dr. {user?.lastName}
-          </Typography>
-          <Typography variant="subtitle1" sx={{ 
-            color: '#718096',
-            fontSize: { xs: '0.875rem', md: '1.1rem' }
-          }}>
-            Monitor your workers' rehabilitation progress and manage their recovery journey
-          </Typography>
+            <Box sx={{ position: 'relative', zIndex: 1 }}>
+              <Typography variant="h4" component="h1" sx={{ 
+                fontWeight: 800, 
+                mb: 1,
+                fontSize: { xs: '1.75rem', sm: '2rem', md: '2.5rem' },
+                textShadow: '0 2px 4px rgba(0,0,0,0.1)'
+              }}>
+                Welcome back, Dr. {user?.lastName}
+              </Typography>
+              <Typography variant="subtitle1" sx={{ 
+                opacity: 0.9,
+                fontSize: { xs: '1rem', sm: '1.125rem', md: '1.25rem' },
+                fontWeight: 500
+              }}>
+                Here's your clinical overview for today
+              </Typography>
+              
+              {/* Mobile Stats Row */}
+              <Box sx={{ 
+                display: 'flex', 
+                justifyContent: 'space-between', 
+                mt: { xs: 2, sm: 3 },
+                gap: 2
+              }}>
+                <Box sx={{ textAlign: 'center', flex: 1 }}>
+                  <Typography variant="h5" sx={{ fontWeight: 800, fontSize: { xs: '1.5rem', sm: '1.75rem' } }}>
+                    {stats?.activeCases || myCases.length}
+                  </Typography>
+                  <Typography variant="caption" sx={{ opacity: 0.8, fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>
+                    Active Cases
+                  </Typography>
+                </Box>
+                <Box sx={{ textAlign: 'center', flex: 1 }}>
+                  <Typography variant="h5" sx={{ fontWeight: 800, fontSize: { xs: '1.5rem', sm: '1.75rem' } }}>
+                    {activeRehabPlans.length}
+                  </Typography>
+                  <Typography variant="caption" sx={{ opacity: 0.8, fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>
+                    Rehab Plans
+                  </Typography>
+                </Box>
+                <Box sx={{ textAlign: 'center', flex: 1 }}>
+                  <Typography variant="h5" sx={{ fontWeight: 800, fontSize: { xs: '1.5rem', sm: '1.75rem' } }}>
+                    {unreadNotificationCount}
+                  </Typography>
+                  <Typography variant="caption" sx={{ opacity: 0.8, fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>
+                    Alerts
+                  </Typography>
+                </Box>
+              </Box>
+            </Box>
+          </Box>
         </Box>
 
         {/* Error and Success Messages */}
@@ -1120,15 +1232,21 @@ const ClinicianDashboard: React.FC = () => {
                   mb: 3, 
                   p: 3, 
                   bgcolor: notification.type === 'high_pain' ? '#fef2f2' : 
-                           notification.type === 'rtw_review' ? '#fef3c7' : '#f0f9ff', 
+                           notification.type === 'rtw_review' ? '#fef3c7' : 
+                           notification.type === 'case_closed' ? '#f0fdf4' :
+                           notification.type === 'return_to_work' ? '#fef3c7' : '#f0f9ff', 
                   borderRadius: 2,
                   border: notification.type === 'high_pain' ? '1px solid #fecaca' :
-                          notification.type === 'rtw_review' ? '1px solid #fde68a' : '1px solid #bae6fd'
+                          notification.type === 'rtw_review' ? '1px solid #fde68a' :
+                          notification.type === 'case_closed' ? '1px solid #bbf7d0' :
+                          notification.type === 'return_to_work' ? '1px solid #fde68a' : '1px solid #bae6fd'
                 }}>
                   <Box display="flex" alignItems="center" gap={2} sx={{ mb: 2 }}>
                     <Box sx={{ 
                       backgroundColor: notification.type === 'high_pain' ? '#ef4444' : 
-                                      notification.type === 'rtw_review' ? '#f59e0b' : '#3b82f6',
+                                      notification.type === 'rtw_review' ? '#f59e0b' : 
+                                      notification.type === 'case_closed' ? '#22c55e' :
+                                      notification.type === 'return_to_work' ? '#f59e0b' : '#3b82f6',
                       borderRadius: 2,
                       p: 1,
                       display: 'flex',
@@ -1137,6 +1255,8 @@ const ClinicianDashboard: React.FC = () => {
                     }}>
                       {notification.type === 'high_pain' ? <LocalHospital sx={{ fontSize: 20, color: 'white' }} /> :
                        notification.type === 'rtw_review' ? <Work sx={{ fontSize: 20, color: 'white' }} /> :
+                       notification.type === 'case_closed' ? <CheckCircle sx={{ fontSize: 20, color: 'white' }} /> :
+                       notification.type === 'return_to_work' ? <Work sx={{ fontSize: 20, color: 'white' }} /> :
                        <Assessment sx={{ fontSize: 20, color: 'white' }} />}
                     </Box>
                     <Box flex={1}>
@@ -1164,7 +1284,9 @@ const ClinicianDashboard: React.FC = () => {
                     <Button
                       variant="contained"
                       color={notification.type === 'high_pain' ? 'error' : 
-                             notification.type === 'rtw_review' ? 'warning' : 'primary'}
+                             notification.type === 'rtw_review' ? 'warning' : 
+                             notification.type === 'case_closed' ? 'success' :
+                             notification.type === 'return_to_work' ? 'warning' : 'primary'}
                       size="small"
                       onClick={async () => {
                         try {
@@ -1173,7 +1295,6 @@ const ClinicianDashboard: React.FC = () => {
                           // Navigate to action URL using React Router
                           navigate(notification.actionUrl || '/cases');
                         } catch (error) {
-                          console.error('Error marking notification as read:', error);
                           // Still navigate even if marking as read fails
                           navigate(notification.actionUrl || '/cases');
                         }
@@ -1183,10 +1304,14 @@ const ClinicianDashboard: React.FC = () => {
                         textTransform: 'none',
                         fontWeight: 600,
                         backgroundColor: notification.type === 'high_pain' ? '#ef4444' : 
-                                        notification.type === 'rtw_review' ? '#f59e0b' : '#3b82f6',
+                                        notification.type === 'rtw_review' ? '#f59e0b' : 
+                                        notification.type === 'case_closed' ? '#22c55e' :
+                                        notification.type === 'return_to_work' ? '#f59e0b' : '#3b82f6',
                         '&:hover': {
                           backgroundColor: notification.type === 'high_pain' ? '#dc2626' : 
-                                          notification.type === 'rtw_review' ? '#d97706' : '#2563eb'
+                                          notification.type === 'rtw_review' ? '#d97706' : 
+                                          notification.type === 'case_closed' ? '#16a34a' :
+                                          notification.type === 'return_to_work' ? '#d97706' : '#2563eb'
                         }
                       }}
                     >
@@ -1356,14 +1481,14 @@ const ClinicianDashboard: React.FC = () => {
                     </ListItemIcon>
                     <ListItemText
                       primary={
-                        <Typography variant="body2" sx={{ fontWeight: 600, color: '#2d3748' }}>
+                        <Box sx={{ fontWeight: 600, color: '#2d3748', fontSize: '0.875rem' }}>
                           {plan.planName} updated
-                        </Typography>
+                        </Box>
                       }
                       secondary={
-                        <Typography variant="caption" sx={{ color: '#718096' }}>
+                        <Box sx={{ color: '#718096', fontSize: '0.75rem' }}>
                           Case {plan.case.caseNumber}
-                        </Typography>
+                        </Box>
                       }
                     />
                   </ListItem>
@@ -1372,9 +1497,9 @@ const ClinicianDashboard: React.FC = () => {
                   <ListItem sx={{ px: 0 }}>
                     <ListItemText
                       primary={
-                        <Typography variant="body2" sx={{ color: '#718096', textAlign: 'center' }}>
+                        <Box sx={{ color: '#718096', textAlign: 'center', fontSize: '0.875rem' }}>
                           No recent activity
-                        </Typography>
+                        </Box>
                       }
                     />
                   </ListItem>
@@ -1495,9 +1620,9 @@ const ClinicianDashboard: React.FC = () => {
                     <ListItemText
                       primary={
                         <Box display="flex" alignItems="center" gap={2} sx={{ mb: 1 }}>
-                          <Typography variant="subtitle1" sx={{ fontWeight: 600, color: '#2d3748' }}>
+                          <Box sx={{ fontWeight: 600, color: '#2d3748', fontSize: '1rem' }}>
                             {plan.planName}
-                          </Typography>
+                          </Box>
                           <Chip
                             label={plan.status}
                             color={getStatusColor(plan.status)}
@@ -1508,13 +1633,13 @@ const ClinicianDashboard: React.FC = () => {
                       }
                       secondary={
                         <Box>
-                          <Typography variant="body2" sx={{ color: '#4a5568', mb: 0.5 }}>
+                          <Box sx={{ color: '#4a5568', mb: 0.5, fontSize: '0.875rem' }}>
                             Case: {plan.case.caseNumber} - {plan.case.worker.firstName} {plan.case.worker.lastName}
-                          </Typography>
-                          <Typography variant="caption" sx={{ color: '#718096', mb: 1, display: 'block' }}>
+                          </Box>
+                          <Box sx={{ color: '#718096', mb: 1, display: 'block', fontSize: '0.75rem' }}>
                             Started: {formatDate(plan.startDate)} | 
                             {plan.endDate && ` Ends: ${formatDate(plan.endDate)}`}
-                          </Typography>
+                          </Box>
                           
                           {/* Progress Indicators */}
                           {plan.progressStats && (
@@ -1526,9 +1651,9 @@ const ClinicianDashboard: React.FC = () => {
                                   borderRadius: '50%',
                                   backgroundColor: '#4caf50'
                                 }} />
-                                <Typography variant="caption" sx={{ color: '#4caf50', fontWeight: 600 }}>
+                                <Box sx={{ color: '#4caf50', fontWeight: 600, fontSize: '0.75rem' }}>
                                   {plan.progressStats.completedDays} completed
-                                </Typography>
+                                </Box>
                               </Box>
                               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                                 <Box sx={{
@@ -1537,9 +1662,9 @@ const ClinicianDashboard: React.FC = () => {
                                   borderRadius: '50%',
                                   backgroundColor: '#ff9800'
                                 }} />
-                                <Typography variant="caption" sx={{ color: '#ff9800', fontWeight: 600 }}>
+                                <Box sx={{ color: '#ff9800', fontWeight: 600, fontSize: '0.75rem' }}>
                                   {plan.progressStats.skippedDays} skipped
-                                </Typography>
+                                </Box>
                               </Box>
                               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                                 <Box sx={{
@@ -1548,9 +1673,9 @@ const ClinicianDashboard: React.FC = () => {
                                   borderRadius: '50%',
                                   backgroundColor: '#2196f3'
                                 }} />
-                                <Typography variant="caption" sx={{ color: '#2196f3', fontWeight: 600 }}>
+                                <Box sx={{ color: '#2196f3', fontWeight: 600, fontSize: '0.75rem' }}>
                                   {plan.progressStats.consecutiveCompletedDays} streak
-                                </Typography>
+                                </Box>
                               </Box>
                             </Box>
                           )}
@@ -1559,12 +1684,12 @@ const ClinicianDashboard: React.FC = () => {
                           {plan.progressStats && plan.progressStats.totalDays > 0 && (
                             <Box sx={{ width: '100%', mb: 1 }}>
                               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                                <Typography variant="caption" sx={{ color: '#718096' }}>
+                                <Box sx={{ color: '#718096', fontSize: '0.75rem' }}>
                                   Overall Progress
-                                </Typography>
-                                <Typography variant="caption" sx={{ color: '#718096', fontWeight: 600 }}>
+                                </Box>
+                                <Box sx={{ color: '#718096', fontWeight: 600, fontSize: '0.75rem' }}>
                                   {Math.round((plan.progressStats.completedDays / plan.progressStats.totalDays) * 100)}%
-                                </Typography>
+                                </Box>
                               </Box>
                               <LinearProgress
                                 variant="determinate"
@@ -1844,6 +1969,58 @@ const ClinicianDashboard: React.FC = () => {
                   </Card>
                 ))}
               </Box>
+              
+              {/* Pagination Controls for My Cases */}
+              {totalCases > casesPageSize && (
+                <Box sx={{ 
+                  mt: 3, 
+                  p: 2, 
+                  borderTop: '1px solid #e1e5e9',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  gap: 2
+                }}>
+                  {/* Page Size Selector */}
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Typography variant="body2" sx={{ color: '#666' }}>
+                      Show:
+                    </Typography>
+                    <FormControl size="small" sx={{ minWidth: 80 }}>
+                      <Select
+                        value={casesPageSize}
+                        onChange={(e) => handleCasesPageSizeChange(Number(e.target.value))}
+                        sx={{ fontSize: '0.875rem' }}
+                      >
+                        <MenuItem value={5}>5</MenuItem>
+                        <MenuItem value={10}>10</MenuItem>
+                        <MenuItem value={25}>25</MenuItem>
+                        <MenuItem value={50}>50</MenuItem>
+                      </Select>
+                    </FormControl>
+                    <Typography variant="body2" sx={{ color: '#666' }}>
+                      per page
+                    </Typography>
+                  </Box>
+
+                  {/* Pagination Info */}
+                  <Typography variant="body2" sx={{ color: '#666' }}>
+                    Showing {((casesCurrentPage - 1) * casesPageSize) + 1} to {Math.min(casesCurrentPage * casesPageSize, totalCases)} of {totalCases} cases
+                  </Typography>
+
+                  {/* Pagination Component */}
+                  <Pagination
+                    count={Math.ceil(totalCases / casesPageSize)}
+                    page={casesCurrentPage}
+                    onChange={(_, page) => handleCasesPageChange(page)}
+                    color="primary"
+                    size="small"
+                    showFirstButton
+                    showLastButton
+                  />
+                </Box>
+              )}
               </>
             ) : (
               <Box textAlign="center" py={4}>
@@ -2265,97 +2442,401 @@ const ClinicianDashboard: React.FC = () => {
           </DialogActions>
         </Dialog>
 
-        {/* Progress Monitoring Dialog */}
+        {/* Enhanced Progress Monitoring Dialog */}
         <Dialog 
           open={progressDialog} 
           onClose={() => setProgressDialog(false)} 
-          maxWidth="lg" 
+          maxWidth="xl" 
           fullWidth
+          PaperProps={{
+            sx: {
+              borderRadius: 3,
+              background: 'linear-gradient(135deg, #f8fafc 0%, #ffffff 100%)',
+              boxShadow: '0 20px 60px rgba(0,0,0,0.15)'
+            }
+          }}
         >
-          <DialogTitle>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Assessment />
-              Progress Monitoring - {selectedPlan?.planName}
+          <DialogTitle sx={{ 
+            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            color: 'white',
+            borderRadius: '12px 12px 0 0',
+            p: 3
+          }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              <Box sx={{
+                backgroundColor: 'rgba(255,255,255,0.2)',
+                borderRadius: '50%',
+                p: 1,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}>
+                <Assessment sx={{ fontSize: 28 }} />
+              </Box>
+              <Box>
+                <Typography variant="h5" sx={{ fontWeight: 700, mb: 0.5 }}>
+                  Progress Monitoring
+                </Typography>
+                <Typography variant="body1" sx={{ opacity: 0.9 }}>
+                  {selectedPlan?.planName} - Detailed Progress Analysis
+                </Typography>
+              </Box>
             </Box>
           </DialogTitle>
-          <DialogContent>
+          <DialogContent sx={{ p: 0 }}>
             {loadingProgress ? (
-              <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
-                <CircularProgress />
+              <Box sx={{ 
+                display: 'flex', 
+                justifyContent: 'center', 
+                alignItems: 'center',
+                minHeight: '400px',
+                background: 'linear-gradient(135deg, #f8fafc 0%, #ffffff 100%)'
+              }}>
+                <Box sx={{ textAlign: 'center' }}>
+                  <CircularProgress size={60} sx={{ color: '#667eea', mb: 2 }} />
+                  <Typography variant="h6" color="text.secondary">
+                    Loading Progress Data...
+                  </Typography>
+                </Box>
               </Box>
             ) : progressData ? (
-              <Box sx={{ mt: 2 }}>
-                {/* Plan Info */}
-                <Card sx={{ mb: 3 }}>
-                  <CardContent>
-                    <Typography variant="h6" gutterBottom>
+              <Box sx={{ p: 3 }}>
+                {/* Enhanced Plan Info */}
+                <Card sx={{ 
+                  mb: 3,
+                  borderRadius: 3,
+                  background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
+                  boxShadow: '0 8px 32px rgba(0,0,0,0.1)',
+                  border: '1px solid rgba(102, 126, 234, 0.1)'
+                }}>
+                  <CardContent sx={{ p: 3 }}>
+                    <Typography variant="h6" gutterBottom sx={{ 
+                      fontWeight: 700, 
+                      color: '#2d3748',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 1
+                    }}>
+                      <Box sx={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: '50%',
+                        backgroundColor: '#667eea'
+                      }} />
                       Plan Information
                     </Typography>
-                    <Box sx={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                      <Box>
-                        <Typography variant="body2" color="text.secondary">Worker</Typography>
-                        <Typography variant="body1">
+                    <Box sx={{ 
+                      display: 'grid', 
+                      gridTemplateColumns: { xs: '1fr', md: 'repeat(3, 1fr)' },
+                      gap: 3,
+                      mt: 2
+                    }}>
+                      <Box sx={{
+                        p: 2,
+                        borderRadius: 2,
+                        background: 'linear-gradient(135deg, #e3f2fd 0%, #f3e5f5 100%)',
+                        border: '1px solid rgba(102, 126, 234, 0.1)'
+                      }}>
+                        <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600, mb: 0.5 }}>
+                          Worker
+                        </Typography>
+                        <Typography variant="h6" sx={{ fontWeight: 700, color: '#2d3748' }}>
                           {progressData.plan.worker.firstName} {progressData.plan.worker.lastName}
                         </Typography>
                       </Box>
-                      <Box>
-                        <Typography variant="body2" color="text.secondary">Case</Typography>
-                        <Typography variant="body1">{progressData.plan.case.caseNumber}</Typography>
+                      <Box sx={{
+                        p: 2,
+                        borderRadius: 2,
+                        background: 'linear-gradient(135deg, #e8f5e8 0%, #f0f8f0 100%)',
+                        border: '1px solid rgba(34, 197, 94, 0.1)'
+                      }}>
+                        <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600, mb: 0.5 }}>
+                          Case Number
+                        </Typography>
+                        <Typography variant="h6" sx={{ fontWeight: 700, color: '#2d3748' }}>
+                          {progressData.plan.case.caseNumber}
+                        </Typography>
                       </Box>
-                      <Box>
-                        <Typography variant="body2" color="text.secondary">Status</Typography>
+                      <Box sx={{
+                        p: 2,
+                        borderRadius: 2,
+                        background: 'linear-gradient(135deg, #fff3cd 0%, #fef7e0 100%)',
+                        border: '1px solid rgba(245, 158, 11, 0.1)'
+                      }}>
+                        <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600, mb: 0.5 }}>
+                          Status
+                        </Typography>
                         <Chip 
-                          label={progressData.plan.status} 
+                          label={progressData.plan.status.toUpperCase()} 
                           color={progressData.plan.status === 'active' ? 'success' : 'default'}
-                          size="small"
+                          sx={{ 
+                            fontWeight: 700,
+                            fontSize: '0.875rem',
+                            height: 32
+                          }}
                         />
                       </Box>
                     </Box>
                   </CardContent>
                 </Card>
 
-                {/* Progress Stats */}
-                <Card sx={{ mb: 3 }}>
-                  <CardContent>
-                    <Typography variant="h6" gutterBottom>
+                {/* Enhanced Progress Stats */}
+                <Card sx={{ 
+                  mb: 3,
+                  borderRadius: 3,
+                  background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
+                  boxShadow: '0 8px 32px rgba(0,0,0,0.1)',
+                  border: '1px solid rgba(102, 126, 234, 0.1)'
+                }}>
+                  <CardContent sx={{ p: 3 }}>
+                    <Typography variant="h6" gutterBottom sx={{ 
+                      fontWeight: 700, 
+                      color: '#2d3748',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 1,
+                      mb: 3
+                    }}>
+                      <Box sx={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: '50%',
+                        backgroundColor: '#22c55e'
+                      }} />
                       Progress Statistics
                     </Typography>
-                    <Box sx={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                      <Box sx={{ textAlign: 'center' }}>
-                        <Typography variant="h4" color="success.main">
+                    
+                    {/* Overall Progress Bar */}
+                    <Box sx={{ mb: 4 }}>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                        <Typography variant="h6" sx={{ fontWeight: 700, color: '#2d3748' }}>
+                          Overall Progress
+                        </Typography>
+                        <Typography variant="h5" sx={{ fontWeight: 700, color: '#22c55e' }}>
+                          {Math.round((progressData.progressStats.completedDays / Math.max(progressData.progressStats.totalDays, 1)) * 100)}%
+                        </Typography>
+                      </Box>
+                      <Box sx={{
+                        height: 12,
+                        borderRadius: 6,
+                        background: 'linear-gradient(90deg, #e5e7eb 0%, #f3f4f6 100%)',
+                        overflow: 'hidden',
+                        position: 'relative'
+                      }}>
+                        <Box sx={{
+                          height: '100%',
+                          width: `${(progressData.progressStats.completedDays / Math.max(progressData.progressStats.totalDays, 1)) * 100}%`,
+                          background: 'linear-gradient(90deg, #22c55e 0%, #16a34a 100%)',
+                          borderRadius: 6,
+                          transition: 'width 0.8s ease-in-out',
+                          position: 'relative',
+                          '&::after': {
+                            content: '""',
+                            position: 'absolute',
+                            top: 0,
+                            left: 0,
+                            right: 0,
+                            bottom: 0,
+                            background: 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.3) 50%, transparent 100%)',
+                            animation: 'shimmer 2s infinite'
+                          }
+                        }} />
+                      </Box>
+                    </Box>
+
+                    {/* Stats Grid */}
+                    <Box sx={{ 
+                      display: 'grid', 
+                      gridTemplateColumns: { xs: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' },
+                      gap: 3
+                    }}>
+                      <Box sx={{
+                        p: 3,
+                        borderRadius: 3,
+                        background: 'linear-gradient(135deg, #dcfce7 0%, #f0fdf4 100%)',
+                        border: '1px solid rgba(34, 197, 94, 0.2)',
+                        textAlign: 'center',
+                        position: 'relative',
+                        overflow: 'hidden',
+                        '&::before': {
+                          content: '""',
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          height: 4,
+                          background: 'linear-gradient(90deg, #22c55e 0%, #16a34a 100%)'
+                        }
+                      }}>
+                        <Typography variant="h3" sx={{ 
+                          fontWeight: 800, 
+                          color: '#16a34a',
+                          mb: 1,
+                          background: 'linear-gradient(135deg, #16a34a 0%, #22c55e 100%)',
+                          backgroundClip: 'text',
+                          WebkitBackgroundClip: 'text',
+                          WebkitTextFillColor: 'transparent'
+                        }}>
                           {progressData.progressStats.completedDays}
                         </Typography>
-                        <Typography variant="body2" color="text.secondary">Days Completed</Typography>
+                        <Typography variant="body1" sx={{ fontWeight: 600, color: '#166534' }}>
+                          Days Completed
+                        </Typography>
+                        <Typography variant="caption" sx={{ color: '#15803d', mt: 0.5, display: 'block' }}>
+                          {progressData.progressStats.completedDays > 0 ? 'Great progress!' : 'Start your journey'}
+                        </Typography>
                       </Box>
-                      <Box sx={{ textAlign: 'center' }}>
-                        <Typography variant="h4" color="primary.main">
+
+                      <Box sx={{
+                        p: 3,
+                        borderRadius: 3,
+                        background: 'linear-gradient(135deg, #dbeafe 0%, #eff6ff 100%)',
+                        border: '1px solid rgba(59, 130, 246, 0.2)',
+                        textAlign: 'center',
+                        position: 'relative',
+                        overflow: 'hidden',
+                        '&::before': {
+                          content: '""',
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          height: 4,
+                          background: 'linear-gradient(90deg, #3b82f6 0%, #2563eb 100%)'
+                        }
+                      }}>
+                        <Typography variant="h3" sx={{ 
+                          fontWeight: 800, 
+                          color: '#2563eb',
+                          mb: 1,
+                          background: 'linear-gradient(135deg, #2563eb 0%, #3b82f6 100%)',
+                          backgroundClip: 'text',
+                          WebkitBackgroundClip: 'text',
+                          WebkitTextFillColor: 'transparent'
+                        }}>
                           {progressData.progressStats.consecutiveCompletedDays}
                         </Typography>
-                        <Typography variant="body2" color="text.secondary">Consecutive Days</Typography>
+                        <Typography variant="body1" sx={{ fontWeight: 600, color: '#1e40af' }}>
+                          Consecutive Days
+                        </Typography>
+                        <Typography variant="caption" sx={{ color: '#1d4ed8', mt: 0.5, display: 'block' }}>
+                          {progressData.progressStats.consecutiveCompletedDays >= 7 ? 'Excellent streak!' : 'Keep it up!'}
+                        </Typography>
                       </Box>
-                      <Box sx={{ textAlign: 'center' }}>
-                        <Typography variant="h4" color="warning.main">
+
+                      <Box sx={{
+                        p: 3,
+                        borderRadius: 3,
+                        background: 'linear-gradient(135deg, #fef3c7 0%, #fffbeb 100%)',
+                        border: '1px solid rgba(245, 158, 11, 0.2)',
+                        textAlign: 'center',
+                        position: 'relative',
+                        overflow: 'hidden',
+                        '&::before': {
+                          content: '""',
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          height: 4,
+                          background: 'linear-gradient(90deg, #f59e0b 0%, #d97706 100%)'
+                        }
+                      }}>
+                        <Typography variant="h3" sx={{ 
+                          fontWeight: 800, 
+                          color: '#d97706',
+                          mb: 1,
+                          background: 'linear-gradient(135deg, #d97706 0%, #f59e0b 100%)',
+                          backgroundClip: 'text',
+                          WebkitBackgroundClip: 'text',
+                          WebkitTextFillColor: 'transparent'
+                        }}>
                           {progressData.progressStats.skippedDays}
                         </Typography>
-                        <Typography variant="body2" color="text.secondary">Days Skipped</Typography>
+                        <Typography variant="body1" sx={{ fontWeight: 600, color: '#92400e' }}>
+                          Days Skipped
+                        </Typography>
+                        <Typography variant="caption" sx={{ color: '#b45309', mt: 0.5, display: 'block' }}>
+                          {progressData.progressStats.skippedDays === 0 ? 'Perfect attendance!' : 'Try to reduce'}
+                        </Typography>
                       </Box>
-                      <Box sx={{ textAlign: 'center' }}>
-                        <Typography variant="h4" color="info.main">
+
+                      <Box sx={{
+                        p: 3,
+                        borderRadius: 3,
+                        background: 'linear-gradient(135deg, #e0e7ff 0%, #f0f4ff 100%)',
+                        border: '1px solid rgba(99, 102, 241, 0.2)',
+                        textAlign: 'center',
+                        position: 'relative',
+                        overflow: 'hidden',
+                        '&::before': {
+                          content: '""',
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          height: 4,
+                          background: 'linear-gradient(90deg, #6366f1 0%, #4f46e5 100%)'
+                        }
+                      }}>
+                        <Typography variant="h3" sx={{ 
+                          fontWeight: 800, 
+                          color: '#4f46e5',
+                          mb: 1,
+                          background: 'linear-gradient(135deg, #4f46e5 0%, #6366f1 100%)',
+                          backgroundClip: 'text',
+                          WebkitBackgroundClip: 'text',
+                          WebkitTextFillColor: 'transparent'
+                        }}>
                           {progressData.progressStats.totalDays}
                         </Typography>
-                        <Typography variant="body2" color="text.secondary">Total Days</Typography>
+                        <Typography variant="body1" sx={{ fontWeight: 600, color: '#3730a3' }}>
+                          Total Days
+                        </Typography>
+                        <Typography variant="caption" sx={{ color: '#4338ca', mt: 0.5, display: 'block' }}>
+                          Plan duration
+                        </Typography>
                       </Box>
                     </Box>
                   </CardContent>
                 </Card>
 
-                {/* Today's Status */}
-                <Card sx={{ mb: 3 }}>
-                  <CardContent>
-                    <Typography variant="h6" gutterBottom>
+                {/* Enhanced Today's Status */}
+                <Card sx={{ 
+                  mb: 3,
+                  borderRadius: 3,
+                  background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
+                  boxShadow: '0 8px 32px rgba(0,0,0,0.1)',
+                  border: '1px solid rgba(102, 126, 234, 0.1)'
+                }}>
+                  <CardContent sx={{ p: 3 }}>
+                    <Typography variant="h6" gutterBottom sx={{ 
+                      fontWeight: 700, 
+                      color: '#2d3748',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 1,
+                      mb: 3
+                    }}>
+                      <Box sx={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: '50%',
+                        backgroundColor: '#f59e0b'
+                      }} />
                       Today's Exercise Status
                     </Typography>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
+                    
+                    <Box sx={{ 
+                      display: 'flex', 
+                      alignItems: 'center', 
+                      gap: 3, 
+                      mb: 3,
+                      p: 2,
+                      borderRadius: 2,
+                      background: 'linear-gradient(135deg, #fef3c7 0%, #fffbeb 100%)',
+                      border: '1px solid rgba(245, 158, 11, 0.2)'
+                    }}>
                       <Chip 
                         label={progressData.today.overallStatus.toUpperCase()} 
                         color={
@@ -2363,57 +2844,115 @@ const ClinicianDashboard: React.FC = () => {
                           progressData.today.overallStatus === 'partial' ? 'warning' :
                           progressData.today.overallStatus === 'skipped' ? 'error' : 'default'
                         }
+                        sx={{ 
+                          fontWeight: 700,
+                          fontSize: '0.875rem',
+                          height: 36,
+                          px: 2
+                        }}
                       />
-                      <Typography variant="body2" color="text.secondary">
-                        {new Date().toLocaleDateString()}
+                      <Typography variant="h6" sx={{ fontWeight: 700, color: '#92400e' }}>
+                        {new Date().toLocaleDateString('en-US', { 
+                          weekday: 'long', 
+                          year: 'numeric', 
+                          month: 'long', 
+                          day: 'numeric' 
+                        })}
                       </Typography>
+                      <Box sx={{ ml: 'auto' }}>
+                        <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600 }}>
+                          {progressData.today.exercises.filter(e => e.completion.status === 'completed').length} / {progressData.today.exercises.length} completed
+                        </Typography>
+                      </Box>
                     </Box>
                     
-                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                      {progressData.today.exercises.map((exercise) => (
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                      {progressData.today.exercises.map((exercise, index) => (
                         <Box 
                           key={exercise._id}
                           sx={{ 
                             display: 'flex', 
                             alignItems: 'center', 
                             justifyContent: 'space-between',
-                            p: 2,
-                            border: '1px solid #e0e0e0',
-                            borderRadius: 1
+                            p: 3,
+                            borderRadius: 2,
+                            border: '1px solid',
+                            borderColor: 
+                              exercise.completion.status === 'completed' ? 'rgba(34, 197, 94, 0.2)' :
+                              exercise.completion.status === 'skipped' ? 'rgba(245, 158, 11, 0.2)' : 'rgba(229, 231, 235, 0.5)',
+                            background: 
+                              exercise.completion.status === 'completed' ? 'linear-gradient(135deg, #dcfce7 0%, #f0fdf4 100%)' :
+                              exercise.completion.status === 'skipped' ? 'linear-gradient(135deg, #fef3c7 0%, #fffbeb 100%)' : 'linear-gradient(135deg, #f9fafb 0%, #ffffff 100%)',
+                            transition: 'all 0.3s ease',
+                            '&:hover': {
+                              transform: 'translateY(-2px)',
+                              boxShadow: '0 8px 25px rgba(0,0,0,0.1)'
+                            }
                           }}
                         >
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 3 }}>
                             <Box sx={{
-                              width: 24,
-                              height: 24,
+                              width: 40,
+                              height: 40,
                               borderRadius: '50%',
                               backgroundColor: 
-                                exercise.completion.status === 'completed' ? '#4caf50' :
-                                exercise.completion.status === 'skipped' ? '#ff9800' : '#e0e0e0',
+                                exercise.completion.status === 'completed' ? '#22c55e' :
+                                exercise.completion.status === 'skipped' ? '#f59e0b' : '#e5e7eb',
                               display: 'flex',
                               alignItems: 'center',
-                              justifyContent: 'center'
+                              justifyContent: 'center',
+                              position: 'relative',
+                              '&::before': {
+                                content: '""',
+                                position: 'absolute',
+                                top: -2,
+                                left: -2,
+                                right: -2,
+                                bottom: -2,
+                                borderRadius: '50%',
+                                background: 
+                                  exercise.completion.status === 'completed' ? 'linear-gradient(135deg, #22c55e 0%, #16a34a 100%)' :
+                                  exercise.completion.status === 'skipped' ? 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' : 'linear-gradient(135deg, #e5e7eb 0%, #d1d5db 100%)',
+                                zIndex: -1
+                              }
                             }}>
                               {exercise.completion.status === 'completed' && (
-                                <CheckCircle sx={{ color: 'white', fontSize: 16 }} />
+                                <CheckCircle sx={{ color: 'white', fontSize: 20 }} />
                               )}
                               {exercise.completion.status === 'skipped' && (
-                                <Warning sx={{ color: 'white', fontSize: 16 }} />
+                                <Warning sx={{ color: 'white', fontSize: 20 }} />
+                              )}
+                              {exercise.completion.status === 'not_started' && (
+                                <Typography sx={{ color: '#6b7280', fontSize: 16, fontWeight: 700 }}>
+                                  {index + 1}
+                                </Typography>
                               )}
                             </Box>
                             <Box>
-                              <Typography variant="body1" sx={{ fontWeight: 600 }}>
+                              <Typography variant="h6" sx={{ 
+                                fontWeight: 700, 
+                                color: '#2d3748',
+                                mb: 0.5
+                              }}>
                                 {exercise.name}
                               </Typography>
-                              <Typography variant="body2" color="text.secondary">
+                              <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>
                                 {exercise.description}
                               </Typography>
                             </Box>
                           </Box>
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                            <Typography variant="body2" color="text.secondary">
-                              {exercise.duration} min
-                            </Typography>
+                            <Box sx={{
+                              px: 2,
+                              py: 1,
+                              borderRadius: 1,
+                              background: 'rgba(99, 102, 241, 0.1)',
+                              border: '1px solid rgba(99, 102, 241, 0.2)'
+                            }}>
+                              <Typography variant="body2" sx={{ fontWeight: 600, color: '#4f46e5' }}>
+                                {exercise.duration} min
+                              </Typography>
+                            </Box>
                             <Chip 
                               label={exercise.completion.status.toUpperCase()} 
                               color={
@@ -2421,14 +2960,29 @@ const ClinicianDashboard: React.FC = () => {
                                 exercise.completion.status === 'skipped' ? 'warning' : 'default'
                               }
                               size="small"
+                              sx={{ fontWeight: 600 }}
                             />
                             {exercise.completion.completedAt && (
-                              <Typography variant="caption" color="text.secondary">
+                              <Typography variant="caption" sx={{ 
+                                color: '#22c55e', 
+                                fontWeight: 600,
+                                px: 1,
+                                py: 0.5,
+                                borderRadius: 1,
+                                background: 'rgba(34, 197, 94, 0.1)'
+                              }}>
                                 {new Date(exercise.completion.completedAt).toLocaleTimeString()}
                               </Typography>
                             )}
                             {exercise.completion.skippedReason && (
-                              <Typography variant="caption" color="text.secondary">
+                              <Typography variant="caption" sx={{ 
+                                color: '#f59e0b', 
+                                fontWeight: 600,
+                                px: 1,
+                                py: 0.5,
+                                borderRadius: 1,
+                                background: 'rgba(245, 158, 11, 0.1)'
+                              }}>
                                 Reason: {exercise.completion.skippedReason}
                               </Typography>
                             )}
@@ -2439,48 +2993,178 @@ const ClinicianDashboard: React.FC = () => {
                   </CardContent>
                 </Card>
 
-                {/* Last 7 Days Progress */}
-                <Card sx={{ mb: 3 }}>
-                  <CardContent>
-                    <Typography variant="h6" gutterBottom>
+                {/* Enhanced Last 7 Days Progress */}
+                <Card sx={{ 
+                  mb: 3,
+                  borderRadius: 3,
+                  background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
+                  boxShadow: '0 8px 32px rgba(0,0,0,0.1)',
+                  border: '1px solid rgba(102, 126, 234, 0.1)'
+                }}>
+                  <CardContent sx={{ p: 3 }}>
+                    <Typography variant="h6" gutterBottom sx={{ 
+                      fontWeight: 700, 
+                      color: '#2d3748',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 1,
+                      mb: 3
+                    }}>
+                      <Box sx={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: '50%',
+                        backgroundColor: '#8b5cf6'
+                      }} />
                       Last 7 Days Progress
                     </Typography>
-                    <TableContainer component={Paper} variant="outlined">
+                    
+                    <TableContainer component={Paper} variant="outlined" sx={{
+                      borderRadius: 2,
+                      overflow: 'hidden',
+                      border: '1px solid rgba(139, 92, 246, 0.1)'
+                    }}>
                       <Table size="small">
-                        <TableHead>
+                        <TableHead sx={{
+                          background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)'
+                        }}>
                           <TableRow>
-                            <TableCell>Date</TableCell>
-                            <TableCell align="center">Completed</TableCell>
-                            <TableCell align="center">Skipped</TableCell>
-                            <TableCell align="center">Status</TableCell>
+                            <TableCell sx={{ 
+                              color: 'white', 
+                              fontWeight: 700,
+                              fontSize: '0.875rem'
+                            }}>
+                              Date
+                            </TableCell>
+                            <TableCell align="center" sx={{ 
+                              color: 'white', 
+                              fontWeight: 700,
+                              fontSize: '0.875rem'
+                            }}>
+                              Completed
+                            </TableCell>
+                            <TableCell align="center" sx={{ 
+                              color: 'white', 
+                              fontWeight: 700,
+                              fontSize: '0.875rem'
+                            }}>
+                              Skipped
+                            </TableCell>
+                            <TableCell align="center" sx={{ 
+                              color: 'white', 
+                              fontWeight: 700,
+                              fontSize: '0.875rem'
+                            }}>
+                              Status
+                            </TableCell>
+                            <TableCell align="center" sx={{ 
+                              color: 'white', 
+                              fontWeight: 700,
+                              fontSize: '0.875rem'
+                            }}>
+                              Progress
+                            </TableCell>
                           </TableRow>
                         </TableHead>
                         <TableBody>
-                          {progressData.last7Days.map((day) => (
-                            <TableRow key={day.date}>
-                              <TableCell>
-                                {new Date(day.date).toLocaleDateString()}
+                          {progressData.last7Days.map((day, index) => (
+                            <TableRow key={day.date} sx={{
+                              '&:hover': {
+                                backgroundColor: 'rgba(139, 92, 246, 0.05)'
+                              },
+                              '&:nth-of-type(even)': {
+                                backgroundColor: 'rgba(139, 92, 246, 0.02)'
+                              }
+                            }}>
+                              <TableCell sx={{ fontWeight: 600, color: '#2d3748' }}>
+                                <Box>
+                                  <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                                    {new Date(day.date).toLocaleDateString('en-US', { 
+                                      weekday: 'short',
+                                      month: 'short', 
+                                      day: 'numeric' 
+                                    })}
+                                  </Typography>
+                                  <Typography variant="caption" color="text.secondary">
+                                    {new Date(day.date).toLocaleDateString('en-US', { 
+                                      year: 'numeric' 
+                                    })}
+                                  </Typography>
+                                </Box>
                               </TableCell>
                               <TableCell align="center">
-                                <Typography color="success.main" sx={{ fontWeight: 600 }}>
-                                  {day.completedExercises}/{day.totalExercises}
-                                </Typography>
+                                <Box sx={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 1,
+                                  px: 2,
+                                  py: 1,
+                                  borderRadius: 1,
+                                  background: 'rgba(34, 197, 94, 0.1)',
+                                  border: '1px solid rgba(34, 197, 94, 0.2)'
+                                }}>
+                                  <Typography color="success.main" sx={{ fontWeight: 700 }}>
+                                    {day.completedExercises}/{day.totalExercises}
+                                  </Typography>
+                                </Box>
                               </TableCell>
                               <TableCell align="center">
-                                <Typography color="warning.main" sx={{ fontWeight: 600 }}>
-                                  {day.skippedExercises}
-                                </Typography>
+                                <Box sx={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 1,
+                                  px: 2,
+                                  py: 1,
+                                  borderRadius: 1,
+                                  background: 'rgba(245, 158, 11, 0.1)',
+                                  border: '1px solid rgba(245, 158, 11, 0.2)'
+                                }}>
+                                  <Typography color="warning.main" sx={{ fontWeight: 700 }}>
+                                    {day.skippedExercises}
+                                  </Typography>
+                                </Box>
                               </TableCell>
                               <TableCell align="center">
                                 <Chip 
-                                  label={day.overallStatus} 
+                                  label={day.overallStatus.toUpperCase()} 
                                   color={
                                     day.overallStatus === 'completed' ? 'success' :
                                     day.overallStatus === 'partial' ? 'warning' :
                                     day.overallStatus === 'skipped' ? 'error' : 'default'
                                   }
                                   size="small"
+                                  sx={{ fontWeight: 600 }}
                                 />
+                              </TableCell>
+                              <TableCell align="center">
+                                <Box sx={{ minWidth: 80 }}>
+                                  <Box sx={{
+                                    height: 8,
+                                    borderRadius: 4,
+                                    background: 'linear-gradient(90deg, #e5e7eb 0%, #f3f4f6 100%)',
+                                    overflow: 'hidden',
+                                    position: 'relative'
+                                  }}>
+                                    <Box sx={{
+                                      height: '100%',
+                                      width: `${(day.completedExercises / Math.max(day.totalExercises, 1)) * 100}%`,
+                                      background: 
+                                        day.overallStatus === 'completed' ? 'linear-gradient(90deg, #22c55e 0%, #16a34a 100%)' :
+                                        day.overallStatus === 'partial' ? 'linear-gradient(90deg, #f59e0b 0%, #d97706 100%)' :
+                                        day.overallStatus === 'skipped' ? 'linear-gradient(90deg, #ef4444 0%, #dc2626 100%)' : 'linear-gradient(90deg, #6b7280 0%, #4b5563 100%)',
+                                      borderRadius: 4,
+                                      transition: 'width 0.3s ease'
+                                    }} />
+                                  </Box>
+                                  <Typography variant="caption" sx={{ 
+                                    fontWeight: 600, 
+                                    color: '#6b7280',
+                                    mt: 0.5,
+                                    display: 'block'
+                                  }}>
+                                    {Math.round((day.completedExercises / Math.max(day.totalExercises, 1)) * 100)}%
+                                  </Typography>
+                                </Box>
                               </TableCell>
                             </TableRow>
                           ))}
@@ -2490,29 +3174,91 @@ const ClinicianDashboard: React.FC = () => {
                   </CardContent>
                 </Card>
 
-                {/* Exercise Progress */}
-                <Card>
-                  <CardContent>
-                    <Typography variant="h6" gutterBottom>
+                {/* Enhanced Exercise Progress Details */}
+                <Card sx={{
+                  borderRadius: 3,
+                  background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
+                  boxShadow: '0 8px 32px rgba(0,0,0,0.1)',
+                  border: '1px solid rgba(102, 126, 234, 0.1)'
+                }}>
+                  <CardContent sx={{ p: 3 }}>
+                    <Typography variant="h6" gutterBottom sx={{ 
+                      fontWeight: 700, 
+                      color: '#2d3748',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 1,
+                      mb: 3
+                    }}>
+                      <Box sx={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: '50%',
+                        backgroundColor: '#ec4899'
+                      }} />
                       Exercise Progress Details
                     </Typography>
-                    <TableContainer component={Paper} variant="outlined">
+                    
+                    <TableContainer component={Paper} variant="outlined" sx={{
+                      borderRadius: 2,
+                      overflow: 'hidden',
+                      border: '1px solid rgba(236, 72, 153, 0.1)'
+                    }}>
                       <Table size="small">
-                        <TableHead>
+                        <TableHead sx={{
+                          background: 'linear-gradient(135deg, #ec4899 0%, #db2777 100%)'
+                        }}>
                           <TableRow>
-                            <TableCell>Exercise</TableCell>
-                            <TableCell align="center">Duration</TableCell>
-                            <TableCell align="center">Completed</TableCell>
-                            <TableCell align="center">Skipped</TableCell>
-                            <TableCell align="center">Completion Rate</TableCell>
+                            <TableCell sx={{ 
+                              color: 'white', 
+                              fontWeight: 700,
+                              fontSize: '0.875rem'
+                            }}>
+                              Exercise
+                            </TableCell>
+                            <TableCell align="center" sx={{ 
+                              color: 'white', 
+                              fontWeight: 700,
+                              fontSize: '0.875rem'
+                            }}>
+                              Duration
+                            </TableCell>
+                            <TableCell align="center" sx={{ 
+                              color: 'white', 
+                              fontWeight: 700,
+                              fontSize: '0.875rem'
+                            }}>
+                              Completed
+                            </TableCell>
+                            <TableCell align="center" sx={{ 
+                              color: 'white', 
+                              fontWeight: 700,
+                              fontSize: '0.875rem'
+                            }}>
+                              Skipped
+                            </TableCell>
+                            <TableCell align="center" sx={{ 
+                              color: 'white', 
+                              fontWeight: 700,
+                              fontSize: '0.875rem'
+                            }}>
+                              Completion Rate
+                            </TableCell>
                           </TableRow>
                         </TableHead>
                         <TableBody>
                           {progressData.exerciseProgress.map((exercise) => (
-                            <TableRow key={exercise._id}>
-                              <TableCell>
+                            <TableRow key={exercise._id} sx={{
+                              '&:hover': {
+                                backgroundColor: 'rgba(236, 72, 153, 0.05)'
+                              },
+                              '&:nth-of-type(even)': {
+                                backgroundColor: 'rgba(236, 72, 153, 0.02)'
+                              }
+                            }}>
+                              <TableCell sx={{ fontWeight: 600, color: '#2d3748' }}>
                                 <Box>
-                                  <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                                  <Typography variant="body1" sx={{ fontWeight: 700 }}>
                                     {exercise.name}
                                   </Typography>
                                   <Typography variant="caption" color="text.secondary">
@@ -2521,26 +3267,81 @@ const ClinicianDashboard: React.FC = () => {
                                 </Box>
                               </TableCell>
                               <TableCell align="center">
-                                {exercise.duration} min
+                                <Box sx={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 1,
+                                  px: 2,
+                                  py: 1,
+                                  borderRadius: 1,
+                                  background: 'rgba(99, 102, 241, 0.1)',
+                                  border: '1px solid rgba(99, 102, 241, 0.2)'
+                                }}>
+                                  <Typography sx={{ fontWeight: 700, color: '#4f46e5' }}>
+                                    {exercise.duration} min
+                                  </Typography>
+                                </Box>
                               </TableCell>
                               <TableCell align="center">
-                                <Typography color="success.main" sx={{ fontWeight: 600 }}>
-                                  {exercise.completedCount}
-                                </Typography>
+                                <Box sx={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 1,
+                                  px: 2,
+                                  py: 1,
+                                  borderRadius: 1,
+                                  background: 'rgba(34, 197, 94, 0.1)',
+                                  border: '1px solid rgba(34, 197, 94, 0.2)'
+                                }}>
+                                  <Typography color="success.main" sx={{ fontWeight: 700 }}>
+                                    {exercise.completedCount}
+                                  </Typography>
+                                </Box>
                               </TableCell>
                               <TableCell align="center">
-                                <Typography color="warning.main" sx={{ fontWeight: 600 }}>
-                                  {exercise.skippedCount}
-                                </Typography>
+                                <Box sx={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 1,
+                                  px: 2,
+                                  py: 1,
+                                  borderRadius: 1,
+                                  background: 'rgba(245, 158, 11, 0.1)',
+                                  border: '1px solid rgba(245, 158, 11, 0.2)'
+                                }}>
+                                  <Typography color="warning.main" sx={{ fontWeight: 700 }}>
+                                    {exercise.skippedCount}
+                                  </Typography>
+                                </Box>
                               </TableCell>
                               <TableCell align="center">
-                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                  <LinearProgress 
-                                    variant="determinate" 
-                                    value={exercise.completionRate} 
-                                    sx={{ width: 60, height: 8 }}
-                                  />
-                                  <Typography variant="body2">
+                                <Box sx={{ minWidth: 100 }}>
+                                  <Box sx={{
+                                    height: 8,
+                                    borderRadius: 4,
+                                    background: 'linear-gradient(90deg, #e5e7eb 0%, #f3f4f6 100%)',
+                                    overflow: 'hidden',
+                                    position: 'relative',
+                                    mb: 1
+                                  }}>
+                                    <Box sx={{
+                                      height: '100%',
+                                      width: `${exercise.completionRate}%`,
+                                      background: 
+                                        exercise.completionRate >= 80 ? 'linear-gradient(90deg, #22c55e 0%, #16a34a 100%)' :
+                                        exercise.completionRate >= 60 ? 'linear-gradient(90deg, #f59e0b 0%, #d97706 100%)' :
+                                        exercise.completionRate >= 40 ? 'linear-gradient(90deg, #f97316 0%, #ea580c 100%)' : 'linear-gradient(90deg, #ef4444 0%, #dc2626 100%)',
+                                      borderRadius: 4,
+                                      transition: 'width 0.3s ease'
+                                    }} />
+                                  </Box>
+                                  <Typography variant="caption" sx={{ 
+                                    fontWeight: 700, 
+                                    color: 
+                                      exercise.completionRate >= 80 ? '#16a34a' :
+                                      exercise.completionRate >= 60 ? '#d97706' :
+                                      exercise.completionRate >= 40 ? '#ea580c' : '#dc2626'
+                                  }}>
                                     {Math.round(exercise.completionRate)}%
                                   </Typography>
                                 </Box>
@@ -2553,11 +3354,30 @@ const ClinicianDashboard: React.FC = () => {
                   </CardContent>
                 </Card>
 
-                {/* Alerts */}
+                {/* Enhanced Alerts */}
                 {progressData.alerts.length > 0 && (
-                  <Card sx={{ mt: 3 }}>
-                    <CardContent>
-                      <Typography variant="h6" gutterBottom>
+                  <Card sx={{ 
+                    mt: 3,
+                    borderRadius: 3,
+                    background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
+                    boxShadow: '0 8px 32px rgba(0,0,0,0.1)',
+                    border: '1px solid rgba(102, 126, 234, 0.1)'
+                  }}>
+                    <CardContent sx={{ p: 3 }}>
+                      <Typography variant="h6" gutterBottom sx={{ 
+                        fontWeight: 700, 
+                        color: '#2d3748',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 1,
+                        mb: 3
+                      }}>
+                        <Box sx={{
+                          width: 8,
+                          height: 8,
+                          borderRadius: '50%',
+                          backgroundColor: '#f59e0b'
+                        }} />
                         Alerts & Notifications
                       </Typography>
                       {progressData.alerts.map((alert, index) => (
@@ -2567,9 +3387,15 @@ const ClinicianDashboard: React.FC = () => {
                             alert.type === 'skipped_sessions' ? 'warning' :
                             alert.type === 'progress_milestone' ? 'success' : 'info'
                           }
-                          sx={{ mb: 1 }}
+                          sx={{ 
+                            mb: 2,
+                            borderRadius: 2,
+                            '& .MuiAlert-message': {
+                              width: '100%'
+                            }
+                          }}
                         >
-                          <Typography variant="body2">
+                          <Typography variant="body1" sx={{ fontWeight: 600, mb: 0.5 }}>
                             {alert.message}
                           </Typography>
                           <Typography variant="caption" color="text.secondary">
@@ -2582,11 +3408,49 @@ const ClinicianDashboard: React.FC = () => {
                 )}
               </Box>
             ) : (
-              <Typography>No progress data available</Typography>
+              <Box sx={{ 
+                display: 'flex', 
+                justifyContent: 'center', 
+                alignItems: 'center',
+                minHeight: '400px',
+                background: 'linear-gradient(135deg, #f8fafc 0%, #ffffff 100%)'
+              }}>
+                <Box sx={{ textAlign: 'center' }}>
+                  <Typography variant="h6" color="text.secondary" sx={{ mb: 2 }}>
+                    No progress data available
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Progress data will appear here once exercises are completed
+                  </Typography>
+                </Box>
+              </Box>
             )}
           </DialogContent>
-          <DialogActions>
-            <Button onClick={() => setProgressDialog(false)}>Close</Button>
+          <DialogActions sx={{ 
+            p: 3,
+            background: 'linear-gradient(135deg, #f8fafc 0%, #ffffff 100%)',
+            borderRadius: '0 0 12px 12px'
+          }}>
+            <Button 
+              onClick={() => setProgressDialog(false)}
+              variant="contained"
+              sx={{
+                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                borderRadius: 2,
+                px: 4,
+                py: 1.5,
+                fontWeight: 700,
+                textTransform: 'none',
+                fontSize: '1rem',
+                '&:hover': {
+                  background: 'linear-gradient(135deg, #5a67d8 0%, #6b46c1 100%)',
+                  transform: 'translateY(-1px)',
+                  boxShadow: '0 8px 25px rgba(102, 126, 234, 0.3)'
+                }
+              }}
+            >
+              Close Progress View
+            </Button>
           </DialogActions>
         </Dialog>
 
@@ -2739,7 +3603,31 @@ const ClinicianDashboard: React.FC = () => {
             )}
           </DialogContent>
           <DialogActions>
-            <Button onClick={() => setCaseDetailDialog(false)}>Close</Button>
+            {selectedCase && selectedCase.status !== 'closed' && (
+              <Button
+                variant="contained"
+                color="error"
+                startIcon={<CheckCircle />}
+                onClick={() => handleUpdateCaseStatus(selectedCase._id, 'closed', 'Case closed by clinician')}
+                disabled={isUpdatingCase}
+                sx={{ mr: 1 }}
+              >
+                {isUpdatingCase ? 'Closing...' : 'Close Case'}
+              </Button>
+            )}
+            {selectedCase && selectedCase.status !== 'return_to_work' && selectedCase.status !== 'closed' && (
+              <Button
+                variant="contained"
+                color="success"
+                startIcon={<Work />}
+                onClick={() => handleUpdateCaseStatus(selectedCase._id, 'return_to_work', 'Worker returned to work')}
+                disabled={isUpdatingCase}
+                sx={{ mr: 1 }}
+              >
+                {isUpdatingCase ? 'Updating...' : 'Return to Work'}
+              </Button>
+            )}
+            <Button onClick={() => setCaseDetailDialog(false)}>Close Dialog</Button>
           </DialogActions>
         </Dialog>
       </Box>

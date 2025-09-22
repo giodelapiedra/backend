@@ -35,9 +35,6 @@ api.interceptors.request.use(
     const token = Cookies.get('token');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
-      console.log('Adding auth token to request');
-    } else {
-      console.warn('No auth token found in cookies');
     }
 
     // Add CSRF token for non-GET requests (except login/register)
@@ -48,7 +45,6 @@ api.interceptors.request.use(
       try {
         const csrf = await getCSRFToken();
         config.headers['X-CSRF-Token'] = csrf;
-        console.log('Added CSRF token to request:', config.url, csrf.substring(0, 10) + '...');
       } catch (error) {
         console.error('Failed to add CSRF token:', error);
         // For now, continue without CSRF token to test if that's the issue

@@ -4,6 +4,9 @@ const mongoose = require('mongoose');
 const { authMiddleware, roleMiddleware } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { adminLimiter } = require('../middleware/rateLimiter');
+const AuthenticationLog = require('../models/AuthenticationLog');
+
+console.log('🔍 Admin routes loaded - AuthenticationLog model:', !!AuthenticationLog);
 
 // Test route to verify admin routes are working - NOW PROTECTED WITH RATE LIMITING
 router.get('/test', adminLimiter, authMiddleware, roleMiddleware('admin'), (req, res) => {
@@ -217,7 +220,17 @@ router.get('/analytics', adminLimiter, authMiddleware, roleMiddleware('admin'), 
       }},
       { $unwind: '$user' },
       { $addFields: {
-        successRate: { $round: [{ $multiply: [{ $divide: ['$closedCases', '$casesHandled'] }, 100] }, 1] }
+        successRate: { 
+          $round: [{ 
+            $multiply: [{ 
+              $cond: [
+                { $gt: ['$casesHandled', 0] },
+                { $divide: ['$closedCases', '$casesHandled'] },
+                0
+              ]
+            }, 100] 
+          }, 1] 
+        }
       }},
       { $project: {
         name: { $concat: ['$user.firstName', ' ', '$user.lastName'] },
@@ -385,7 +398,11 @@ router.get('/analytics', adminLimiter, authMiddleware, roleMiddleware('admin'), 
         completionRate: { 
           $round: [{ 
             $multiply: [{ 
-              $divide: ['$completedExercises', { $add: ['$completedExercises', '$skippedExercises'] }] 
+              $cond: [
+                { $gt: [{ $add: ['$completedExercises', '$skippedExercises'] }, 0] },
+                { $divide: ['$completedExercises', { $add: ['$completedExercises', '$skippedExercises'] }] },
+                0
+              ]
             }, 100] 
           }, 1] 
         }
@@ -552,6 +569,135 @@ router.get('/analytics', adminLimiter, authMiddleware, roleMiddleware('admin'), 
   } catch (error) {
     console.error('Enhanced Analytics error:', error);
     res.status(500).json({ message: 'Failed to fetch enhanced analytics data' });
+  }
+}));
+
+// @route   GET /api/admin/auth-logs
+// @desc    Get authentication logs for admin
+// @access  Admin only
+router.get('/auth-logs', adminLimiter, authMiddleware, roleMiddleware('admin'), asyncHandler(async (req, res) => {
+  console.log('🔍 Authentication logs endpoint hit');
+  try {
+    const { 
+      page = 1, 
+      limit = 50, 
+      action, 
+      success, 
+      userRole, 
+      startDate, 
+      endDate,
+      search 
+    } = req.query;
+
+    // Build filter object
+    const filter = {};
+    
+    if (action) {
+      // If action is specified, use it (but still exclude login_failed)
+      if (action !== 'login_failed') {
+        filter.action = action;
+      }
+    } else {
+      // If no action specified, exclude failed logins
+      filter.action = { $ne: 'login_failed' };
+    }
+    
+    if (success !== undefined) filter.success = success === 'true';
+    if (userRole) filter.userRole = userRole;
+    
+    // Date range filter
+    if (startDate || endDate) {
+      filter.createdAt = {};
+      if (startDate) filter.createdAt.$gte = new Date(startDate);
+      if (endDate) filter.createdAt.$lte = new Date(endDate);
+    }
+    
+    // Search filter
+    if (search) {
+      filter.$or = [
+        { userEmail: { $regex: search, $options: 'i' } },
+        { userName: { $regex: search, $options: 'i' } },
+        { ipAddress: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    // Calculate pagination
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    
+    // Get logs with pagination
+    const logs = await AuthenticationLog.find(filter)
+      .populate('userId', 'firstName lastName email role')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .lean();
+
+    // Get total count for pagination
+    const totalLogs = await AuthenticationLog.countDocuments(filter);
+    
+    // Get summary statistics
+    const stats = await AuthenticationLog.aggregate([
+      { $match: filter },
+      {
+        $group: {
+          _id: null,
+          totalLogs: { $sum: 1 },
+          successfulLogins: {
+            $sum: { $cond: [{ $and: [{ $eq: ['$action', 'login'] }, { $eq: ['$success', true] }] }, 1, 0] }
+          },
+          logouts: {
+            $sum: { $cond: [{ $eq: ['$action', 'logout'] }, 1, 0] }
+          }
+        }
+      }
+    ]);
+
+    // Get activity by role
+    const activityByRole = await AuthenticationLog.aggregate([
+      { $match: filter },
+      {
+        $group: {
+          _id: '$userRole',
+          count: { $sum: 1 },
+          successfulLogins: {
+            $sum: { $cond: [{ $and: [{ $eq: ['$action', 'login'] }, { $eq: ['$success', true] }] }, 1, 0] }
+          }
+        }
+      },
+      { $sort: { count: -1 } }
+    ]);
+
+    // Get recent activity (last 24 hours)
+    const last24Hours = new Date();
+    last24Hours.setHours(last24Hours.getHours() - 24);
+    
+    const recentActivity = await AuthenticationLog.countDocuments({
+      ...filter,
+      createdAt: { $gte: last24Hours }
+    });
+
+    const response = {
+      logs,
+      pagination: {
+        currentPage: parseInt(page),
+        totalPages: Math.ceil(totalLogs / parseInt(limit)),
+        totalLogs,
+        hasNext: skip + parseInt(limit) < totalLogs,
+        hasPrev: parseInt(page) > 1
+      },
+      stats: stats[0] || {
+        totalLogs: 0,
+        successfulLogins: 0,
+        logouts: 0
+      },
+      activityByRole,
+      recentActivity
+    };
+
+    res.json(response);
+  } catch (error) {
+    console.error('Authentication logs error:', error);
+    res.status(500).json({ message: 'Failed to fetch authentication logs' });
   }
 }));
 

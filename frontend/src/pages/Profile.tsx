@@ -29,7 +29,8 @@ import {
   Cancel as CancelIcon,
   Add as AddIcon,
   Delete as DeleteIcon,
-  Person as PersonIcon
+  Person as PersonIcon,
+  Lock as LockIcon
 } from '@mui/icons-material';
 import Layout from '../components/Layout';
 import { useAuth } from '../contexts/AuthContext';
@@ -80,6 +81,12 @@ const Profile: React.FC = () => {
   const [openMedicationDialog, setOpenMedicationDialog] = useState(false);
   const [openConditionDialog, setOpenConditionDialog] = useState(false);
   const [profilePhoto, setProfilePhoto] = useState<File | null>(null);
+  
+  // Password verification states
+  const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
+  const [password, setPassword] = useState('');
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [verifyingPassword, setVerifyingPassword] = useState(false);
 
   const [formData, setFormData] = useState<ProfileFormData>({
     firstName: '',
@@ -114,7 +121,9 @@ const Profile: React.FC = () => {
         userId: user.id,
         userRole: user.role,
         userEmail: user.email,
-        userIdType: typeof user.id
+        userIdType: typeof user.id,
+        userProfileImage: user.profileImage,
+        hasProfileImage: !!user.profileImage
       });
       
       setFormData({
@@ -143,6 +152,8 @@ const Profile: React.FC = () => {
           medicalConditions: user.medicalInfo?.medicalConditions || []
         }
       });
+      
+      console.log('FormData set with profileImage:', user.profileImage || '');
     }
   }, [user]);
 
@@ -164,6 +175,40 @@ const Profile: React.FC = () => {
     }
   };
 
+  // Password verification function
+  const verifyPassword = async () => {
+    try {
+      setVerifyingPassword(true);
+      setPasswordError(null);
+      
+      const response = await api.post('/auth/verify-password', { password });
+      
+      if (response.data.valid) {
+        console.log('Password verified successfully for profile edit');
+        setPasswordDialogOpen(false);
+        setPassword('');
+        setIsEditing(true); // Enable edit mode after verification
+      } else {
+        setPasswordError('Invalid password');
+      }
+    } catch (err: any) {
+      console.error('Password verification error:', err);
+      if (err.response?.status === 400) {
+        setPasswordError('Password is required');
+      } else if (err.response?.status === 401) {
+        setPasswordError('Invalid password');
+      } else {
+        setPasswordError('Password verification failed');
+      }
+    } finally {
+      setVerifyingPassword(false);
+    }
+  };
+
+  const handleEditClick = () => {
+    setPasswordDialogOpen(true);
+  };
+
   const handleSave = async () => {
     try {
       setSaving(true);
@@ -176,31 +221,99 @@ const Profile: React.FC = () => {
         return;
       }
 
+      // Create a copy of the original user data for comparison
+      const originalData = {
+        firstName: user.firstName || '',
+        lastName: user.lastName || '',
+        email: user.email || '',
+        phone: user.phone || '',
+        profileImage: user.profileImage || '',
+        address: {
+          street: user.address?.street || '',
+          city: user.address?.city || '',
+          state: user.address?.state || '',
+          zipCode: user.address?.zipCode || '',
+          country: user.address?.country || ''
+        },
+        emergencyContact: {
+          name: user.emergencyContact?.name || '',
+          relationship: user.emergencyContact?.relationship || '',
+          phone: user.emergencyContact?.phone || '',
+          email: user.emergencyContact?.email || ''
+        },
+        medicalInfo: {
+          bloodType: user.medicalInfo?.bloodType || '',
+          allergies: user.medicalInfo?.allergies || [],
+          medications: user.medicalInfo?.medications || [],
+          medicalConditions: user.medicalInfo?.medicalConditions || []
+        }
+      };
+
+      // Only include fields that have actually changed
+      const changedFields: any = {};
+      
+      if (formData.firstName !== originalData.firstName) {
+        changedFields.firstName = formData.firstName;
+      }
+      if (formData.lastName !== originalData.lastName) {
+        changedFields.lastName = formData.lastName;
+      }
+      if (formData.email !== originalData.email) {
+        changedFields.email = formData.email;
+      }
+      if (formData.phone !== originalData.phone) {
+        changedFields.phone = formData.phone;
+      }
+      
+      // Check if address has changed
+      const addressChanged = JSON.stringify(formData.address) !== JSON.stringify(originalData.address);
+      if (addressChanged) {
+        changedFields.address = formData.address;
+      }
+      
+      // Check if emergency contact has changed
+      const emergencyContactChanged = JSON.stringify(formData.emergencyContact) !== JSON.stringify(originalData.emergencyContact);
+      if (emergencyContactChanged) {
+        changedFields.emergencyContact = formData.emergencyContact;
+      }
+      
+      // Check if medical info has changed
+      const medicalInfoChanged = JSON.stringify(formData.medicalInfo) !== JSON.stringify(originalData.medicalInfo);
+      if (medicalInfoChanged) {
+        changedFields.medicalInfo = formData.medicalInfo;
+      }
+
       console.log('Profile update request:', {
         userId: user.id,
         userRole: user.role,
-        formData: formData,
+        changedFields: Object.keys(changedFields),
         hasPhoto: !!profilePhoto,
-        authToken: Cookies.get('token') ? 'present' : 'missing'
+        authToken: Cookies.get('token') ? 'present' : 'missing',
+        currentProfileImage: user.profileImage,
+        formDataProfileImage: formData.profileImage
       });
 
       let response;
       
       if (profilePhoto) {
-        // Create FormData for file upload
+        // Create FormData for file upload - only send changed fields
         const formDataWithPhoto = new FormData();
-        formDataWithPhoto.append('firstName', formData.firstName);
-        formDataWithPhoto.append('lastName', formData.lastName);
-        formDataWithPhoto.append('email', formData.email);
-        formDataWithPhoto.append('phone', formData.phone);
-        formDataWithPhoto.append('address', JSON.stringify(formData.address));
-        formDataWithPhoto.append('emergencyContact', JSON.stringify(formData.emergencyContact));
-        formDataWithPhoto.append('medicalInfo', JSON.stringify(formData.medicalInfo));
+        
+        // Add only changed fields
+        Object.keys(changedFields).forEach(key => {
+          if (key === 'address' || key === 'emergencyContact' || key === 'medicalInfo') {
+            formDataWithPhoto.append(key, JSON.stringify(changedFields[key]));
+          } else {
+            formDataWithPhoto.append(key, changedFields[key]);
+          }
+        });
+        
         formDataWithPhoto.append('profileImage', profilePhoto);
         
         // Get CSRF token manually for FormData requests
         const csrfToken = await getCSRFToken();
         
+        console.log('Sending profile update with photo (changed fields only):', Object.keys(changedFields));
         response = await api.put(`/users/${user.id}`, formDataWithPhoto, {
           headers: {
             'Content-Type': 'multipart/form-data',
@@ -208,8 +321,9 @@ const Profile: React.FC = () => {
           },
         });
       } else {
-        // Regular JSON request without photo
-        response = await api.put(`/users/${user.id}`, formData);
+        // Regular JSON request without photo - only send changed fields
+        console.log('Sending profile update without photo (changed fields only):', Object.keys(changedFields));
+        response = await api.put(`/users/${user.id}`, changedFields);
       }
       
       setSuccess('Profile updated successfully!');
@@ -406,7 +520,7 @@ const Profile: React.FC = () => {
             <Button
               variant="contained"
               startIcon={<EditIcon />}
-              onClick={() => setIsEditing(true)}
+              onClick={handleEditClick}
             >
               Edit Profile
             </Button>
@@ -767,6 +881,64 @@ const Profile: React.FC = () => {
             </Card>
           </Grid>
         </Grid>
+
+        {/* Password Verification Dialog */}
+        <Dialog 
+          open={passwordDialogOpen} 
+          onClose={() => {
+            setPasswordDialogOpen(false);
+            setPassword('');
+            setPasswordError(null);
+          }}
+          maxWidth="sm" 
+          fullWidth
+        >
+          <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <LockIcon color="primary" />
+            Security Verification Required
+          </DialogTitle>
+          <DialogContent>
+            <Typography variant="body1" sx={{ mb: 2 }}>
+              Please enter your password to edit your profile.
+            </Typography>
+            <TextField
+              fullWidth
+              type="password"
+              label="Password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              error={!!passwordError}
+              helperText={passwordError}
+              onKeyPress={(e) => {
+                if (e.key === 'Enter') {
+                  verifyPassword();
+                }
+              }}
+              disabled={verifyingPassword}
+              sx={{ mt: 2 }}
+            />
+          </DialogContent>
+          <DialogActions>
+            <Button 
+              onClick={() => {
+                setPasswordDialogOpen(false);
+                setPassword('');
+                setPasswordError(null);
+              }}
+              disabled={verifyingPassword}
+            >
+              Cancel
+            </Button>
+            <Button 
+              onClick={verifyPassword}
+              variant="contained"
+              disabled={!password || verifyingPassword}
+              startIcon={verifyingPassword ? <CircularProgress size={20} /> : <LockIcon />}
+            >
+              {verifyingPassword ? 'Verifying...' : 'Verify Password'}
+            </Button>
+          </DialogActions>
+        </Dialog>
 
         {/* Add Allergy Dialog */}
         <Dialog open={openAllergyDialog} onClose={() => setOpenAllergyDialog(false)}>

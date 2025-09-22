@@ -81,9 +81,25 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 axios.defaults.baseURL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<User | null>(() => {
+    // Try to get user from cookies immediately
+    const storedUser = Cookies.get('user');
+    if (storedUser) {
+      try {
+        return JSON.parse(storedUser);
+      } catch (e) {
+        console.error('Error parsing stored user data:', e);
+      }
+    }
+    return null;
+  });
   const [token, setToken] = useState<string | null>(Cookies.get('token') || null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => {
+    // If we have user data from cookies, start with loading false
+    const storedUser = Cookies.get('user');
+    const storedToken = Cookies.get('token');
+    return !(storedUser && storedToken);
+  });
   const [error, setError] = useState<string | null>(null);
 
   // Set up axios interceptor for token
@@ -101,45 +117,42 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   useEffect(() => {
     const checkAuth = async () => {
       const storedToken = Cookies.get('token');
-      const storedUser = Cookies.get('user');
-      
-      console.log('Checking stored auth data:', { 
-        hasToken: !!storedToken, 
-        hasUserData: !!storedUser,
-        token: storedToken ? storedToken.substring(0, 10) + '...' : 'none'
-      });
       
       if (storedToken) {
         try {
           // Set token in axios headers
           axios.defaults.headers.common['Authorization'] = `Bearer ${storedToken}`;
-          console.log('Set Authorization header for verification request');
           
-          // Try to parse stored user data
-          if (storedUser) {
+          // If we already have user data from cookies, verify in background
+          if (user) {
+            // Verify token with server in background
             try {
-              const userData = JSON.parse(storedUser);
-              setUser(userData);
-              console.log('User data loaded from cookies:', userData);
-            } catch (e) {
-              console.error('Error parsing stored user data:', e);
+              const response = await axios.get('/auth/me');
+              setUser(response.data.user);
+              setToken(storedToken);
+              
+              // Update stored user data with fresh data from server
+              Cookies.set('user', JSON.stringify(response.data.user), { secure: true, sameSite: 'strict', expires: 7 });
+            } catch (error: any) {
+              console.error('Error verifying authentication:', error.message);
+              // Clear auth data
+              Cookies.remove('token');
+              Cookies.remove('user');
+              delete axios.defaults.headers.common['Authorization'];
+              setUser(null);
+              setToken(null);
             }
+          } else {
+            // No user data, need to verify token
+            const response = await axios.get('/auth/me');
+            setUser(response.data.user);
+            setToken(storedToken);
+            
+            // Update stored user data with fresh data from server
+            Cookies.set('user', JSON.stringify(response.data.user), { secure: true, sameSite: 'strict', expires: 7 });
           }
-          
-          // Verify token with server
-          console.log('Sending verification request to /auth/me');
-          const response = await axios.get('/auth/me');
-          console.log('Verification response received:', response.status);
-          setUser(response.data.user);
-          setToken(storedToken);
-          
-          // Update stored user data with fresh data from server
-          Cookies.set('user', JSON.stringify(response.data.user), { secure: true, sameSite: 'strict', expires: 7 });
-          console.log('User data refreshed from server:', response.data.user);
         } catch (error: any) {
           console.error('Error verifying authentication:', error.message);
-          console.error('Response status:', error.response?.status);
-          console.error('Response data:', error.response?.data);
           
           // Clear auth data
           Cookies.remove('token');
@@ -148,14 +161,13 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           setUser(null);
           setToken(null);
         }
-      } else {
-        console.log('No stored token found');
       }
+      
       setLoading(false);
     };
 
     checkAuth();
-  }, []);
+  }, []); // Empty dependency array - only run once on mount
 
   const login = async (email: string, password: string) => {
     try {
@@ -299,6 +311,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     Cookies.remove('token');
     Cookies.remove('user');
     clearCSRFToken(); // Clear CSRF token
+    // Clear password verification for auth logs
+    sessionStorage.removeItem('authLogsPasswordVerified');
     setToken(null);
     setUser(null);
     delete axios.defaults.headers.common['Authorization'];

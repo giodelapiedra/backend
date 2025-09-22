@@ -105,28 +105,8 @@ const NotificationsPage: React.FC = () => {
   useEffect(() => {
     fetchNotifications();
     
-    // Set up Server-Sent Events for real-time notifications
-    const eventSource = new EventSource(`${process.env.REACT_APP_API_URL || 'http://localhost:5000/api'}/notifications/stream`);
-    
-    eventSource.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (data.type === 'notification_count_update') {
-          // Refresh notifications when count changes
-          fetchNotifications();
-        }
-      } catch (error) {
-        console.error('Error parsing SSE data:', error);
-      }
-    };
-    
-    eventSource.onerror = (error) => {
-      console.error('SSE connection error:', error);
-    };
-    
-    return () => {
-      eventSource.close();
-    };
+    // Completely disable all notification polling to stop repeated requests
+    // TODO: Re-enable with proper SSE authentication later
   }, []);
 
   const fetchNotifications = async () => {
@@ -508,6 +488,12 @@ const NotificationsPage: React.FC = () => {
         return <Work sx={{ color: '#f59e0b' }} />;
       case 'case_created':
         return <Assessment sx={{ color: '#3b82f6' }} />;
+      case 'case_closed':
+        return <CheckCircle sx={{ color: '#22c55e' }} />;
+      case 'return_to_work':
+        return <Work sx={{ color: '#f59e0b' }} />;
+      case 'case_assigned':
+        return <Assignment sx={{ color: '#3b82f6' }} />;
       case 'incident_reported':
         return <Warning sx={{ color: '#f59e0b' }} />;
       default:
@@ -608,9 +594,10 @@ const NotificationsPage: React.FC = () => {
                   
                   <ListItemText
                     primary={
-                      <Box display="flex" alignItems="center" gap={1} sx={{ mb: 0.5 }}>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
                         <Typography 
                           variant="h6" 
+                          component="span"
                           sx={{ 
                             fontWeight: notification.isRead ? 500 : 600,
                             color: notification.isRead ? 'text.secondary' : 'text.primary'
@@ -624,13 +611,15 @@ const NotificationsPage: React.FC = () => {
                           size="small"
                           sx={{ fontWeight: 600, fontSize: '0.7rem' }}
                         />
-                      </Box>
+                      </span>
                     }
                     secondary={
-                      <Box>
+                      <span>
                         <Typography 
                           variant="body2" 
+                          component="span"
                           sx={{ 
+                            display: 'block',
                             mb: 1,
                             color: notification.isRead ? 'text.secondary' : 'text.primary'
                           }}
@@ -641,7 +630,7 @@ const NotificationsPage: React.FC = () => {
                           From: {notification.sender.firstName} {notification.sender.lastName} • 
                           {new Date(notification.createdAt).toLocaleString()}
                         </Typography>
-                      </Box>
+                      </span>
                     }
                   />
                   

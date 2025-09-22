@@ -46,9 +46,14 @@ router.get('/', [
     .populate('clinician', 'firstName lastName email')
     .sort({ createdAt: -1 });
 
+  // Filter out plans where the case is closed
+  const filteredPlans = plans.filter(plan => 
+    plan.case && plan.case.status !== 'closed'
+  );
+
   res.json({
-    plans,
-    count: plans.length
+    plans: filteredPlans,
+    count: filteredPlans.length
   });
 }));
 
@@ -65,16 +70,26 @@ router.get('/dashboard/stats', authMiddleware, asyncHandler(async (req, res) => 
     filter.clinician = req.user._id;
   }
 
-  const activePlans = await RehabilitationPlan.find({ ...filter, status: 'active' });
-  const completedPlans = await RehabilitationPlan.find({ ...filter, status: 'completed' });
+  const activePlans = await RehabilitationPlan.find({ ...filter, status: 'active' })
+    .populate('case', 'status');
+  const completedPlans = await RehabilitationPlan.find({ ...filter, status: 'completed' })
+    .populate('case', 'status');
 
-  const totalGoals = activePlans.reduce((sum, plan) => sum + (plan.goals?.length || 0), 0);
-  const completedGoals = activePlans.reduce((sum, plan) => 
+  // Filter out plans where the case is closed
+  const filteredActivePlans = activePlans.filter(plan => 
+    plan.case && plan.case.status !== 'closed'
+  );
+  const filteredCompletedPlans = completedPlans.filter(plan => 
+    plan.case && plan.case.status !== 'closed'
+  );
+
+  const totalGoals = filteredActivePlans.reduce((sum, plan) => sum + (plan.goals?.length || 0), 0);
+  const completedGoals = filteredActivePlans.reduce((sum, plan) => 
     sum + (plan.goals?.filter(goal => goal.status === 'completed').length || 0), 0
   );
 
-  const totalExercises = activePlans.reduce((sum, plan) => sum + (plan.exercises?.length || 0), 0);
-  const completedExercises = activePlans.reduce((sum, plan) => 
+  const totalExercises = filteredActivePlans.reduce((sum, plan) => sum + (plan.exercises?.length || 0), 0);
+  const completedExercises = filteredActivePlans.reduce((sum, plan) => 
     sum + (plan.exercises?.filter(exercise => exercise.status === 'completed').length || 0), 0
   );
 
@@ -85,8 +100,8 @@ router.get('/dashboard/stats', authMiddleware, asyncHandler(async (req, res) => 
   }).countDocuments();
 
   res.json({
-    activePlans: activePlans.length,
-    completedPlans: completedPlans.length,
+    activePlans: filteredActivePlans.length,
+    completedPlans: filteredCompletedPlans.length,
     totalGoals,
     completedGoals,
     goalCompletionRate: totalGoals > 0 ? Math.round((completedGoals / totalGoals) * 100) : 0,

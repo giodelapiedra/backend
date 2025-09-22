@@ -6,7 +6,7 @@ require('dotenv').config();
 const User = require('../models/User');
 const Case = require('../models/Case');
 const Incident = require('../models/Incident');
-const RehabPlan = require('../models/RehabPlan');
+const RehabilitationPlan = require('../models/RehabilitationPlan');
 const CheckIn = require('../models/CheckIn');
 
 const seedData = async () => {
@@ -19,7 +19,7 @@ const seedData = async () => {
     await User.deleteMany({});
     await Case.deleteMany({});
     await Incident.deleteMany({});
-    await RehabPlan.deleteMany({});
+    await RehabilitationPlan.deleteMany({});
     await CheckIn.deleteMany({});
     console.log('Cleared existing data');
 
@@ -258,7 +258,7 @@ const seedData = async () => {
     console.log('Created sample cases');
 
     // Create sample rehabilitation plans
-    const rehabPlan1 = new RehabPlan({
+    const rehabPlan1 = new RehabilitationPlan({
       case: case1._id,
       clinician: clinician._id,
       planName: 'Lower Back Recovery Plan',
@@ -309,7 +309,7 @@ const seedData = async () => {
     });
     await rehabPlan1.save();
 
-    const rehabPlan2 = new RehabPlan({
+    const rehabPlan2 = new RehabilitationPlan({
       case: case2._id,
       clinician: clinician._id,
       planName: 'Shoulder Rehabilitation Plan',

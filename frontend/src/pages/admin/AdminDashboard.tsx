@@ -26,6 +26,7 @@ import {
   TableRow,
   Paper,
   Tooltip,
+  Pagination,
 } from '@mui/material';
 import {
   People,
@@ -37,8 +38,6 @@ import {
   Group,
   Schedule,
   Add,
-  Edit,
-  Delete,
   Visibility,
 } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext';
@@ -53,6 +52,12 @@ const AdminDashboard: React.FC = () => {
   const [users, setUsers] = useState<any[]>([]);
   const [userDialog, setUserDialog] = useState(false);
   const [editingUser, setEditingUser] = useState<any>(null);
+  
+  // Pagination states
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [totalUsers, setTotalUsers] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
   const [userForm, setUserForm] = useState({
     firstName: '',
     lastName: '',
@@ -67,15 +72,38 @@ const AdminDashboard: React.FC = () => {
 
   useEffect(() => {
     fetchUsers();
-  }, []);
+  }, [currentPage, pageSize]);
+
+  // Pagination handlers
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page);
+  };
+
+  const handlePageSizeChange = (newPageSize: number) => {
+    setPageSize(newPageSize);
+    setCurrentPage(1); // Reset to first page when changing page size
+  };
 
   const fetchUsers = async () => {
     try {
       setLoading(true);
-      console.log('Fetching users...');
-      const response = await api.get('/users');
+      console.log('Fetching users with pagination...');
+      console.log('Current page:', currentPage);
+      console.log('Page size:', pageSize);
+      
+      // Build query parameters
+      const params = new URLSearchParams({
+        page: currentPage.toString(),
+        limit: pageSize.toString(),
+      });
+      
+      const response = await api.get(`/users?${params.toString()}`);
       console.log('Users response:', response.data);
+      console.log('Pagination info:', response.data.pagination);
+      
       setUsers(response.data.users || []);
+      setTotalUsers(response.data.pagination?.total || 0);
+      setTotalPages(response.data.pagination?.pages || 0);
     } catch (err: any) {
       console.error('Error fetching users:', err);
       console.error('Error response:', err.response?.data);
@@ -150,20 +178,6 @@ const AdminDashboard: React.FC = () => {
     }
   };
 
-  const handleDeleteUser = async (userId: string) => {
-    if (window.confirm('Are you sure you want to delete this user?')) {
-      try {
-        setLoading(true);
-        await api.delete(`/users/${userId}`);
-        setSuccessMessage('User deleted successfully!');
-        fetchUsers();
-      } catch (err: any) {
-        setError(err.response?.data?.message || 'Failed to delete user');
-      } finally {
-        setLoading(false);
-      }
-    }
-  };
 
   const resetUserForm = () => {
     setUserForm({
@@ -540,7 +554,7 @@ const AdminDashboard: React.FC = () => {
         <Card sx={{ mt: 3 }}>
           <CardContent>
             <Typography variant="h6" gutterBottom>
-              All Users ({users.length})
+              All Users ({totalUsers})
             </Typography>
             <TableContainer component={Paper} variant="outlined">
               <Table>
@@ -551,7 +565,6 @@ const AdminDashboard: React.FC = () => {
                     <TableCell>Role</TableCell>
                     <TableCell>Phone</TableCell>
                     <TableCell>Status</TableCell>
-                    <TableCell>Actions</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -576,30 +589,75 @@ const AdminDashboard: React.FC = () => {
                           size="small"
                         />
                       </TableCell>
-                      <TableCell>
-                        <Tooltip title="Edit User">
-                          <IconButton
-                            size="small"
-                            onClick={() => openUserDialog(userItem)}
-                          >
-                            <Edit />
-                          </IconButton>
-                        </Tooltip>
-                        <Tooltip title="Delete User">
-                          <IconButton
-                            size="small"
-                            onClick={() => handleDeleteUser(userItem._id)}
-                            color="error"
-                          >
-                            <Delete />
-                          </IconButton>
-                        </Tooltip>
-                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
             </TableContainer>
+            
+            {/* Pagination Controls */}
+            {totalPages > 1 && (
+              <Box sx={{ 
+                p: 3, 
+                borderTop: '1px solid #e1e5e9',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: 2
+              }}>
+                {/* Page Size Selector */}
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Typography variant="body2" sx={{ color: '#666' }}>
+                    Show:
+                  </Typography>
+                  <FormControl size="small" sx={{ minWidth: 80 }}>
+                    <Select
+                      value={pageSize}
+                      onChange={(e) => handlePageSizeChange(Number(e.target.value))}
+                      sx={{ fontSize: '0.875rem' }}
+                    >
+                      <MenuItem value={5}>5</MenuItem>
+                      <MenuItem value={10}>10</MenuItem>
+                      <MenuItem value={25}>25</MenuItem>
+                      <MenuItem value={50}>50</MenuItem>
+                    </Select>
+                  </FormControl>
+                  <Typography variant="body2" sx={{ color: '#666' }}>
+                    per page
+                  </Typography>
+                </Box>
+
+                {/* Pagination Info */}
+                <Typography variant="body2" sx={{ color: '#666' }}>
+                  Showing {((currentPage - 1) * pageSize) + 1} to {Math.min(currentPage * pageSize, totalUsers)} of {totalUsers} users
+                </Typography>
+
+                {/* Pagination Component */}
+                <Pagination
+                  count={totalPages}
+                  page={currentPage}
+                  onChange={(event, page) => handlePageChange(page)}
+                  color="primary"
+                  size="medium"
+                  showFirstButton
+                  showLastButton
+                  sx={{
+                    '& .MuiPaginationItem-root': {
+                      borderRadius: 2,
+                      fontWeight: 500,
+                    },
+                    '& .Mui-selected': {
+                      backgroundColor: '#7B68EE',
+                      color: 'white',
+                      '&:hover': {
+                        backgroundColor: '#6A5ACD',
+                      },
+                    },
+                  }}
+                />
+              </Box>
+            )}
           </CardContent>
         </Card>
 

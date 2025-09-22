@@ -37,6 +37,8 @@ import {
   Autocomplete,
   Stack,
   Badge,
+  Pagination,
+  SelectChangeEvent,
 } from '@mui/material';
 import {
   Timeline,
@@ -126,6 +128,10 @@ const WorkerActivityMonitor: React.FC = () => {
   const [sortBy, setSortBy] = useState('createdAt');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [showFilters, setShowFilters] = useState(false);
+  
+  // Pagination states
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
   
   // Filter states
   const [filters, setFilters] = useState({
@@ -273,6 +279,27 @@ const WorkerActivityMonitor: React.FC = () => {
     }
   });
 
+  // Pagination logic
+  const totalItems = filteredLogs.length;
+  const totalPages = Math.ceil(totalItems / itemsPerPage);
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const endIndex = startIndex + itemsPerPage;
+  const paginatedLogs = filteredLogs.slice(startIndex, endIndex);
+
+  // Reset to first page when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, filters, sortBy, sortOrder]);
+
+  const handlePageChange = (event: React.ChangeEvent<unknown>, page: number) => {
+    setCurrentPage(page);
+  };
+
+  const handleItemsPerPageChange = (event: SelectChangeEvent<number>) => {
+    setItemsPerPage(event.target.value as number);
+    setCurrentPage(1);
+  };
+
   const stats = {
     total: activityLogs.length,
     completed: activityLogs.filter(log => log.activityType === 'exercise_completed').length,
@@ -389,7 +416,7 @@ const WorkerActivityMonitor: React.FC = () => {
               <Grid item xs={12} md={3}>
                 <Box display="flex" gap={1}>
                   <Chip
-                    label={`${filteredLogs.length} results`}
+                    label={`${totalItems} results`}
                     color="primary"
                     variant="outlined"
                   />
@@ -548,7 +575,7 @@ const WorkerActivityMonitor: React.FC = () => {
         <Card>
           <CardContent>
             <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
-              Activity Logs ({filteredLogs.length})
+              Activity Logs ({totalItems})
             </Typography>
             
             <TableContainer component={Paper} variant="outlined">
@@ -565,7 +592,7 @@ const WorkerActivityMonitor: React.FC = () => {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {filteredLogs.map((log) => (
+                  {paginatedLogs.map((log) => (
                     <TableRow key={log._id} sx={{ 
                       bgcolor: log.isReviewed ? 'action.hover' : 'warning.light',
                       opacity: log.isReviewed ? 0.7 : 1
@@ -644,7 +671,7 @@ const WorkerActivityMonitor: React.FC = () => {
               </Table>
             </TableContainer>
             
-            {filteredLogs.length === 0 && (
+            {paginatedLogs.length === 0 && (
               <Box textAlign="center" sx={{ py: 4 }}>
                 <Timeline sx={{ fontSize: 48, color: 'text.secondary', mb: 2 }} />
                 <Typography variant="h6" color="text.secondary">
@@ -653,6 +680,52 @@ const WorkerActivityMonitor: React.FC = () => {
                 <Typography variant="body2" color="text.secondary">
                   Worker activities will appear here once they start using rehabilitation plans
                 </Typography>
+              </Box>
+            )}
+
+            {/* Pagination Controls */}
+            {totalItems > 0 && (
+              <Box sx={{ 
+                display: 'flex', 
+                justifyContent: 'space-between', 
+                alignItems: 'center', 
+                mt: 3,
+                pt: 2,
+                borderTop: '1px solid',
+                borderColor: 'divider'
+              }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                  <Typography variant="body2" color="text.secondary">
+                    Showing {startIndex + 1} to {Math.min(endIndex, totalItems)} of {totalItems} entries
+                  </Typography>
+                  <FormControl size="small" sx={{ minWidth: 80 }}>
+                    <Select
+                      value={itemsPerPage}
+                      onChange={handleItemsPerPageChange}
+                      variant="outlined"
+                    >
+                      <MenuItem value={5}>5</MenuItem>
+                      <MenuItem value={10}>10</MenuItem>
+                      <MenuItem value={25}>25</MenuItem>
+                      <MenuItem value={50}>50</MenuItem>
+                    </Select>
+                  </FormControl>
+                  <Typography variant="body2" color="text.secondary">
+                    per page
+                  </Typography>
+                </Box>
+                
+                <Pagination
+                  count={totalPages}
+                  page={currentPage}
+                  onChange={handlePageChange}
+                  color="primary"
+                  size="large"
+                  showFirstButton
+                  showLastButton
+                  siblingCount={1}
+                  boundaryCount={1}
+                />
               </Box>
             )}
           </CardContent>

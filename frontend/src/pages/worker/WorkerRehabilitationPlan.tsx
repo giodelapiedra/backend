@@ -33,7 +33,6 @@ import {
   FitnessCenter,
   Timer,
   Assignment,
-  Refresh,
 } from '@mui/icons-material';
 import Layout from '../../components/Layout';
 import api from '../../utils/api';
@@ -102,7 +101,6 @@ const WorkerRehabilitationPlan: React.FC = () => {
   const [skipReason, setSkipReason] = useState('');
   const [skipNotes, setSkipNotes] = useState('');
   const [completingExercise, setCompletingExercise] = useState<string | null>(null);
-  const [lastRefreshTime, setLastRefreshTime] = useState<Date | null>(null);
 
   useEffect(() => {
     if (user) {
@@ -110,39 +108,17 @@ const WorkerRehabilitationPlan: React.FC = () => {
     }
   }, [user]);
 
-  // Refresh data when component becomes visible (user navigates back to page)
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (!document.hidden && user) {
-        console.log('Page became visible, refreshing rehabilitation plan...');
-        fetchRehabilitationPlan();
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [user]);
-
   const fetchRehabilitationPlan = async () => {
     try {
       setLoading(true);
-      console.log('Fetching rehabilitation plan...', new Date().toISOString());
-      
       const response = await api.get('/rehabilitation-plans');
       
       if (response.data.plans && response.data.plans.length > 0) {
         // Find the most recent active plan
         const activePlan = response.data.plans.find((p: RehabilitationPlan) => p.status === 'active');
         if (activePlan) {
-          console.log('Found active plan:', activePlan._id);
-          
-          // Get today's exercises for this plan with cache busting
-          const todayResponse = await api.get(`/rehabilitation-plans/${activePlan._id}/today?t=${Date.now()}`);
-          console.log('Today\'s exercises response:', todayResponse.data);
-          
+          // Get today's exercises for this plan
+          const todayResponse = await api.get(`/rehabilitation-plans/${activePlan._id}/today`);
           // The API returns { plan: {...}, exercises: [...], progressStats: {...} }
           // We need to merge this data into a single plan object
           const planData = {
@@ -150,10 +126,7 @@ const WorkerRehabilitationPlan: React.FC = () => {
             exercises: todayResponse.data.exercises,
             progressStats: todayResponse.data.progressStats
           };
-          
-          console.log('Setting plan data:', planData);
           setPlan(planData);
-          setLastRefreshTime(new Date());
         } else {
           setError('No active rehabilitation plan found');
         }
@@ -161,7 +134,6 @@ const WorkerRehabilitationPlan: React.FC = () => {
         setError('No rehabilitation plan assigned');
       }
     } catch (err: any) {
-      console.error('Error fetching rehabilitation plan:', err);
       setError(err.response?.data?.message || 'Failed to fetch rehabilitation plan');
     } finally {
       setLoading(false);
@@ -304,37 +276,12 @@ const WorkerRehabilitationPlan: React.FC = () => {
       <Box sx={{ p: { xs: 2, md: 3 } }}>
         {/* Header */}
         <Box sx={{ mb: 4 }}>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-            <Typography variant="h4" component="h1" sx={{ fontWeight: 700, color: '#333' }}>
-              Today's Recovery Plan
-            </Typography>
-            <Button
-              variant="outlined"
-              startIcon={<Refresh />}
-              onClick={fetchRehabilitationPlan}
-              disabled={loading}
-              sx={{
-                borderRadius: 2,
-                textTransform: 'none',
-                fontWeight: 600,
-                '&:hover': {
-                  backgroundColor: '#f0f9ff',
-                  borderColor: '#3b82f6',
-                },
-              }}
-            >
-              Refresh
-            </Button>
-          </Box>
+          <Typography variant="h4" component="h1" gutterBottom sx={{ fontWeight: 700, color: '#333' }}>
+            Today's Recovery Plan
+          </Typography>
           <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
             {plan?.planDescription || 'No description available'}
           </Typography>
-          
-          {lastRefreshTime && (
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 2 }}>
-              Last updated: {lastRefreshTime.toLocaleString()}
-            </Typography>
-          )}
           
           {/* Progress */}
           <Box sx={{ mb: 2 }}>

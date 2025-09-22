@@ -6,7 +6,7 @@ require('dotenv').config();
 const User = require('../models/User');
 const Case = require('../models/Case');
 const Incident = require('../models/Incident');
-const RehabPlan = require('../models/RehabPlan');
+const RehabilitationPlan = require('../models/RehabilitationPlan');
 const CheckIn = require('../models/CheckIn');
 
 const seedUsersOnly = async () => {
@@ -18,7 +18,7 @@ const seedUsersOnly = async () => {
     // Clear existing data
     await Case.deleteMany({});
     await Incident.deleteMany({});
-    await RehabPlan.deleteMany({});
+    await RehabilitationPlan.deleteMany({});
     await CheckIn.deleteMany({});
     console.log('Cleared existing sample data');
 

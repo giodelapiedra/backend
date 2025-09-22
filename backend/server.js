@@ -17,7 +17,6 @@ const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
 const caseRoutes = require('./routes/cases');
 const assessmentRoutes = require('./routes/assessments');
-const rehabPlanRoutes = require('./routes/rehabPlans');
 const appointmentRoutes = require('./routes/appointments');
 const checkInRoutes = require('./routes/checkIns');
 const rehabilitationPlanRoutes = require('./routes/rehabilitationPlans');
@@ -173,7 +172,6 @@ app.use('/api/auth', authRoutes); // Removed authLimiter
 app.use('/api/users', userRoutes);
 app.use('/api/cases', caseRoutes);
 app.use('/api/assessments', assessmentRoutes);
-app.use('/api/rehab-plans', rehabPlanRoutes);
 app.use('/api/appointments', appointmentRoutes);
 app.use('/api/check-ins', checkInRoutes);
 app.use('/api/rehabilitation-plans', rehabilitationPlanRoutes);

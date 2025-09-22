@@ -59,7 +59,7 @@ import {
 import { useAuth } from '../../contexts/AuthContext';
 import Layout from '../../components/Layout';
 import api, { getCurrentUser } from '../../utils/api';
-import { createImageProps, testImageUrl, debugAllImages, testImageCORS } from '../../utils/imageUtils';
+import { createImageProps } from '../../utils/imageUtils';
 
 interface User {
   _id: string;
@@ -155,13 +155,6 @@ const CaseManagerDashboard: React.FC = () => {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
 
-  // Make debugging functions available globally for console testing
-  React.useEffect(() => {
-    (window as any).testImageUrl = testImageUrl;
-    (window as any).debugAllImages = debugAllImages;
-    (window as any).testImageCORS = testImageCORS;
-    console.log('🔧 Debug functions available: testImageUrl(), debugAllImages(), testImageCORS()');
-  }, []);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState(0);
   
@@ -1055,15 +1048,21 @@ const CaseManagerDashboard: React.FC = () => {
                   mb: 3, 
                   p: 3, 
                   bgcolor: notification.type === 'high_pain' ? '#fef2f2' : 
-                           notification.type === 'rtw_review' ? '#fef3c7' : '#f0f9ff', 
+                           notification.type === 'rtw_review' ? '#fef3c7' : 
+                           notification.type === 'case_closed' ? '#f0fdf4' :
+                           notification.type === 'return_to_work' ? '#fef3c7' : '#f0f9ff', 
                   borderRadius: 2,
                   border: notification.type === 'high_pain' ? '1px solid #fecaca' :
-                          notification.type === 'rtw_review' ? '1px solid #fde68a' : '1px solid #bae6fd'
+                          notification.type === 'rtw_review' ? '1px solid #fde68a' :
+                          notification.type === 'case_closed' ? '1px solid #bbf7d0' :
+                          notification.type === 'return_to_work' ? '1px solid #fde68a' : '1px solid #bae6fd'
                 }}>
                   <Box display="flex" alignItems="center" gap={2} sx={{ mb: 2 }}>
                     <Box sx={{ 
                       backgroundColor: notification.type === 'high_pain' ? '#ef4444' : 
-                                      notification.type === 'rtw_review' ? '#f59e0b' : '#3b82f6',
+                                      notification.type === 'rtw_review' ? '#f59e0b' : 
+                                      notification.type === 'case_closed' ? '#22c55e' :
+                                      notification.type === 'return_to_work' ? '#f59e0b' : '#3b82f6',
                       borderRadius: 2,
                       p: 1,
                       display: 'flex',
@@ -1072,6 +1071,8 @@ const CaseManagerDashboard: React.FC = () => {
                     }}>
                       {notification.type === 'high_pain' ? <LocalHospital sx={{ fontSize: 20, color: 'white' }} /> :
                        notification.type === 'rtw_review' ? <Work sx={{ fontSize: 20, color: 'white' }} /> :
+                       notification.type === 'case_closed' ? <CheckCircle sx={{ fontSize: 20, color: 'white' }} /> :
+                       notification.type === 'return_to_work' ? <Work sx={{ fontSize: 20, color: 'white' }} /> :
                        <Assessment sx={{ fontSize: 20, color: 'white' }} />}
                     </Box>
                     <Box flex={1}>
@@ -1095,33 +1096,72 @@ const CaseManagerDashboard: React.FC = () => {
                     {notification.message}
                   </Typography>
                   
-                  {notification.actionUrl && (
+                  <Box display="flex" gap={1} sx={{ mt: 2 }}>
+                    {notification.actionUrl && (
+                      <Button
+                        variant="contained"
+                        color={notification.type === 'high_pain' ? 'error' : 
+                               notification.type === 'rtw_review' ? 'warning' : 
+                               notification.type === 'case_closed' ? 'success' :
+                               notification.type === 'return_to_work' ? 'warning' : 'primary'}
+                        size="small"
+                        onClick={() => {
+                          // Mark notification as read
+                          api.put(`/notifications/${notification._id}/read`);
+                          // Navigate to action URL
+                          window.location.href = notification.actionUrl || '/cases';
+                        }}
+                        sx={{
+                          borderRadius: 2,
+                          textTransform: 'none',
+                          fontWeight: 600,
+                          backgroundColor: notification.type === 'high_pain' ? '#ef4444' : 
+                                          notification.type === 'rtw_review' ? '#f59e0b' : 
+                                          notification.type === 'case_closed' ? '#22c55e' :
+                                          notification.type === 'return_to_work' ? '#f59e0b' : '#3b82f6',
+                          '&:hover': {
+                            backgroundColor: notification.type === 'high_pain' ? '#dc2626' : 
+                                            notification.type === 'rtw_review' ? '#d97706' : 
+                                            notification.type === 'case_closed' ? '#16a34a' :
+                                            notification.type === 'return_to_work' ? '#d97706' : '#2563eb'
+                          }
+                        }}
+                      >
+                        View Case Details
+                      </Button>
+                    )}
                     <Button
-                      variant="contained"
-                      color={notification.type === 'high_pain' ? 'error' : 
-                             notification.type === 'rtw_review' ? 'warning' : 'primary'}
+                      variant="outlined"
+                      color="success"
                       size="small"
-                      onClick={() => {
-                        // Mark notification as read
-                        api.put(`/notifications/${notification._id}/read`);
-                        // Navigate to action URL
-                        window.location.href = notification.actionUrl || '/cases';
+                      startIcon={<CheckCircle />}
+                      onClick={async () => {
+                        try {
+                          await api.put(`/notifications/${notification._id}/read`);
+                          // Refresh notifications
+                          const response = await api.get('/notifications');
+                          setNotifications(response.data.notifications || []);
+                          const unreadCount = response.data.notifications?.filter((n: any) => !n.isRead).length || 0;
+                          setUnreadNotificationCount(unreadCount);
+                        } catch (error) {
+                          console.error('Failed to mark notification as read:', error);
+                        }
                       }}
                       sx={{
                         borderRadius: 2,
                         textTransform: 'none',
                         fontWeight: 600,
-                        backgroundColor: notification.type === 'high_pain' ? '#ef4444' : 
-                                        notification.type === 'rtw_review' ? '#f59e0b' : '#3b82f6',
+                        borderColor: '#22c55e',
+                        color: '#22c55e',
                         '&:hover': {
-                          backgroundColor: notification.type === 'high_pain' ? '#dc2626' : 
-                                          notification.type === 'rtw_review' ? '#d97706' : '#2563eb'
+                          borderColor: '#16a34a',
+                          backgroundColor: '#f0fdf4'
                         }
                       }}
                     >
-                      View Case Details
+                      Mark as Read
                     </Button>
-                  )}
+                  </Box>
                 </Box>
               ))}
               

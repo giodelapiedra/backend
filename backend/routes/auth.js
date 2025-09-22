@@ -7,6 +7,7 @@ const { generateToken, authMiddleware } = require('../middleware/auth');
 const { handleValidationErrors, asyncHandler } = require('../middleware/errorHandler');
 const { authLimiter, registrationLimiter, passwordResetLimiter } = require('../middleware/rateLimiter');
 const { uploadSingleUserPhoto } = require('../middleware/upload');
+const { logLoginActivity, logLogoutActivity } = require('../middleware/authLogger');
 
 const router = express.Router();
 
@@ -227,6 +228,9 @@ router.post('/login', [
   // Generate token
   const token = generateToken(user._id);
 
+  // Log successful login
+  await logLoginActivity(user, req, true);
+
   // Set cookie with token (secure in production, httpOnly for security)
   res.cookie('token', token, {
     httpOnly: true,
@@ -312,7 +316,10 @@ router.post('/change-password', [
 // @route   POST /api/auth/logout
 // @desc    Logout user (clear cookie and client-side token removal)
 // @access  Private
-router.post('/logout', authMiddleware, (req, res) => {
+router.post('/logout', authMiddleware, asyncHandler(async (req, res) => {
+  // Log logout activity
+  await logLogoutActivity(req.user, req);
+  
   // Clear the token cookie
   res.clearCookie('token', {
     httpOnly: true,
@@ -321,6 +328,38 @@ router.post('/logout', authMiddleware, (req, res) => {
   });
   
   res.json({ message: 'Logout successful' });
-});
+}));
+
+// @route   POST /api/auth/verify-password
+// @desc    Verify user password for sensitive operations
+// @access  Private
+router.post('/verify-password', authMiddleware, asyncHandler(async (req, res) => {
+  const { password } = req.body;
+  
+  if (!password) {
+    return res.status(400).json({ message: 'Password is required' });
+  }
+  
+  try {
+    // Get user with password
+    const user = await User.findById(req.user._id).select('+password');
+    
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    // Check password
+    const isMatch = await user.comparePassword(password);
+    
+    if (isMatch) {
+      res.json({ valid: true, message: 'Password verified successfully' });
+    } else {
+      res.json({ valid: false, message: 'Invalid password' });
+    }
+  } catch (error) {
+    console.error('Password verification error:', error);
+    res.status(500).json({ message: 'Password verification failed' });
+  }
+}));
 
 module.exports = router;

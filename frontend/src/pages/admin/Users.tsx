@@ -30,6 +30,7 @@ import {
   Grid,
   Switch,
   FormControlLabel,
+  Pagination,
 } from '@mui/material';
 import {
   People,
@@ -43,6 +44,7 @@ import {
   Email,
   Phone,
   Work,
+  Lock,
 } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext';
 import Layout from '../../components/Layout';
@@ -76,9 +78,23 @@ const Users: React.FC = memo(() => {
   const [users, setUsers] = useState<User[]>([]);
   const [userDialog, setUserDialog] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
+  
+  // Password verification states
+  const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
+  const [password, setPassword] = useState('');
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [verifyingPassword, setVerifyingPassword] = useState(false);
+  const [pendingEditUser, setPendingEditUser] = useState<User | null>(null);
+  
   const [searchTerm, setSearchTerm] = useState('');
   const [roleFilter, setRoleFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
+  
+  // Pagination states
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [totalUsers, setTotalUsers] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
   const [userForm, setUserForm] = useState({
     firstName: '',
     lastName: '',
@@ -113,19 +129,36 @@ const Users: React.FC = memo(() => {
     try {
       setLoading(true);
       console.log('=== FETCH USERS START ===');
-      console.log('Fetching users...');
-      console.log('Current user from auth context:', currentUser);
-      console.log('Auth token exists:', !!Cookies.get('token'));
-      console.log('Auth token value:', Cookies.get('token') ? Cookies.get('token')?.substring(0, 20) + '...' : 'null');
+      console.log('Fetching users with pagination...');
+      console.log('Current page:', currentPage);
+      console.log('Page size:', pageSize);
+      console.log('Search term:', searchTerm);
+      console.log('Role filter:', roleFilter);
+      console.log('Status filter:', statusFilter);
       
-      const response = await api.get('/users');
+      // Build query parameters
+      const params = new URLSearchParams({
+        page: currentPage.toString(),
+        limit: pageSize.toString(),
+      });
+      
+      if (searchTerm.trim()) {
+        params.append('search', searchTerm.trim());
+      }
+      
+      if (roleFilter !== 'all') {
+        params.append('role', roleFilter);
+      }
+      
+      const response = await api.get(`/users?${params.toString()}`);
       console.log('=== API RESPONSE ===');
       console.log('Users fetched successfully:', response.data);
-      console.log('Sample user data:', response.data.users?.[0]);
-      console.log('Sample createdAt:', response.data.users?.[0]?.createdAt);
-      console.log('All user createdAt fields:', response.data.users?.map((u: any) => ({ id: u._id || u.id, createdAt: u.createdAt })));
+      console.log('Pagination info:', response.data.pagination);
       console.log('=== END API RESPONSE ===');
+      
       setUsers(response.data.users || []);
+      setTotalUsers(response.data.pagination?.total || 0);
+      setTotalPages(response.data.pagination?.pages || 0);
       setError('');
     } catch (err: any) {
       console.error('=== FETCH USERS ERROR ===');
@@ -138,11 +171,26 @@ const Users: React.FC = memo(() => {
     } finally {
       setLoading(false);
     }
-  }, [currentUser]);
+  }, [currentUser, currentPage, pageSize, searchTerm, roleFilter, statusFilter]);
 
   useEffect(() => {
     fetchUsers();
   }, [fetchUsers]);
+
+  // Reset to page 1 when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, roleFilter, statusFilter]);
+
+  // Pagination handlers
+  const handlePageChange = useCallback((page: number) => {
+    setCurrentPage(page);
+  }, []);
+
+  const handlePageSizeChange = useCallback((newPageSize: number) => {
+    setPageSize(newPageSize);
+    setCurrentPage(1); // Reset to first page when changing page size
+  }, []);
 
   const handleCreateUser = useCallback(async () => {
     try {
@@ -388,7 +436,50 @@ const Users: React.FC = memo(() => {
     setUserDialog(true);
   }, []);
 
+  // Password verification function
+  const verifyPassword = useCallback(async () => {
+    try {
+      setVerifyingPassword(true);
+      setPasswordError(null);
+      
+      const response = await api.post('/auth/verify-password', { password });
+      
+      if (response.data.valid) {
+        console.log('Password verified successfully for user edit');
+        setPasswordDialogOpen(false);
+        setPassword('');
+        
+        // Proceed with the pending edit
+        if (pendingEditUser) {
+          openEditDialogDirect(pendingEditUser);
+          setPendingEditUser(null);
+        }
+      } else {
+        setPasswordError('Invalid password');
+      }
+    } catch (err: any) {
+      console.error('Password verification error:', err);
+      if (err.response?.status === 400) {
+        setPasswordError('Password is required');
+      } else if (err.response?.status === 401) {
+        setPasswordError('Invalid password');
+      } else {
+        setPasswordError('Password verification failed');
+      }
+    } finally {
+      setVerifyingPassword(false);
+    }
+  }, [password, pendingEditUser]);
+
   const openEditDialog = useCallback((user: User) => {
+    console.log('🔍 Edit requested for user:', user);
+    
+    // Always require password verification for each edit
+    setPendingEditUser(user);
+    setPasswordDialogOpen(true);
+  }, []);
+
+  const openEditDialogDirect = useCallback((user: User) => {
     console.log('🔍 Opening edit dialog for user:', user);
     console.log('🔍 User ID:', user._id || user.id);
     console.log('🔍 User profile image:', user.profileImage);
@@ -446,22 +537,6 @@ const Users: React.FC = memo(() => {
     }
   }, []);
 
-  // Filtered and searched users
-  const filteredUsers = useMemo(() => {
-    return users.filter(user => {
-      const matchesSearch = 
-        user.firstName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        user.lastName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        user.email.toLowerCase().includes(searchTerm.toLowerCase());
-      
-      const matchesRole = roleFilter === 'all' || user.role === roleFilter;
-      const matchesStatus = statusFilter === 'all' || 
-        (statusFilter === 'active' && user.isActive) ||
-        (statusFilter === 'inactive' && !user.isActive);
-      
-      return matchesSearch && matchesRole && matchesStatus;
-    });
-  }, [users, searchTerm, roleFilter, statusFilter]);
 
   const roleOptions = [
     { value: 'worker', label: 'Worker' },
@@ -670,7 +745,7 @@ const Users: React.FC = memo(() => {
           <CardContent sx={{ p: 0 }}>
             <Box sx={{ p: 3, borderBottom: '1px solid #e1e5e9' }}>
               <Typography variant="h6" sx={{ fontWeight: 600 }}>
-                All Users ({filteredUsers.length})
+                All Users ({totalUsers})
               </Typography>
             </Box>
             <TableContainer>
@@ -687,7 +762,7 @@ const Users: React.FC = memo(() => {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {filteredUsers.map((user) => (
+                  {users.map((user) => (
                     <TableRow key={user._id || user.id} hover>
                       <TableCell>
                         <Box display="flex" alignItems="center" gap={2}>
@@ -794,8 +869,132 @@ const Users: React.FC = memo(() => {
                 </TableBody>
               </Table>
             </TableContainer>
+            
+            {/* Pagination Controls */}
+            {totalPages > 1 && (
+              <Box sx={{ 
+                p: 3, 
+                borderTop: '1px solid #e1e5e9',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: 2
+              }}>
+                {/* Page Size Selector */}
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Typography variant="body2" sx={{ color: '#666' }}>
+                    Show:
+                  </Typography>
+                  <FormControl size="small" sx={{ minWidth: 80 }}>
+                    <Select
+                      value={pageSize}
+                      onChange={(e) => handlePageSizeChange(Number(e.target.value))}
+                      sx={{ fontSize: '0.875rem' }}
+                    >
+                      <MenuItem value={5}>5</MenuItem>
+                      <MenuItem value={10}>10</MenuItem>
+                      <MenuItem value={25}>25</MenuItem>
+                      <MenuItem value={50}>50</MenuItem>
+                    </Select>
+                  </FormControl>
+                  <Typography variant="body2" sx={{ color: '#666' }}>
+                    per page
+                  </Typography>
+                </Box>
+
+                {/* Pagination Info */}
+                <Typography variant="body2" sx={{ color: '#666' }}>
+                  Showing {((currentPage - 1) * pageSize) + 1} to {Math.min(currentPage * pageSize, totalUsers)} of {totalUsers} users
+                </Typography>
+
+                {/* Pagination Component */}
+                <Pagination
+                  count={totalPages}
+                  page={currentPage}
+                  onChange={(event, page) => handlePageChange(page)}
+                  color="primary"
+                  size="medium"
+                  showFirstButton
+                  showLastButton
+                  sx={{
+                    '& .MuiPaginationItem-root': {
+                      borderRadius: 2,
+                      fontWeight: 500,
+                    },
+                    '& .Mui-selected': {
+                      backgroundColor: '#7B68EE',
+                      color: 'white',
+                      '&:hover': {
+                        backgroundColor: '#6A5ACD',
+                      },
+                    },
+                  }}
+                />
+              </Box>
+            )}
           </CardContent>
         </Card>
+
+        {/* Password Verification Dialog */}
+        <Dialog 
+          open={passwordDialogOpen} 
+          onClose={() => {
+            setPasswordDialogOpen(false);
+            setPendingEditUser(null);
+            setPassword('');
+            setPasswordError(null);
+          }}
+          maxWidth="sm" 
+          fullWidth
+        >
+          <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Lock color="primary" />
+            Security Verification Required
+          </DialogTitle>
+          <DialogContent>
+            <Typography variant="body1" sx={{ mb: 2 }}>
+              Please enter your admin password to edit user: <strong>{pendingEditUser?.firstName} {pendingEditUser?.lastName}</strong>
+            </Typography>
+            <TextField
+              fullWidth
+              type="password"
+              label="Admin Password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              error={!!passwordError}
+              helperText={passwordError}
+              onKeyPress={(e) => {
+                if (e.key === 'Enter') {
+                  verifyPassword();
+                }
+              }}
+              disabled={verifyingPassword}
+              sx={{ mt: 2 }}
+            />
+          </DialogContent>
+          <DialogActions>
+            <Button 
+              onClick={() => {
+                setPasswordDialogOpen(false);
+                setPendingEditUser(null);
+                setPassword('');
+                setPasswordError(null);
+              }}
+              disabled={verifyingPassword}
+            >
+              Cancel
+            </Button>
+            <Button 
+              onClick={verifyPassword}
+              variant="contained"
+              disabled={!password || verifyingPassword}
+              startIcon={verifyingPassword ? <CircularProgress size={20} /> : <Lock />}
+            >
+              {verifyingPassword ? 'Verifying...' : 'Verify Password'}
+            </Button>
+          </DialogActions>
+        </Dialog>
 
         {/* User Dialog */}
         <Dialog open={userDialog} onClose={() => setUserDialog(false)} maxWidth="md" fullWidth>

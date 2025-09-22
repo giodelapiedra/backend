@@ -432,17 +432,25 @@ const EnhancedAnalytics: React.FC = memo(() => {
   }, [analyticsData?.cases, statusFilter]);
 
   // Memoized chart data for better performance
-  const chartData = useMemo(() => ({
-    userRoles: filteredUsers.byRole.map(item => ({
-      name: item.role,
-      value: item.count,
-      color: getRoleColor(item.role)
-    })),
-    caseStatuses: filteredCases.byStatus.map(item => ({
-      name: item.status,
-      value: item.count,
-      color: getStatusColor(item.status)
-    })),
+  const chartData = useMemo(() => {
+    // Calculate total for percentage calculations
+    const totalUserCount = filteredUsers.byRole.reduce((sum: number, item: any) => sum + item.count, 0);
+    const caseStatuses = (filteredCases.byStatus as any[]) || [];
+    const totalCaseCount = caseStatuses.reduce((sum: number, item: any) => sum + item.count, 0);
+    
+    return {
+      userRoles: filteredUsers.byRole.map((item: any) => ({
+        name: item.role,
+        value: item.count,
+        percentage: totalUserCount > 0 ? Math.round((item.count / totalUserCount) * 100) : 0,
+        color: getRoleColor(item.role)
+      })),
+      caseStatuses: caseStatuses.map((item: any) => ({
+        name: item.status,
+        value: item.count,
+        percentage: totalCaseCount > 0 ? Math.round((item.count / totalCaseCount) * 100) : 0,
+        color: getStatusColor(item.status)
+      })),
     monthlyTrend: analyticsData?.cases?.monthlyTrend?.map(item => ({
       month: item.month,
       cases: item.count,
@@ -458,7 +466,8 @@ const EnhancedAnalytics: React.FC = memo(() => {
       reviewed: item.reviewed,
       pending: item.pending
     })) || []
-  }), [filteredUsers.byRole, filteredCases.byStatus, analyticsData, getRoleColor, getStatusColor]);
+    };
+  }, [filteredUsers.byRole, filteredCases.byStatus, analyticsData, getRoleColor, getStatusColor]);
 
 
   if (loading && !analyticsData) {

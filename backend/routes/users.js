@@ -285,7 +285,9 @@ router.put('/:id', [
     contentType: req.headers['content-type'],
     hasFile: !!req.file,
     bodyKeys: Object.keys(req.body),
-    authHeader: req.headers.authorization ? 'present' : 'missing'
+    authHeader: req.headers.authorization ? 'present' : 'missing',
+    profileImageInBody: req.body.profileImage,
+    bodyProfileImage: req.body.profileImage
   });
 
   // Manual validation for form data
@@ -358,8 +360,20 @@ router.put('/:id', [
     }
   }
 
-  // Update user with all provided fields
-  const updateData = { ...req.body };
+  // Only update fields that are provided in the request
+  const updateData = {};
+  
+  // Only include fields that are actually provided
+  if (req.body.firstName !== undefined) updateData.firstName = req.body.firstName;
+  if (req.body.lastName !== undefined) updateData.lastName = req.body.lastName;
+  if (req.body.email !== undefined) updateData.email = req.body.email;
+  if (req.body.phone !== undefined) updateData.phone = req.body.phone;
+  if (req.body.address !== undefined) updateData.address = req.body.address;
+  if (req.body.emergencyContact !== undefined) updateData.emergencyContact = req.body.emergencyContact;
+  if (req.body.medicalInfo !== undefined) updateData.medicalInfo = req.body.medicalInfo;
+  
+  console.log('Update data before processing:', updateData);
+  console.log('Current user profile image:', user.profileImage);
   
   // Handle profile image upload
   if (req.file) {
@@ -379,7 +393,22 @@ router.put('/:id', [
     
     updateData.profileImage = `/uploads/users/${req.file.filename}`;
     console.log('📸 New profile image saved:', updateData.profileImage);
+  } else {
+    // No new file uploaded, preserve existing profile image
+    if (user.profileImage) {
+      updateData.profileImage = user.profileImage;
+      console.log('📸 Preserving existing profile image:', user.profileImage);
+    } else if (req.body.profileImage) {
+      // If no existing image but profileImage is provided in request, use it
+      updateData.profileImage = req.body.profileImage;
+      console.log('📸 Using profileImage from request:', req.body.profileImage);
+    } else {
+      // No profile image at all
+      console.log('📸 No profile image to preserve');
+    }
   }
+  
+  console.log('Update data after profile image processing:', updateData);
   
   // Handle nested objects properly - parse JSON strings from FormData
   if (req.body.address) {
@@ -602,8 +631,8 @@ router.put('/:id/admin', [
     }
   }
 
-  // Update user fields
-  const allowedFields = ['firstName', 'lastName', 'email', 'role', 'phone', 'isActive', 'specialty', 'licenseNumber'];
+  // Update user fields - only update fields that are provided
+  const allowedFields = ['firstName', 'lastName', 'email', 'role', 'phone', 'isActive', 'specialty', 'licenseNumber', 'address', 'emergencyContact', 'medicalInfo'];
   allowedFields.forEach(field => {
     if (req.body[field] !== undefined) {
       user[field] = req.body[field];
@@ -628,6 +657,11 @@ router.put('/:id/admin', [
     
     user.profileImage = `/uploads/users/${req.file.filename}`;
     console.log('📸 Admin saved new profile image:', user.profileImage);
+  } else {
+    // No new file uploaded, preserve existing profile image
+    if (user.profileImage) {
+      console.log('📸 Admin preserving existing profile image:', user.profileImage);
+    }
   }
 
   // Handle password update if provided

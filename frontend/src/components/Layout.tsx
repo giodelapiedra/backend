@@ -35,7 +35,6 @@ import {
   Notifications,
   AccountCircle,
   Search,
-  Add,
   LocalHospital,
   TrendingUp,
   Map,
@@ -44,11 +43,13 @@ import {
   MoreVert,
   ExpandMore,
   Timeline,
+  Security,
 } from '@mui/icons-material';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../utils/api';
 import { createImageProps } from '../utils/imageUtils';
+import Cookies from 'js-cookie';
 
 const drawerWidth = 280;
 const mobileDrawerWidth = 320;
@@ -79,6 +80,8 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
 
   const handleLogout = () => {
     logout();
+    // Dispatch custom event for admin logout
+    window.dispatchEvent(new CustomEvent('adminLogout'));
     navigate('/login');
     handleProfileMenuClose();
   };
@@ -97,30 +100,8 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
     if (user) {
       fetchNotificationCount();
       
-      // Set up Server-Sent Events for real-time notifications
-      const eventSource = new EventSource(`${process.env.REACT_APP_API_URL || 'http://localhost:5000/api'}/notifications/stream`);
-      
-      eventSource.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.type === 'notification_count_update') {
-            setUnreadNotificationCount(data.unreadCount);
-          }
-        } catch (error) {
-          console.error('Error parsing SSE data:', error);
-        }
-      };
-      
-      eventSource.onerror = (error) => {
-        console.error('SSE connection error:', error);
-        // Fallback to polling every 5 minutes if SSE fails
-        const fallbackInterval = setInterval(fetchNotificationCount, 5 * 60 * 1000);
-        return () => clearInterval(fallbackInterval);
-      };
-      
-      return () => {
-        eventSource.close();
-      };
+      // Completely disable all notification polling to stop repeated requests
+      // TODO: Re-enable with proper SSE authentication later
     }
   }, [user]);
 
@@ -137,6 +118,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
           ...baseItems,
           { text: 'Admin Panel', icon: <Settings />, path: '/admin' },
           { text: 'Analytics', icon: <TrendingUp />, path: '/admin/analytics' },
+          { text: 'Auth Logs', icon: <Security />, path: '/admin/auth-logs' },
           { text: 'Users', icon: <People />, path: '/users' },
           { text: 'Cases', icon: <Assignment />, path: '/cases' },
           { text: 'Reports', icon: <Report />, path: '/reports' },
@@ -245,7 +227,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
                 lineHeight: 1.2,
               }}
             >
-              RehabPro
+              MSK
             </Typography>
             <Typography 
               variant="caption" 
@@ -263,47 +245,6 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
         </Box>
       </Box>
 
-      {/* Enhanced Register Patient Button */}
-      <Box sx={{ p: { xs: 2.5, sm: 3 } }}>
-        <Button
-          variant="contained"
-          startIcon={<Add sx={{ fontSize: '1.1rem' }} />}
-          fullWidth
-          sx={{
-            background: 'linear-gradient(135deg, #7B68EE 0%, #9B7FFF 100%)',
-            borderRadius: 3,
-            py: { xs: 1.5, sm: 1.75 },
-            fontWeight: 700,
-            fontSize: { xs: '0.9rem', sm: '1rem' },
-            boxShadow: '0 6px 20px rgba(123, 104, 238, 0.3)',
-            textTransform: 'none',
-            letterSpacing: '0.02em',
-            position: 'relative',
-            overflow: 'hidden',
-            '&::before': {
-              content: '""',
-              position: 'absolute',
-              top: 0,
-              left: '-100%',
-              width: '100%',
-              height: '100%',
-              background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent)',
-              transition: 'left 0.5s',
-            },
-            '&:hover': {
-              background: 'linear-gradient(135deg, #6A5ACD 0%, #8A7FFF 100%)',
-              boxShadow: '0 8px 24px rgba(123, 104, 238, 0.4)',
-              transform: 'translateY(-2px)',
-              '&::before': {
-                left: '100%',
-              },
-            },
-            transition: 'all 0.3s ease',
-          }}
-        >
-          Register Patient
-        </Button>
-      </Box>
 
       {/* Enhanced Navigation Menu */}
       <Box sx={{ flex: 1, px: { xs: 1.5, sm: 2 } }}>
@@ -403,53 +344,15 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
           <Typography variant="body2" sx={{ 
             fontWeight: 700, 
             mb: 1.5, 
-            fontSize: { xs: '0.8rem', sm: '0.9rem' },
+            fontSize: { xs: '0.7rem', sm: '0.8rem' },
             color: '#7B68EE',
             textTransform: 'uppercase',
             letterSpacing: '0.05em',
+            textAlign: 'center',
+            lineHeight: 1.3,
           }}>
-            📱 Get Mobile App
+            DEVELOP BY PHYSIOWARD SPORTS & REHAB 2025
           </Typography>
-          <Box sx={{ display: 'flex', gap: 1.5, justifyContent: 'center' }}>
-            <Chip
-              icon={<Business sx={{ fontSize: '0.8rem' }} />}
-              label="iOS"
-              size="small"
-              sx={{ 
-                backgroundColor: 'rgba(123, 104, 238, 0.15)',
-                color: '#7B68EE',
-                fontWeight: 600,
-                fontSize: { xs: '0.7rem', sm: '0.8rem' },
-                height: { xs: '28px', sm: '32px' },
-                borderRadius: 2,
-                border: '1px solid rgba(123, 104, 238, 0.2)',
-                '&:hover': {
-                  backgroundColor: 'rgba(123, 104, 238, 0.2)',
-                  transform: 'scale(1.05)',
-                },
-                transition: 'all 0.2s ease',
-              }}
-            />
-            <Chip
-              icon={<Business sx={{ fontSize: '0.8rem' }} />}
-              label="Android"
-              size="small"
-              sx={{ 
-                backgroundColor: 'rgba(32, 178, 170, 0.15)',
-                color: '#20B2AA',
-                fontWeight: 600,
-                fontSize: { xs: '0.7rem', sm: '0.8rem' },
-                height: { xs: '28px', sm: '32px' },
-                borderRadius: 2,
-                border: '1px solid rgba(32, 178, 170, 0.2)',
-                '&:hover': {
-                  backgroundColor: 'rgba(32, 178, 170, 0.2)',
-                  transform: 'scale(1.05)',
-                },
-                transition: 'all 0.2s ease',
-              }}
-            />
-          </Box>
         </Box>
       </Box>
     </Box>

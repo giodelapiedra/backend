@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const jwt = require('jsonwebtoken');
 const { body, param, query } = require('express-validator');
 const { authMiddleware, roleMiddleware } = require('../middleware/auth');
 const { asyncHandler, handleValidationErrors } = require('../middleware/errorHandler');
@@ -40,10 +41,33 @@ const sendNotificationUpdate = async (userId) => {
   }
 };
 
+// Custom SSE authentication middleware
+const sseAuthMiddleware = async (req, res, next) => {
+  try {
+    const token = req.query.token || req.headers.authorization?.replace('Bearer ', '');
+    
+    if (!token) {
+      return res.status(401).json({ message: 'Authentication required' });
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const user = await User.findById(decoded.userId).select('-password');
+    
+    if (!user || !user.isActive) {
+      return res.status(401).json({ message: 'Invalid or inactive user' });
+    }
+
+    req.user = user;
+    next();
+  } catch (error) {
+    return res.status(401).json({ message: 'Invalid token' });
+  }
+};
+
 // @route   GET /api/notifications/stream
 // @desc    Server-Sent Events stream for real-time notifications
 // @access  Private
-router.get('/stream', authMiddleware, (req, res) => {
+router.get('/stream', sseAuthMiddleware, (req, res) => {
   const userId = req.user._id.toString();
   
   // Set SSE headers

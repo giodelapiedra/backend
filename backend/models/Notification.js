@@ -13,7 +13,7 @@ const notificationSchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ['incident_reported', 'case_created', 'appointment_scheduled', 'check_in_reminder', 'task_assigned', 'case_status_change', 'general', 'high_pain', 'rtw_review', 'fatigue_resource', 'rehab_plan_assigned', 'rehab_plan_review', 'progress_encouragement', 'exercise_completed', 'exercise_skipped', 'daily_check_in', 'activity_log_created'],
+    enum: ['incident_reported', 'case_created', 'appointment_scheduled', 'check_in_reminder', 'task_assigned', 'case_status_change', 'general', 'high_pain', 'rtw_review', 'fatigue_resource', 'rehab_plan_assigned', 'rehab_plan_review', 'progress_encouragement', 'exercise_completed', 'exercise_skipped', 'daily_check_in', 'activity_log_created', 'case_closed', 'return_to_work', 'case_assigned'],
     required: true
   },
   title: {

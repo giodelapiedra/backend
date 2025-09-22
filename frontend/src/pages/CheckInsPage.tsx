@@ -98,28 +98,42 @@ const CheckInsPage: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [dateFilter, setDateFilter] = useState('all');
+  const [hasLoaded, setHasLoaded] = useState(false);
 
   useEffect(() => {
-    if (user) {
+    if (user && !hasLoaded) {
       fetchCheckIns();
     }
-  }, [user]);
+  }, [user, hasLoaded]);
+
+  // Reset loaded state when user changes
+  useEffect(() => {
+    if (user) {
+      setHasLoaded(false);
+    }
+  }, [user?.id]);
 
   const fetchCheckIns = async () => {
     try {
       setLoading(true);
-      console.log('Fetching check-ins for clinician:', user?.email);
+      setError(null);
       
       const response = await api.get('/check-ins');
-      console.log('Check-ins response:', response.data);
-      
       setCheckIns(response.data.checkIns || []);
+      setHasLoaded(true);
     } catch (err: any) {
       console.error('Error fetching check-ins:', err);
       setError(err.response?.data?.message || 'Failed to fetch check-ins');
+      setCheckIns([]);
+      setHasLoaded(true); // Still mark as loaded even if error
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleRefresh = async () => {
+    setHasLoaded(false);
+    await fetchCheckIns();
   };
 
   const handleViewDetails = (checkIn: CheckIn) => {
@@ -318,7 +332,7 @@ const CheckInsPage: React.FC = () => {
                 <Button
                   variant="outlined"
                   startIcon={<Refresh />}
-                  onClick={fetchCheckIns}
+                  onClick={handleRefresh}
                   fullWidth
                 >
                   Refresh
@@ -444,6 +458,45 @@ const CheckInsPage: React.FC = () => {
                 </TableBody>
               </Table>
             </TableContainer>
+            
+            {/* Empty State */}
+            {filteredCheckIns.length === 0 && !loading && (
+              <Box sx={{ 
+                textAlign: 'center', 
+                py: 6,
+                borderTop: '1px solid #e1e5e9'
+              }}>
+                <Box sx={{ 
+                  width: 80, 
+                  height: 80, 
+                  borderRadius: '50%', 
+                  background: 'linear-gradient(135deg, #e2e8f0 0%, #cbd5e0 100%)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  mx: 'auto',
+                  mb: 2
+                }}>
+                  <CalendarToday sx={{ fontSize: 40, color: '#718096' }} />
+                </Box>
+                <Typography variant="h6" sx={{ color: '#4a5568', mb: 1 }}>
+                  No check-ins found
+                </Typography>
+                <Typography variant="body2" sx={{ color: '#718096', mb: 2 }}>
+                  {checkIns.length === 0 
+                    ? 'No workers have submitted check-ins yet, or you may not have any assigned cases.'
+                    : 'No check-ins match your current filters. Try adjusting your search criteria.'
+                  }
+                </Typography>
+                <Button 
+                  variant="outlined" 
+                  onClick={handleRefresh}
+                  startIcon={<Refresh />}
+                >
+                  Refresh
+                </Button>
+              </Box>
+            )}
           </CardContent>
         </Card>
       </Box>

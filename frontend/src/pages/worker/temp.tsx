@@ -226,7 +226,7 @@ const WorkerDashboard: React.FC = () => {
       // Fetch all data in parallel
       const [checkInsRes, rehabPlansRes, casesRes, tasksRes, appointmentsRes, statsRes] = await Promise.all([
         axios.get('/check-ins'),
-        axios.get('/rehab-plans'),
+        axios.get('/rehabilitation-plans'),
         axios.get('/cases'),
         axios.get('/preventive-tasks'),
         axios.get('/appointments'),

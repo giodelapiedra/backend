@@ -1,13 +1,15 @@
-import React from 'react';
+import React, { Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
+import { Box, CircularProgress, Typography } from '@mui/material';
 import { AuthProvider } from './contexts/AuthContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import AdminDashboard from './pages/admin/AdminDashboard';
-import AdminAnalytics from './pages/admin/Analytics';
+import EnhancedAnalytics from './pages/admin/Analytics';
+import AuthenticationLogs from './pages/admin/AuthenticationLogs';
 import WorkerDashboard from './pages/worker/WorkerDashboard';
 import WorkerRehabilitationPlan from './pages/worker/WorkerRehabilitationPlan';
 import ClinicianDashboard from './pages/clinician/ClinicianDashboard';
@@ -152,13 +154,33 @@ const theme = createTheme({
   },
 });
 
+// Loading fallback component
+const LoadingFallback = () => (
+  <Box 
+    sx={{
+      display: 'flex', 
+      flexDirection: 'column',
+      justifyContent: 'center', 
+      alignItems: 'center', 
+      minHeight: '100vh',
+      background: 'linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%)'
+    }}
+  >
+    <CircularProgress size={60} sx={{ mb: 2 }} />
+    <Typography variant="h6" sx={{ color: '#1976d2' }}>
+      Loading application...
+    </Typography>
+  </Box>
+);
+
 function App() {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <AuthProvider>
         <Router>
-          <Routes>
+          <Suspense fallback={<LoadingFallback />}>
+            <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
             
@@ -176,9 +198,21 @@ function App() {
               </ProtectedRoute>
             } />
             
+            <Route path="/admin/dashboard" element={
+              <ProtectedRoute allowedRoles={['admin']}>
+                <AdminDashboard />
+              </ProtectedRoute>
+            } />
+            
             <Route path="/admin/analytics" element={
               <ProtectedRoute allowedRoles={['admin']}>
-                <AdminAnalytics />
+                <EnhancedAnalytics />
+              </ProtectedRoute>
+            } />
+            
+            <Route path="/admin/auth-logs" element={
+              <ProtectedRoute allowedRoles={['admin']}>
+                <AuthenticationLogs />
               </ProtectedRoute>
             } />
             
@@ -206,6 +240,12 @@ function App() {
               </ProtectedRoute>
             } />
             
+            <Route path="/clinician/dashboard" element={
+              <ProtectedRoute allowedRoles={['clinician']}>
+                <ClinicianDashboard />
+              </ProtectedRoute>
+            } />
+            
             <Route path="/clinician/activity-monitor" element={
               <ProtectedRoute allowedRoles={['clinician']}>
                 <WorkerActivityMonitor />
@@ -225,6 +265,12 @@ function App() {
             } />
             
             <Route path="/case-manager" element={
+              <ProtectedRoute allowedRoles={['case_manager']}>
+                <CaseManagerDashboard />
+              </ProtectedRoute>
+            } />
+            
+            <Route path="/case-manager/dashboard" element={
               <ProtectedRoute allowedRoles={['case_manager']}>
                 <CaseManagerDashboard />
               </ProtectedRoute>
@@ -286,7 +332,8 @@ function App() {
             } />
             
             <Route path="*" element={<NotFound />} />
-          </Routes>
+            </Routes>
+          </Suspense>
         </Router>
       </AuthProvider>
     </ThemeProvider>

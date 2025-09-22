@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Box,
   TextField,
@@ -53,9 +53,60 @@ const Login: React.FC = () => {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [error, setError] = useState('');
   const [profilePhoto, setProfilePhoto] = useState<File | null>(null);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   
-  const { login, register, loading } = useAuth();
+  const { login, register, loading, user } = useAuth();
   const navigate = useNavigate();
+
+  // Check authentication status immediately
+  useEffect(() => {
+    const checkAuthStatus = () => {
+      // If we have a token in cookies, assume user is authenticated
+      const token = document.cookie.split(';').find(c => c.trim().startsWith('token='));
+      if (token) {
+        setIsCheckingAuth(true);
+        // Don't show login form if token exists
+        return;
+      }
+      setIsCheckingAuth(false);
+    };
+
+    checkAuthStatus();
+  }, []);
+
+  // Redirect if user is already authenticated
+  useEffect(() => {
+    if (user && !loading) {
+      // Redirect based on user role - using exact role names from Dashboard component
+      switch (user.role) {
+        case 'admin':
+          navigate('/admin');
+          break;
+        case 'clinician':
+          navigate('/clinician');
+          break;
+        case 'case_manager':
+          navigate('/case-manager');
+          break;
+        case 'employer':
+          navigate('/employer');
+          break;
+        case 'site_supervisor':
+          navigate('/site-supervisor');
+          break;
+        case 'gp_insurer':
+          navigate('/gp-insurer');
+          break;
+        case 'worker':
+        default:
+          navigate('/worker');
+          break;
+      }
+    } else if (!loading && !user) {
+      // Only show login form when we're sure user is not authenticated
+      setIsCheckingAuth(false);
+    }
+  }, [user, loading, navigate]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
@@ -89,7 +140,7 @@ const Login: React.FC = () => {
     try {
       if (isLogin) {
         await login(formData.email, formData.password);
-        navigate('/dashboard');
+        // Navigation will be handled by the useEffect above
       } else {
         if (formData.password !== formData.confirmPassword) {
           setError('Passwords do not match');
@@ -107,7 +158,7 @@ const Login: React.FC = () => {
           emergencyContact: formData.emergencyContact,
           medicalInfo: formData.medicalInfo,
         }, profilePhoto);
-        navigate('/dashboard');
+        // Navigation will be handled by the useEffect above
       }
     } catch (err: any) {
       setError(err.message);
@@ -147,6 +198,46 @@ const Login: React.FC = () => {
       }
     });
   };
+
+  // Show loading while checking authentication or redirecting
+  if (loading || isCheckingAuth) {
+    return (
+      <Box sx={{ 
+        minHeight: '100vh', 
+        display: 'flex', 
+        alignItems: 'center', 
+        justifyContent: 'center',
+        background: 'linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%)'
+      }}>
+        <Box sx={{ textAlign: 'center' }}>
+          <CircularProgress size={60} sx={{ mb: 2 }} />
+          <Typography variant="h6" sx={{ color: '#1976d2' }}>
+            {isCheckingAuth ? 'Checking authentication...' : 'Loading...'}
+          </Typography>
+        </Box>
+      </Box>
+    );
+  }
+
+  // Don't render the form if user is authenticated (will redirect)
+  if (user) {
+    return (
+      <Box sx={{ 
+        minHeight: '100vh', 
+        display: 'flex', 
+        alignItems: 'center', 
+        justifyContent: 'center',
+        background: 'linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%)'
+      }}>
+        <Box sx={{ textAlign: 'center' }}>
+          <CircularProgress size={60} sx={{ mb: 2 }} />
+          <Typography variant="h6" sx={{ color: '#1976d2' }}>
+            Redirecting to dashboard...
+          </Typography>
+        </Box>
+      </Box>
+    );
+  }
 
   return (
     <Box sx={{ minHeight: '100vh', display: 'flex' }}>
@@ -217,7 +308,7 @@ const Login: React.FC = () => {
                 ml: 1,
               }}
             >
-              RehabPro
+              MSK
             </Typography>
           </Box>
           <Typography

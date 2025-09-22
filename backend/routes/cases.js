@@ -59,18 +59,10 @@ router.get('/', [
   }
   
   if (req.query.status) {
-    // For workers, don't allow filtering by 'closed' status
-    if (req.user.role === 'worker' && req.query.status === 'closed') {
-      return res.status(403).json({ 
-        message: 'Workers cannot access closed cases' 
-      });
-    }
     filter.status = req.query.status;
-  } else if (req.user.role === 'worker') {
-    // Workers cannot access closed cases by default
-    filter.status = { $ne: 'closed' };
-    console.log('Worker filter applied - excluding closed cases');
   }
+  // Note: Removed restriction that prevented workers from seeing closed cases
+  // Workers should be able to see their case history including closed cases
   
   if (req.query.priority) {
     filter.priority = req.query.priority;
@@ -151,12 +143,8 @@ router.get('/:id', authMiddleware, asyncHandler(async (req, res) => {
     return res.status(403).json({ message: 'Access denied' });
   }
 
-  // Additional check: Workers cannot access closed cases
-  if (req.user.role === 'worker' && caseDoc.status === 'closed') {
-    return res.status(403).json({ 
-      message: 'Workers cannot access closed cases' 
-    });
-  }
+  // Workers can access closed cases but they are read-only
+  // No additional restrictions needed - workers should see their case history
 
   res.json({ case: caseDoc });
 }));
@@ -625,6 +613,34 @@ router.put('/:id/assign-clinician', [
     { path: 'incident', select: 'incidentNumber incidentDate description' }
   ]);
 
+  // 🔔 NOTIFICATION: Send notification to assigned clinician
+  try {
+    const Notification = require('../models/Notification');
+    const { sendNotificationUpdate } = require('./notifications');
+    
+    console.log('🔔 Clinician assigned - sending notification...');
+    
+    // Create notification for the assigned clinician
+    const notification = await Notification.create({
+      user: req.body.clinician,
+      type: 'case_assigned',
+      title: 'New Case Assignment',
+      message: `You have been assigned to case ${caseDoc.caseNumber} for worker ${caseDoc.worker.firstName} ${caseDoc.worker.lastName}`,
+      case: caseDoc._id,
+      isRead: false,
+      priority: 'high'
+    });
+    
+    // Send real-time update to clinician
+    await sendNotificationUpdate(req.body.clinician);
+    
+    console.log('✅ Clinician assignment notification sent');
+    
+  } catch (notificationError) {
+    console.error('❌ Error sending clinician assignment notification:', notificationError);
+    // Don't fail the assignment if notification fails
+  }
+
   res.json({
     message: 'Clinician assigned successfully',
     case: caseDoc
@@ -684,6 +700,103 @@ router.put('/:id/update-status', [
     { path: 'clinician', select: 'firstName lastName email phone' },
     { path: 'incident', select: 'incidentNumber incidentDate description' }
   ]);
+
+  // 🔔 NOTIFICATION: Send notification for important status changes
+  if (req.body.status === 'closed' || req.body.status === 'return_to_work') {
+    try {
+      const Notification = require('../models/Notification');
+      const { sendNotificationUpdate } = require('./notifications');
+      
+      console.log(`🔔 Case status changed to ${req.body.status} - sending notifications...`);
+      
+      const notifications = [];
+      const statusType = req.body.status === 'closed' ? 'case_closed' : 'return_to_work';
+      const statusTitle = req.body.status === 'closed' ? 'Case Closed' : 'Return to Work';
+      
+      // Notify Case Manager
+      if (caseDoc.caseManager) {
+        const message = req.body.status === 'closed' 
+          ? `Case ${caseDoc.caseNumber} has been closed by ${req.user.firstName} ${req.user.lastName}`
+          : `Worker ${caseDoc.worker.firstName} ${caseDoc.worker.lastName} has returned to work for case ${caseDoc.caseNumber}`;
+          
+        notifications.push({
+          user: caseDoc.caseManager._id,
+          type: statusType,
+          title: statusTitle,
+          message: message,
+          case: caseDoc._id,
+          isRead: false,
+          priority: 'medium'
+        });
+      }
+      
+      // Notify Worker
+      if (caseDoc.worker) {
+        const message = req.body.status === 'closed' 
+          ? `Your rehabilitation case ${caseDoc.caseNumber} has been closed. Thank you for your cooperation.`
+          : `Congratulations! You have successfully returned to work. Case ${caseDoc.caseNumber} is now complete.`;
+          
+        notifications.push({
+          user: caseDoc.worker._id,
+          type: statusType,
+          title: statusTitle,
+          message: message,
+          case: caseDoc._id,
+          isRead: false,
+          priority: 'medium'
+        });
+      }
+      
+      // Notify Employer
+      if (caseDoc.employer) {
+        const message = req.body.status === 'closed' 
+          ? `Case ${caseDoc.caseNumber} for worker ${caseDoc.worker.firstName} ${caseDoc.worker.lastName} has been closed`
+          : `Great news! Worker ${caseDoc.worker.firstName} ${caseDoc.worker.lastName} has returned to work. Case ${caseDoc.caseNumber} is complete.`;
+          
+        notifications.push({
+          user: caseDoc.employer._id,
+          type: statusType,
+          title: statusTitle,
+          message: message,
+          case: caseDoc._id,
+          isRead: false,
+          priority: 'medium'
+        });
+      }
+      
+      // Notify Clinician (if different from the one updating)
+      if (caseDoc.clinician && caseDoc.clinician._id.toString() !== req.user._id.toString()) {
+        const message = req.body.status === 'closed' 
+          ? `Case ${caseDoc.caseNumber} has been closed by ${req.user.firstName} ${req.user.lastName}`
+          : `Worker ${caseDoc.worker.firstName} ${caseDoc.worker.lastName} has returned to work for case ${caseDoc.caseNumber}`;
+          
+        notifications.push({
+          user: caseDoc.clinician._id,
+          type: statusType,
+          title: statusTitle,
+          message: message,
+          case: caseDoc._id,
+          isRead: false,
+          priority: 'medium'
+        });
+      }
+      
+      // Create notifications
+      if (notifications.length > 0) {
+        await Notification.insertMany(notifications);
+        console.log(`✅ Sent ${notifications.length} case status notifications`);
+        
+        // Send real-time updates
+        for (const notification of notifications) {
+          await sendNotificationUpdate(notification.user);
+        }
+      }
+      
+    } catch (notificationError) {
+      console.error('❌ Error sending case status notifications:', notificationError);
+      // Don't fail the case update if notifications fail
+    }
+  }
 
   res.json({
     message: 'Case status updated successfully',
