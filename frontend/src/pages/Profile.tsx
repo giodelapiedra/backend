@@ -9,7 +9,6 @@ import {
   Grid,
   Alert,
   CircularProgress,
-  Divider,
   Chip,
   IconButton,
   Dialog,
@@ -20,22 +19,19 @@ import {
   InputLabel,
   Select,
   MenuItem,
-  Avatar,
-  Paper
+  Avatar
 } from '@mui/material';
 import {
   Edit as EditIcon,
   Save as SaveIcon,
   Cancel as CancelIcon,
   Add as AddIcon,
-  Delete as DeleteIcon,
   Person as PersonIcon,
   Lock as LockIcon
 } from '@mui/icons-material';
-import Layout from '../components/Layout';
+import LayoutWithSidebar from '../components/LayoutWithSidebar';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../utils/api';
-import Cookies from 'js-cookie';
 import PhotoUpload from '../components/PhotoUpload';
 import { getCSRFToken } from '../utils/api';
 import { createImageProps } from '../utils/imageUtils';
@@ -68,9 +64,8 @@ interface ProfileFormData {
 }
 
 const Profile: React.FC = () => {
-  const { user, logout, refreshUser } = useAuth();
+  const { user, refreshUser } = useAuth();
   const [isEditing, setIsEditing] = useState(false);
-  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -115,17 +110,10 @@ const Profile: React.FC = () => {
     }
   });
 
+  const [isInitialized, setIsInitialized] = useState(false);
+
   useEffect(() => {
-    if (user) {
-      console.log('Profile component - user data loaded:', {
-        userId: user.id,
-        userRole: user.role,
-        userEmail: user.email,
-        userIdType: typeof user.id,
-        userProfileImage: user.profileImage,
-        hasProfileImage: !!user.profileImage
-      });
-      
+    if (user && !isInitialized) {
       setFormData({
         firstName: user.firstName || '',
         lastName: user.lastName || '',
@@ -152,10 +140,9 @@ const Profile: React.FC = () => {
           medicalConditions: user.medicalInfo?.medicalConditions || []
         }
       });
-      
-      console.log('FormData set with profileImage:', user.profileImage || '');
+      setIsInitialized(true);
     }
-  }, [user]);
+  }, [user, isInitialized]);
 
   const handleInputChange = (field: string, value: any) => {
     if (field.includes('.')) {
@@ -184,7 +171,6 @@ const Profile: React.FC = () => {
       const response = await api.post('/auth/verify-password', { password });
       
       if (response.data.valid) {
-        console.log('Password verified successfully for profile edit');
         setPasswordDialogOpen(false);
         setPassword('');
         setIsEditing(true); // Enable edit mode after verification
@@ -192,7 +178,6 @@ const Profile: React.FC = () => {
         setPasswordError('Invalid password');
       }
     } catch (err: any) {
-      console.error('Password verification error:', err);
       if (err.response?.status === 400) {
         setPasswordError('Password is required');
       } else if (err.response?.status === 401) {
@@ -221,77 +206,55 @@ const Profile: React.FC = () => {
         return;
       }
 
-      // Create a copy of the original user data for comparison
-      const originalData = {
-        firstName: user.firstName || '',
-        lastName: user.lastName || '',
-        email: user.email || '',
-        phone: user.phone || '',
-        profileImage: user.profileImage || '',
-        address: {
-          street: user.address?.street || '',
-          city: user.address?.city || '',
-          state: user.address?.state || '',
-          zipCode: user.address?.zipCode || '',
-          country: user.address?.country || ''
-        },
-        emergencyContact: {
-          name: user.emergencyContact?.name || '',
-          relationship: user.emergencyContact?.relationship || '',
-          phone: user.emergencyContact?.phone || '',
-          email: user.emergencyContact?.email || ''
-        },
-        medicalInfo: {
-          bloodType: user.medicalInfo?.bloodType || '',
-          allergies: user.medicalInfo?.allergies || [],
-          medications: user.medicalInfo?.medications || [],
-          medicalConditions: user.medicalInfo?.medicalConditions || []
-        }
-      };
-
       // Only include fields that have actually changed
       const changedFields: any = {};
       
-      if (formData.firstName !== originalData.firstName) {
+      if (formData.firstName !== (user.firstName || '')) {
         changedFields.firstName = formData.firstName;
       }
-      if (formData.lastName !== originalData.lastName) {
+      if (formData.lastName !== (user.lastName || '')) {
         changedFields.lastName = formData.lastName;
       }
-      if (formData.email !== originalData.email) {
+      if (formData.email !== (user.email || '')) {
         changedFields.email = formData.email;
       }
-      if (formData.phone !== originalData.phone) {
+      if (formData.phone !== (user.phone || '')) {
         changedFields.phone = formData.phone;
       }
       
       // Check if address has changed
-      const addressChanged = JSON.stringify(formData.address) !== JSON.stringify(originalData.address);
+      const addressChanged = JSON.stringify(formData.address) !== JSON.stringify({
+        street: user.address?.street || '',
+        city: user.address?.city || '',
+        state: user.address?.state || '',
+        zipCode: user.address?.zipCode || '',
+        country: user.address?.country || ''
+      });
       if (addressChanged) {
         changedFields.address = formData.address;
       }
       
       // Check if emergency contact has changed
-      const emergencyContactChanged = JSON.stringify(formData.emergencyContact) !== JSON.stringify(originalData.emergencyContact);
+      const emergencyContactChanged = JSON.stringify(formData.emergencyContact) !== JSON.stringify({
+        name: user.emergencyContact?.name || '',
+        relationship: user.emergencyContact?.relationship || '',
+        phone: user.emergencyContact?.phone || '',
+        email: user.emergencyContact?.email || ''
+      });
       if (emergencyContactChanged) {
         changedFields.emergencyContact = formData.emergencyContact;
       }
       
       // Check if medical info has changed
-      const medicalInfoChanged = JSON.stringify(formData.medicalInfo) !== JSON.stringify(originalData.medicalInfo);
+      const medicalInfoChanged = JSON.stringify(formData.medicalInfo) !== JSON.stringify({
+        bloodType: user.medicalInfo?.bloodType || '',
+        allergies: user.medicalInfo?.allergies || [],
+        medications: user.medicalInfo?.medications || [],
+        medicalConditions: user.medicalInfo?.medicalConditions || []
+      });
       if (medicalInfoChanged) {
         changedFields.medicalInfo = formData.medicalInfo;
       }
-
-      console.log('Profile update request:', {
-        userId: user.id,
-        userRole: user.role,
-        changedFields: Object.keys(changedFields),
-        hasPhoto: !!profilePhoto,
-        authToken: Cookies.get('token') ? 'present' : 'missing',
-        currentProfileImage: user.profileImage,
-        formDataProfileImage: formData.profileImage
-      });
 
       let response;
       
@@ -313,8 +276,7 @@ const Profile: React.FC = () => {
         // Get CSRF token manually for FormData requests
         const csrfToken = await getCSRFToken();
         
-        console.log('Sending profile update with photo (changed fields only):', Object.keys(changedFields));
-        response = await api.put(`/users/${user.id}`, formDataWithPhoto, {
+        await api.put(`/users/${user.id}`, formDataWithPhoto, {
           headers: {
             'Content-Type': 'multipart/form-data',
             'X-CSRF-Token': csrfToken,
@@ -322,8 +284,7 @@ const Profile: React.FC = () => {
         });
       } else {
         // Regular JSON request without photo - only send changed fields
-        console.log('Sending profile update without photo (changed fields only):', Object.keys(changedFields));
-        response = await api.put(`/users/${user.id}`, changedFields);
+        await api.put(`/users/${user.id}`, changedFields);
       }
       
       setSuccess('Profile updated successfully!');
@@ -333,47 +294,10 @@ const Profile: React.FC = () => {
       // Refresh user data in context
       await refreshUser();
       
-      // Update form data with fresh user data
-      try {
-        const userResponse = await api.get('/auth/me');
-        const updatedUser = userResponse.data.user;
-        
-        setFormData({
-          firstName: updatedUser.firstName || '',
-          lastName: updatedUser.lastName || '',
-          email: updatedUser.email || '',
-          phone: updatedUser.phone || '',
-          profileImage: updatedUser.profileImage || '',
-          address: {
-            street: updatedUser.address?.street || '',
-            city: updatedUser.address?.city || '',
-            state: updatedUser.address?.state || '',
-            zipCode: updatedUser.address?.zipCode || '',
-            country: updatedUser.address?.country || ''
-          },
-          emergencyContact: {
-            name: updatedUser.emergencyContact?.name || '',
-            relationship: updatedUser.emergencyContact?.relationship || '',
-            phone: updatedUser.emergencyContact?.phone || '',
-            email: updatedUser.emergencyContact?.email || ''
-          },
-          medicalInfo: {
-            bloodType: updatedUser.medicalInfo?.bloodType || '',
-            allergies: updatedUser.medicalInfo?.allergies || [],
-            medications: updatedUser.medicalInfo?.medications || [],
-            medicalConditions: updatedUser.medicalInfo?.medicalConditions || []
-          }
-        });
-      } catch (refreshError) {
-        console.error('Error refreshing user data:', refreshError);
-        // Still show success since the update worked
-      }
+      // Reset initialization flag to allow form data to update with fresh user data
+      setIsInitialized(false);
       
     } catch (err: any) {
-      console.error('Error updating profile:', err);
-      console.error('Error response:', err.response?.data);
-      console.error('Error status:', err.response?.status);
-      console.error('Error headers:', err.response?.headers);
       if (err.response?.status === 403) {
         setError('Access denied. You can only edit your own profile.');
       } else {
@@ -415,6 +339,7 @@ const Profile: React.FC = () => {
     setIsEditing(false);
     setError(null);
     setSuccess(null);
+    setIsInitialized(false); // Reset to allow fresh data loading
   };
 
   const addAllergy = () => {
@@ -489,28 +414,19 @@ const Profile: React.FC = () => {
     }));
   };
 
-  if (loading) {
-    return (
-      <Layout>
-        <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
-          <CircularProgress />
-        </Box>
-      </Layout>
-    );
-  }
 
   if (!user) {
     return (
-      <Layout>
+      <LayoutWithSidebar>
         <Box>
           <Alert severity="error">Please log in to view your profile.</Alert>
         </Box>
-      </Layout>
+      </LayoutWithSidebar>
     );
   }
 
   return (
-    <Layout>
+    <LayoutWithSidebar>
       <Box>
         <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
           <Typography variant="h4" component="h1">
@@ -1000,8 +916,9 @@ const Profile: React.FC = () => {
           </DialogActions>
         </Dialog>
       </Box>
-    </Layout>
+    </LayoutWithSidebar>
   );
 };
 
 export default Profile;
+

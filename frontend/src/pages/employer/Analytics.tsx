@@ -46,7 +46,7 @@ import {
   Error,
   AccessTime,
 } from '@mui/icons-material';
-import Layout from '../../components/Layout';
+import LayoutWithSidebar from '../../components/LayoutWithSidebar';
 import api from '../../utils/api';
 
 interface DashboardStats {
@@ -272,16 +272,16 @@ const Analytics: React.FC = () => {
 
   if (loading) {
     return (
-      <Layout>
+      <LayoutWithSidebar>
         <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
           <CircularProgress />
         </Box>
-      </Layout>
+      </LayoutWithSidebar>
     );
   }
 
   return (
-    <Layout>
+    <LayoutWithSidebar>
       <Box sx={{ 
         minHeight: '100vh', 
         backgroundColor: '#f8fafc',
@@ -737,7 +737,7 @@ const Analytics: React.FC = () => {
           </Grid>
         </Grid>
       </Box>
-    </Layout>
+    </LayoutWithSidebar>
   );
 };
 

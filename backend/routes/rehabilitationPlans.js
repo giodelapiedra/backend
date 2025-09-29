@@ -7,6 +7,7 @@ const Notification = require('../models/Notification');
 const ActivityLog = require('../models/ActivityLog');
 const { authMiddleware, roleMiddleware } = require('../middleware/auth');
 const { handleValidationErrors, asyncHandler } = require('../middleware/errorHandler');
+const NotificationService = require('../services/NotificationService');
 
 const router = express.Router();
 
@@ -404,9 +405,11 @@ router.post('/:id/exercises/:exerciseId/complete', [
   authMiddleware,
   roleMiddleware('worker'),
   body('duration').optional().isInt({ min: 1 }),
+  body('painLevel').optional().isInt({ min: 0, max: 10 }).withMessage('Pain level must be between 0 and 10'),
+  body('painNotes').optional().isString().withMessage('Pain notes must be a string'),
   handleValidationErrors
 ], asyncHandler(async (req, res) => {
-  const { duration } = req.body;
+  const { duration, painLevel, painNotes } = req.body;
   const { id: planId, exerciseId } = req.params;
 
   const plan = await RehabilitationPlan.findById(planId);
@@ -425,8 +428,27 @@ router.post('/:id/exercises/:exerciseId/complete', [
     return res.status(404).json({ message: 'Exercise not found' });
   }
 
-  // Mark exercise as completed
-  await plan.markExerciseCompleted(exerciseId, duration || exercise.duration);
+  // Check if the exercise is already skipped
+  const todaysCompletion = plan.dailyCompletions.find(completion => {
+    const completionDate = new Date(completion.date);
+    completionDate.setHours(0, 0, 0, 0);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return completionDate.getTime() === today.getTime();
+  });
+
+  const exerciseCompletion = todaysCompletion?.exercises.find(e => 
+    e.exerciseId.toString() === exerciseId.toString()
+  );
+
+  if (exerciseCompletion?.status === 'skipped') {
+    return res.status(400).json({ 
+      message: 'Cannot complete a skipped exercise. Please contact your clinician if you need to modify your plan.' 
+    });
+  }
+
+  // Mark exercise as completed with pain level
+  await plan.markExerciseCompleted(exerciseId, duration || exercise.duration, painLevel, painNotes);
 
   // Create activity log for exercise completion
   const activityLog = new ActivityLog({
@@ -436,21 +458,27 @@ router.post('/:id/exercises/:exerciseId/complete', [
     rehabilitationPlan: plan._id,
     activityType: 'exercise_completed',
     title: `Exercise Completed: ${exercise.name}`,
-    description: `Worker completed "${exercise.name}" exercise for ${duration || exercise.duration} minutes`,
-    priority: 'low',
+    description: painLevel !== undefined ? 
+      `Worker completed "${exercise.name}" exercise for ${duration || exercise.duration} minutes with pain level ${painLevel}/10` :
+      `Worker completed "${exercise.name}" exercise for ${duration || exercise.duration} minutes`,
+    priority: painLevel && painLevel >= 7 ? 'high' : 'low',
     details: {
       exercise: {
         name: exercise.name,
         duration: duration || exercise.duration,
         difficulty: exercise.difficulty,
-        category: exercise.category
+        category: exercise.category,
+        painLevel: painLevel,
+        painNotes: painNotes
       }
     },
-    tags: ['exercise', 'completed', 'rehabilitation'],
+    tags: ['exercise', 'completed', 'rehabilitation', ...(painLevel ? ['pain'] : [])],
     metadata: {
       exerciseId: exercise._id,
       completedDuration: duration || exercise.duration,
-      planName: plan.planName
+      planName: plan.planName,
+      painLevel: painLevel,
+      painNotes: painNotes
     }
   });
 
@@ -461,6 +489,26 @@ router.post('/:id/exercises/:exerciseId/complete', [
 
   // Check for milestone alerts and send encouraging messages
   const alerts = await plan.checkForAlerts();
+  
+  // Send high pain notification to clinician if pain level is 7 or higher
+  if (painLevel && painLevel >= 7) {
+    try {
+      // Create notification for clinician using the dedicated method
+      await NotificationService.createHighPainNotification(
+        plan.clinician,
+        req.user._id,
+        plan._id,
+        exercise.name,
+        painLevel,
+        painNotes
+      );
+      
+      console.log(`High pain notification sent to clinician: Pain level ${painLevel}/10`);
+    } catch (notifyError) {
+      console.error('Error sending pain notification to clinician:', notifyError);
+      // Don't throw the error, just log it - we don't want to fail the whole request
+    }
+  }
   
   // Send milestone notifications to worker
   for (const alert of alerts) {
@@ -514,8 +562,11 @@ router.post('/:id/exercises/:exerciseId/complete', [
       _id: exercise._id,
       name: exercise.name,
       status: 'completed',
-      completedAt: new Date()
-    }
+      completedAt: new Date(),
+      painLevel: painLevel,
+      painNotes: painNotes
+    },
+    success: true
   });
 }));
 

@@ -9,7 +9,7 @@ const Incident = require('../models/Incident');
 const seedIncidents = async () => {
   try {
     // Connect to MongoDB
-    await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/data5');
+    await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/occupational-rehab');
     console.log('Connected to MongoDB');
 
     // Clear existing incidents

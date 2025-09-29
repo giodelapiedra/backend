@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Box,
   Typography,
@@ -42,22 +42,18 @@ import {
   Visibility,
   Edit,
   Assignment,
-  Person,
-  TrendingUp,
   CheckCircle,
   Warning,
-  Schedule,
   People,
   Assessment,
   LocalHospital,
   Work,
   Timeline,
-  Report,
   Refresh,
   CalendarToday,
 } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext';
-import Layout from '../../components/Layout';
+import LayoutWithSidebar from '../../components/LayoutWithSidebar';
 import api, { getCurrentUser } from '../../utils/api';
 import { createImageProps } from '../../utils/imageUtils';
 
@@ -154,6 +150,7 @@ interface DashboardStats {
 const CaseManagerDashboard: React.FC = () => {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
+  const hasFetchedData = useRef(false);
 
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState(0);
@@ -161,7 +158,6 @@ const CaseManagerDashboard: React.FC = () => {
   // Data states
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [cases, setCases] = useState<Case[]>([]);
-  const [workers, setWorkers] = useState<User[]>([]);
   const [clinicians, setClinicians] = useState<User[]>([]);
   const [availableClinicians, setAvailableClinicians] = useState<Clinician[]>([]);
   const [stats, setStats] = useState<DashboardStats | null>(null);
@@ -173,7 +169,6 @@ const CaseManagerDashboard: React.FC = () => {
   const [caseDialog, setCaseDialog] = useState(false);
   const [assignmentDialog, setAssignmentDialog] = useState(false);
   const [clinicianDialog, setClinicianDialog] = useState(false);
-  const [selectedCase, setSelectedCase] = useState<Case | null>(null);
   const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null);
   const [selectedClinician, setSelectedClinician] = useState<Clinician | null>(null);
   
@@ -203,36 +198,20 @@ const CaseManagerDashboard: React.FC = () => {
     notes: ''
   });
 
-  useEffect(() => {
-    if (user) {
-      console.log('Fetching initial data...');
-      fetchData();
-      fetchAvailableClinicians();
-    }
-  }, [user]);
-
-  // Fetch clinicians when component mounts
-  useEffect(() => {
-    console.log('Component mounted, fetching clinicians...');
-    fetchAvailableClinicians();
-  }, []);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
       
-      const [incidentsRes, casesRes, workersRes, cliniciansRes, notificationsRes] = await Promise.all([
+      const [incidentsRes, casesRes, cliniciansRes, notificationsRes] = await Promise.all([
         api.get('/incidents'),
         api.get('/cases'),
-        api.get('/users?role=worker'),
         api.get('/users?role=clinician'),
         api.get('/notifications')
       ]);
 
       setIncidents(incidentsRes.data.incidents || []);
       setCases(casesRes.data.cases || []);
-      setWorkers(workersRes.data.users || []);
       setClinicians(cliniciansRes.data.users || []);
       setNotifications(notificationsRes.data.notifications || []);
       setUnreadNotificationCount(notificationsRes.data.unreadCount || 0);
@@ -263,9 +242,9 @@ const CaseManagerDashboard: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const fetchAvailableClinicians = async () => {
+  const fetchAvailableClinicians = useCallback(async () => {
     try {
       console.log('Fetching available clinicians...');
       // Use the api instance which already has interceptors to add the token from cookies
@@ -306,9 +285,18 @@ const CaseManagerDashboard: React.FC = () => {
         setError(`Error: ${err.message}`);
       }
     }
-  };
+  }, []);
 
-  const handleAssignClinician = async (caseId?: string, clinicianId?: string, notes?: string) => {
+  useEffect(() => {
+    if (user && !hasFetchedData.current) {
+      console.log('Fetching initial data...');
+      hasFetchedData.current = true;
+      fetchData();
+      fetchAvailableClinicians();
+    }
+  }, [user, fetchData, fetchAvailableClinicians]);
+
+  const handleAssignClinician = useCallback(async (caseId?: string, clinicianId?: string, notes?: string) => {
     try {
       let caseNumber = '';
       let clinicianName = '';
@@ -368,9 +356,9 @@ const CaseManagerDashboard: React.FC = () => {
       console.error('Error assigning clinician:', err);
       setError(err.response?.data?.message || 'Failed to assign clinician');
     }
-  };
+  }, [cases, clinicians, assignmentForm, fetchData, fetchAvailableClinicians]);
 
-  const handleUpdateClinicianAvailability = async (clinicianId: string, isAvailable: boolean, reason?: string) => {
+  const handleUpdateClinicianAvailability = useCallback(async (clinicianId: string, isAvailable: boolean, reason?: string) => {
     try {
       await api.put(`/clinicians/${clinicianId}/availability`, {
         isAvailable,
@@ -390,7 +378,7 @@ const CaseManagerDashboard: React.FC = () => {
       console.error('Error updating clinician availability:', err);
       setError(err.response?.data?.message || 'Failed to update clinician availability');
     }
-  };
+  }, [clinicians, fetchAvailableClinicians]);
 
   const getAvailabilityColor = (status: string) => {
     switch (status) {
@@ -524,7 +512,7 @@ const CaseManagerDashboard: React.FC = () => {
     return { isValid: true, error: null };
   };
 
-  const handleCreateCase = async () => {
+  const handleCreateCase = useCallback(async () => {
     try {
       // Get the current user from both contexts
       const currentUser = user || getCurrentUser();
@@ -751,22 +739,49 @@ const CaseManagerDashboard: React.FC = () => {
       }
       
       // Verify the case was created with the correct data
-      const createdCase = response.data.case;
+      let createdCase = response.data.case;
       console.log('Created case:', createdCase);
       
       // Verify clinician assignment
       if (assignmentForm.clinician) {
+        // Check if clinician was assigned
         if (!createdCase.clinician) {
-          console.error('Clinician assignment missing in created case');
-          throw new Error('Case created but clinician assignment failed');
-        }
-        
-        if (createdCase.clinician._id !== assignmentForm.clinician) {
-          console.error('Clinician assignment mismatch:', {
+          console.warn('Clinician assignment missing in created case - attempting to assign now');
+          
+          try {
+            // Try to assign the clinician manually as a fallback
+            const assignResponse = await api.put(`/cases/${createdCase._id}/assign-clinician`, {
+              clinicianId: assignmentForm.clinician
+            });
+            
+            console.log('Manual clinician assignment successful:', assignResponse.data);
+            
+            // Update the created case with the assigned clinician
+            createdCase = assignResponse.data.case;
+          } catch (assignError) {
+            console.error('Failed to manually assign clinician:', assignError);
+            throw new Error('Case created but clinician assignment failed. Please try assigning the clinician manually.');
+          }
+        } else if (createdCase.clinician._id !== assignmentForm.clinician) {
+          console.warn('Clinician assignment mismatch - attempting to fix:', {
             expected: assignmentForm.clinician,
             actual: createdCase.clinician._id
           });
-          throw new Error('Case created but wrong clinician was assigned');
+          
+          try {
+            // Try to reassign the correct clinician
+            const reassignResponse = await api.put(`/cases/${createdCase._id}/assign-clinician`, {
+              clinicianId: assignmentForm.clinician
+            });
+            
+            console.log('Clinician reassignment successful:', reassignResponse.data);
+            
+            // Update the created case with the reassigned clinician
+            createdCase = reassignResponse.data.case;
+          } catch (reassignError) {
+            console.error('Failed to reassign clinician:', reassignError);
+            throw new Error('Case created but wrong clinician was assigned. Please try reassigning the clinician manually.');
+          }
         }
       }
       
@@ -867,13 +882,13 @@ const CaseManagerDashboard: React.FC = () => {
       // Keep the dialog open so user can see the error
       // setCaseDialog(false);
     }
-  };
+  }, [user, assignmentForm, caseForm.expectedReturnDate, caseForm.notes, cases, clinicians, fetchData, selectedIncident]);
 
-  const handleUpdateCaseStatus = async (caseId: string, newStatus: string) => {
+  const handleUpdateCaseStatus = useCallback(async (caseId: string, newStatus: string) => {
     try {
       console.log(`Updating case ${caseId} status to ${newStatus}`);
       
-      const response = await api.put(`/cases/${caseId}/update-status`, {
+      const response = await api.put(`/cases/${caseId}/status`, {
         status: newStatus,
         notes: `Status updated to ${newStatus}`
       });
@@ -929,7 +944,7 @@ const CaseManagerDashboard: React.FC = () => {
         setError(`Error: ${err.message}`);
       }
     }
-  };
+  }, [fetchData]);
 
   const getStatusColor = (status: string) => {
     const colors: { [key: string]: any } = {
@@ -959,28 +974,28 @@ const CaseManagerDashboard: React.FC = () => {
 
   if (!user) {
     return (
-      <Layout>
+      <LayoutWithSidebar>
         <Box display="flex" justifyContent="center" alignItems="center" minHeight="50vh">
           <Typography variant="h6" color="text.secondary">
             Please log in to access the dashboard
           </Typography>
         </Box>
-      </Layout>
+      </LayoutWithSidebar>
     );
   }
 
   if (loading) {
     return (
-      <Layout>
+      <LayoutWithSidebar>
         <Box display="flex" justifyContent="center" alignItems="center" minHeight="50vh">
           <CircularProgress />
         </Box>
-      </Layout>
+      </LayoutWithSidebar>
     );
   }
 
   return (
-    <Layout>
+    <LayoutWithSidebar>
       <Box>
         <Typography variant="h4" component="h1" gutterBottom>
           Case Manager Dashboard
@@ -1050,19 +1065,22 @@ const CaseManagerDashboard: React.FC = () => {
                   bgcolor: notification.type === 'high_pain' ? '#fef2f2' : 
                            notification.type === 'rtw_review' ? '#fef3c7' : 
                            notification.type === 'case_closed' ? '#f0fdf4' :
-                           notification.type === 'return_to_work' ? '#fef3c7' : '#f0f9ff', 
+                           notification.type === 'return_to_work' ? '#fef3c7' :
+                           notification.type === 'incident_reported' ? '#fef2f2' : '#f0f9ff', 
                   borderRadius: 2,
                   border: notification.type === 'high_pain' ? '1px solid #fecaca' :
                           notification.type === 'rtw_review' ? '1px solid #fde68a' :
                           notification.type === 'case_closed' ? '1px solid #bbf7d0' :
-                          notification.type === 'return_to_work' ? '1px solid #fde68a' : '1px solid #bae6fd'
+                          notification.type === 'return_to_work' ? '1px solid #fde68a' :
+                          notification.type === 'incident_reported' ? '1px solid #fecaca' : '1px solid #bae6fd'
                 }}>
                   <Box display="flex" alignItems="center" gap={2} sx={{ mb: 2 }}>
                     <Box sx={{ 
                       backgroundColor: notification.type === 'high_pain' ? '#ef4444' : 
                                       notification.type === 'rtw_review' ? '#f59e0b' : 
                                       notification.type === 'case_closed' ? '#22c55e' :
-                                      notification.type === 'return_to_work' ? '#f59e0b' : '#3b82f6',
+                                      notification.type === 'return_to_work' ? '#f59e0b' :
+                                      notification.type === 'incident_reported' ? '#ef4444' : '#3b82f6',
                       borderRadius: 2,
                       p: 1,
                       display: 'flex',
@@ -1073,6 +1091,7 @@ const CaseManagerDashboard: React.FC = () => {
                        notification.type === 'rtw_review' ? <Work sx={{ fontSize: 20, color: 'white' }} /> :
                        notification.type === 'case_closed' ? <CheckCircle sx={{ fontSize: 20, color: 'white' }} /> :
                        notification.type === 'return_to_work' ? <Work sx={{ fontSize: 20, color: 'white' }} /> :
+                       notification.type === 'incident_reported' ? <Warning sx={{ fontSize: 20, color: 'white' }} /> :
                        <Assessment sx={{ fontSize: 20, color: 'white' }} />}
                     </Box>
                     <Box flex={1}>
@@ -2446,8 +2465,9 @@ const CaseManagerDashboard: React.FC = () => {
           </DialogActions>
         </Dialog>
       </Box>
-    </Layout>
+    </LayoutWithSidebar>
   );
 };
 
 export default CaseManagerDashboard;
+

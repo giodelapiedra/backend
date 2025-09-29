@@ -24,19 +24,19 @@ const userSchema = new mongoose.Schema({
   password: {
     type: String,
     required: [true, 'Password is required'],
-    minlength: [12, 'Password must be at least 12 characters'],
+    minlength: [8, 'Password must be at least 8 characters'],
     validate: {
       validator: function(v) {
-        // Password must contain: uppercase, lowercase, number, special character
-        return /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/.test(v);
+        // Password must contain: uppercase, lowercase, number
+        return /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/.test(v);
       },
-      message: 'Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character (@$!%*?&)'
+      message: 'Password must contain at least one uppercase letter, one lowercase letter, and one number'
     }
   },
   role: {
     type: String,
     required: [true, 'Role is required'],
-    enum: ['admin', 'worker', 'employer', 'site_supervisor', 'clinician', 'case_manager', 'gp_insurer'],
+    enum: ['admin', 'worker', 'employer', 'site_supervisor', 'clinician', 'case_manager', 'gp_insurer', 'team_leader'],
     default: 'worker'
   },
   phone: {
@@ -54,6 +54,29 @@ const userSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: false
+  },
+  // Team Leader specific fields
+  team: {
+    type: String,
+    required: function() { return this.role === 'team_leader' || this.role === 'worker'; }
+  },
+  teamLeader: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: function() { return this.role === 'worker'; }
+  },
+  // Team Leader specific fields
+  defaultTeam: {
+    type: String,
+    required: false
+  },
+  managedTeams: [{
+    type: String
+  }],
+  package: {
+    type: String,
+    enum: ['package1', 'package2', 'package3'],
+    default: 'package1'
   },
   isActive: {
     type: Boolean,
@@ -146,13 +169,14 @@ userSchema.methods.comparePassword = async function(candidatePassword) {
   return await bcrypt.compare(candidatePassword, this.password);
 };
 
-// Account lockout methods
+// Account lockout methods - COMPLETELY DISABLED
 userSchema.virtual('isLocked').get(function() {
-  return !!(this.lockUntil && this.lockUntil > Date.now());
+  // Always return false - no account locking
+  return false;
 });
 
 userSchema.methods.incLoginAttempts = function() {
-  // DISABLED: Account lockout feature removed
+  // DISABLED: Account lockout feature completely removed
   // Just increment login attempts for logging purposes only
   return this.updateOne({
     $inc: { loginAttempts: 1 }
@@ -160,6 +184,8 @@ userSchema.methods.incLoginAttempts = function() {
 };
 
 userSchema.methods.resetLoginAttempts = function() {
+  // DISABLED: Account lockout feature completely removed
+  // Just reset login attempts for logging purposes only
   return this.updateOne({
     $unset: { loginAttempts: 1, lockUntil: 1 }
   });

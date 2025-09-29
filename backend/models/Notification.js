@@ -13,7 +13,7 @@ const notificationSchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ['incident_reported', 'case_created', 'appointment_scheduled', 'check_in_reminder', 'task_assigned', 'case_status_change', 'general', 'high_pain', 'rtw_review', 'fatigue_resource', 'rehab_plan_assigned', 'rehab_plan_review', 'progress_encouragement', 'exercise_completed', 'exercise_skipped', 'daily_check_in', 'activity_log_created', 'case_closed', 'return_to_work', 'case_assigned'],
+    enum: ['incident_reported', 'case_created', 'appointment_scheduled', 'check_in_reminder', 'task_assigned', 'case_status_change', 'general', 'high_pain', 'rtw_review', 'fatigue_resource', 'rehab_plan_assigned', 'rehab_plan_review', 'progress_encouragement', 'exercise_completed', 'exercise_skipped', 'daily_check_in', 'activity_log_created', 'case_closed', 'return_to_work', 'case_assigned', 'zoom_meeting_scheduled', 'appointment_reminder', 'zoom_meeting_reminder', 'work_readiness_followup', 'work_readiness_submitted'],
     required: true
   },
   title: {
@@ -29,7 +29,7 @@ const notificationSchema = new mongoose.Schema({
   relatedEntity: {
     type: {
       type: String,
-      enum: ['incident', 'case', 'appointment', 'task', 'check_in']
+      enum: ['incident', 'case', 'appointment', 'task', 'check_in', 'rehabilitation_plan']
     },
     id: {
       type: mongoose.Schema.Types.ObjectId
@@ -137,6 +137,34 @@ notificationSchema.statics.createClinicianAssignmentNotification = async functio
 // Static method to get unread count for user
 notificationSchema.statics.getUnreadCount = async function(userId) {
   return await this.countDocuments({ recipient: userId, isRead: false });
+};
+
+// Static method to create Zoom meeting notification
+notificationSchema.statics.createZoomMeetingNotification = async function(workerId, clinicianId, appointmentId, appointmentData, zoomMeetingData) {
+  const notification = new this({
+    recipient: workerId,
+    sender: clinicianId,
+    type: 'zoom_meeting_scheduled',
+    title: '🔗 Zoom Meeting Scheduled',
+    message: `Your ${appointmentData.appointmentType} appointment has been scheduled for ${new Date(appointmentData.scheduledDate).toLocaleDateString()} at ${new Date(appointmentData.scheduledDate).toLocaleTimeString()}. A Zoom meeting has been created for this telehealth session.`,
+    relatedEntity: {
+      type: 'appointment',
+      id: appointmentId
+    },
+    priority: 'high',
+    actionUrl: '/appointments',
+    metadata: {
+      appointmentType: appointmentData.appointmentType,
+      scheduledDate: appointmentData.scheduledDate,
+      duration: appointmentData.duration,
+      zoomMeetingId: zoomMeetingData.meetingId,
+      zoomJoinUrl: zoomMeetingData.joinUrl,
+      zoomPassword: zoomMeetingData.password,
+      caseNumber: appointmentData.caseNumber
+    }
+  });
+  
+  return await notification.save();
 };
 
 // Static method to get notifications for user

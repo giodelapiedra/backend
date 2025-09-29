@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Box,
   Typography,
@@ -27,13 +27,10 @@ import {
   CircularProgress,
   Avatar,
   Tooltip,
-  Badge,
-  Grid,
   List,
   ListItem,
   ListItemText,
   ListItemIcon,
-  Divider,
   LinearProgress,
 } from '@mui/material';
 import {
@@ -43,30 +40,13 @@ import {
   Warning,
   Assignment,
   Person,
-  TrendingUp,
-  TrendingDown,
   CheckCircle,
   Cancel,
   Refresh,
   Report,
-  Assessment,
-  Schedule,
-  Work,
-  DirectionsRun,
-  LocalHospital,
-  Business,
-  History,
-  MoreVert,
-  ExpandMore,
-  Security,
-  MonitorHeart,
-  TaskAlt,
-  ErrorOutline,
-  Search,
-  FilterList,
 } from '@mui/icons-material';
 import { useAuth, User } from '../../contexts/AuthContext';
-import Layout from '../../components/Layout';
+import LayoutWithSidebar from '../../components/LayoutWithSidebar';
 import api from '../../utils/api';
 
 interface Incident {
@@ -134,26 +114,29 @@ interface DashboardStats {
   incidentsThisMonth: number;
 }
 
+
+
 const SiteSupervisorDashboard: React.FC = () => {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [lastFetchTime, setLastFetchTime] = useState<number>(0);
   
   // Data states
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [cases, setCases] = useState<Case[]>([]);
-  const [workers, setWorkers] = useState<User[]>([]);
+  const [workers] = useState<User[]>([]); // Keep for stats calculation but don't update
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [successMessage, setSuccessMessage] = useState<string>('');
   
-  // Search and filter states
-  const [workerSearchTerm, setWorkerSearchTerm] = useState('');
-  const [selectedEmployer, setSelectedEmployer] = useState('');
-  const [employers, setEmployers] = useState<User[]>([]);
+  // Team selection states
+  const [teams, setTeams] = useState<any[]>([]);
+  const [selectedTeam, setSelectedTeam] = useState('');
+  const [teamMembers, setTeamMembers] = useState<any[]>([]);
+  
   
   // Dialog states
   const [incidentDialog, setIncidentDialog] = useState(false);
-  const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null);
   
   // Form states
   const [incidentForm, setIncidentForm] = useState({
@@ -178,52 +161,138 @@ const SiteSupervisorDashboard: React.FC = () => {
   const [selectedPhotos, setSelectedPhotos] = useState<File[]>([]);
   const [photoPreviewUrls, setPhotoPreviewUrls] = useState<string[]>([]);
 
-  useEffect(() => {
-    if (user) {
-      fetchData();
+  const fetchTeamsData = useCallback(async () => {
+    // Rate limiting protection - prevent too many requests
+    const now = Date.now();
+    const lastFetchKey = `teams_fetch_${user?.id}`;
+    const lastFetch = parseInt(localStorage.getItem(lastFetchKey) || '0');
+    
+    if (now - lastFetch < 30000) { // 30 second cooldown
+      console.warn('Teams fetch rate limited - please wait before retrying');
+      return;
     }
-  }, [user]);
+    
+    try {
+      console.log('[SECURED] Fetching teams data for supervisor:', user?.firstName, user?.lastName);
+      
+      // Security validation
+      if (!user || user.role !== 'site_supervisor') {
+        console.error('[SECURITY] Unauthorized teams fetch attempt:', { userId: user?.id, role: user?.role });
+        setError('Unauthorized access. Please log in as a site supervisor.');
+        return;
+      }
 
-  // Filter workers based on search term and selected employer
-  const getFilteredWorkers = () => {
-    let filtered = workers;
-    
-    // Filter by employer if selected
-    if (selectedEmployer) {
-      filtered = filtered.filter(worker => 
-        worker.employer && typeof worker.employer === 'object' && (worker.employer as any).id === selectedEmployer
-      );
+      const response = await api.get('/team-leader/teams-list', {
+        timeout: 10000, // 10 second timeout
+        headers: {
+          'X-Requested-With': 'XMLHttpRequest', // CSRF protection
+          'Cache-Control': 'no-cache'
+        }
+      });
+      
+      console.log('[SUCCESS] Teams data received:', {
+        teamsCount: response.data.teams?.length || 0,
+        totalMembers: response.data.meta?.totalMembers || 0,
+        timestamp: response.data.meta?.timestamp
+      });
+      
+      // Validate response data structure
+      if (!response.data || !Array.isArray(response.data.teams)) {
+        console.error('[SECURITY] Invalid response structure');
+        setError('Invalid data received from server');
+        return;
+      }
+      
+      // Sanitize team data before setting
+      const sanitizedTeams = response.data.teams.map((team: any) => ({
+        ...team,
+        teamName: (team.teamName || '').substring(0, 100), // Limit length
+        teamLeader: team.teamLeader ? {
+          ...team.teamLeader,
+          name: (team.teamLeader.name || '').substring(0, 100),
+          email: (team.teamLeader.email || '').substring(0, 255)
+        } : null,
+        members: Array.isArray(team.members) ? team.members.map((member: any) => ({
+          ...member,
+          name: (member.name || '').substring(0, 100),
+          email: (member.email || '').substring(0, 255)
+        })) : []
+      }));
+      
+      setTeams(sanitizedTeams);
+      localStorage.setItem(lastFetchKey, now.toString()); // Update rate limit
+      
+    } catch (err: any) {
+      console.error('[ERROR] Teams fetch failed:', {
+        status: err.response?.status,
+        message: err.message,
+        userAgent: navigator.userAgent,
+        timestamp: new Date().toISOString()
+      });
+      
+      // Enhanced error handling
+      if (err.response?.status === 403) {
+        setError('Access denied. You must be logged in as a site supervisor to view teams.');
+      } else if (err.response?.status === 429) {
+        setError('Too many requests. Please wait a moment before trying again.');
+      } else if (err.response?.status >= 500) {
+        setError('Server error. Please try again later or contact support.');
+      } else if (err.code === 'ECONNABORTED') {
+        setError('Request timed out. Please check your internet connection.');
+      } else {
+        setError(`Failed to load teams: ${err.response?.data?.message || err.message}`);
+      }
+      
+      setTeams([]); // Clear teams on error
     }
-    
-    // Filter by search term
-    if (workerSearchTerm) {
-      const searchLower = workerSearchTerm.toLowerCase();
-      filtered = filtered.filter(worker => 
-        worker.firstName.toLowerCase().includes(searchLower) ||
-        worker.lastName.toLowerCase().includes(searchLower) ||
-        worker.email.toLowerCase().includes(searchLower)
-      );
-    }
-    
-    return filtered;
-  };
+  }, [user, setError]);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async (forceRefresh = false) => {
+    const now = Date.now();
+    const CACHE_DURATION = 2 * 60 * 1000; // 2 minutes cache (shorter cache)
+    
+    // Use cached data if available and not forcing refresh
+    if (!forceRefresh && (now - lastFetchTime) < CACHE_DURATION && (incidents.length > 0 || cases.length > 0)) {
+      console.log('SiteSupervisorDashboard: Using cached data');
+      return;
+    }
+
     try {
       setLoading(true);
       setError(null);
       
-      const [incidentsRes, casesRes, workersRes, employersRes] = await Promise.all([
-        api.get('/incidents'),
-        api.get('/cases'),
-        api.get('/users?role=worker'),
-        api.get('/users?role=employer')
-      ]);
+      console.log('SiteSupervisorDashboard: Starting data fetch...');
+      
+      // Fetch data with individual error handling
+      let incidentsRes, casesRes, workersRes;
+      
+      try {
+        incidentsRes = await api.get('/incidents');
+        console.log('SiteSupervisorDashboard: Incidents fetched successfully');
+      } catch (err: any) {
+        console.error('SiteSupervisorDashboard: Error fetching incidents:', err);
+        incidentsRes = { data: { incidents: [] } };
+      }
+      
+      try {
+        casesRes = await api.get('/cases');
+        console.log('SiteSupervisorDashboard: Cases fetched successfully');
+      } catch (err: any) {
+        console.error('SiteSupervisorDashboard: Error fetching cases:', err);
+        casesRes = { data: { cases: [] } };
+      }
+      
+      try {
+        workersRes = await api.get('/users?role=worker');
+        console.log('SiteSupervisorDashboard: Workers fetched successfully');
+      } catch (err: any) {
+        console.error('SiteSupervisorDashboard: Error fetching workers:', err);
+        workersRes = { data: { users: [] } };
+      }
+      
 
       setIncidents(incidentsRes.data.incidents || []);
       setCases(casesRes.data.cases || []);
-      setWorkers(workersRes.data.users || []);
-      setEmployers(employersRes.data.users || []);
       
       // Calculate stats
       const totalWorkers = workersRes.data.users?.length || 0;
@@ -241,13 +310,67 @@ const SiteSupervisorDashboard: React.FC = () => {
         restrictedWorkers,
         incidentsThisMonth: recentIncidents
       });
+      
+      setLastFetchTime(now);
+      console.log('SiteSupervisorDashboard: Data fetch completed successfully');
     } catch (err: any) {
-      console.error('Error fetching data:', err);
+      console.error('SiteSupervisorDashboard: Critical error fetching data:', err);
       setError(err.response?.data?.message || 'Failed to fetch data');
     } finally {
       setLoading(false);
     }
+  }, [incidents.length, cases.length, lastFetchTime]);
+
+  useEffect(() => {
+    if (user) {
+      fetchData();
+      fetchTeamsData();
+    }
+  }, [user, fetchData, fetchTeamsData]);
+
+  const handleTeamSelection = (teamId: string) => {
+    // Input sanitization
+    const sanitizedTeamId = (teamId || '').toString().trim();
+    
+    // Validate team ID format (should be a valid MongoDB ObjectId or team reference)
+    if (!sanitizedTeamId || sanitizedTeamId.length < 10) {
+      console.warn('[SECURITY] Invalid team ID provided:', teamId);
+      return;
+    }
+    
+    // Security logging
+    console.log('[SECURED] Team selection by supervisor:', {
+      userId: user?.id,
+      userName: `${user?.firstName} ${user?.lastName}`,
+      selectedTeamId: sanitizedTeamId,
+      timestamp: new Date().toISOString()
+    });
+    
+    setSelectedTeam(sanitizedTeamId);
+    const team = teams.find(t => t.teamId === sanitizedTeamId);
+    
+    if (team) {
+      // Validate team data before setting
+      const validatedMembers = team.members.filter((member: any) => 
+        member && member.id && member.name && typeof member.name === 'string'
+      ).map((member: any) => ({
+        ...member,
+        id: member.id.toString(),
+        name: member.name.trim().substring(0, 100),
+        email: (member.email || '').trim().substring(0, 255)
+      }));
+      
+      setTeamMembers(validatedMembers);
+      // Clear worker selection when team changes
+      setIncidentForm({ ...incidentForm, worker: '' });
+      
+      console.log(`[INFO] Team selected: ${team.teamName} with ${validatedMembers.length} members`);
+    } else {
+      console.warn('[SECURITY] Team not found for ID:', sanitizedTeamId);
+      setTeamMembers([]);
+    }
   };
+
 
   // Photo handling functions
   const handlePhotoSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -344,8 +467,6 @@ const SiteSupervisorDashboard: React.FC = () => {
       // Show success message
       setError(null);
       setIncidentDialog(false);
-      setWorkerSearchTerm('');
-      setSelectedEmployer('');
       setIncidentForm({
         worker: '',
         incidentDate: '',
@@ -364,7 +485,7 @@ const SiteSupervisorDashboard: React.FC = () => {
       photoPreviewUrls.forEach(url => URL.revokeObjectURL(url));
       setSelectedPhotos([]);
       setPhotoPreviewUrls([]);
-      fetchData();
+      fetchData(true);
       
       // Display success message with case information
       const caseNumber = response.data.incident?.caseNumber || 'a new case';
@@ -406,28 +527,44 @@ const SiteSupervisorDashboard: React.FC = () => {
 
   if (!user) {
     return (
-      <Layout>
+      <LayoutWithSidebar>
         <Box display="flex" justifyContent="center" alignItems="center" minHeight="50vh">
           <Typography variant="h6" color="text.secondary">
             Please log in to access the dashboard
           </Typography>
         </Box>
-      </Layout>
+      </LayoutWithSidebar>
     );
   }
 
   if (loading) {
     return (
-      <Layout>
-        <Box display="flex" justifyContent="center" alignItems="center" minHeight="50vh">
-          <CircularProgress />
+      <LayoutWithSidebar>
+        <Box display="flex" flexDirection="column" justifyContent="center" alignItems="center" minHeight="50vh">
+          <CircularProgress size={60} />
+          <Typography variant="h6" sx={{ mt: 2, color: 'text.secondary' }}>
+            Loading Site Supervisor Dashboard...
+          </Typography>
+          <Typography variant="body2" sx={{ mt: 1, color: 'text.secondary' }}>
+            Fetching incidents, cases, and worker data
+          </Typography>
+          <Button 
+            variant="outlined" 
+            sx={{ mt: 2 }} 
+            onClick={() => {
+              setLoading(false);
+              setError('Loading cancelled by user');
+            }}
+          >
+            Cancel Loading
+          </Button>
         </Box>
-      </Layout>
+      </LayoutWithSidebar>
     );
   }
 
   return (
-    <Layout>
+    <LayoutWithSidebar>
       <Box>
         <Typography variant="h4" component="h1" gutterBottom>
           Site Supervisor Dashboard
@@ -447,6 +584,18 @@ const SiteSupervisorDashboard: React.FC = () => {
               color: '#dc2626'
             }}
             onClose={() => setError(null)}
+            action={
+              <Button 
+                color="inherit" 
+                size="small" 
+                onClick={() => {
+                  setError(null);
+                  fetchData(true);
+                }}
+              >
+                Retry
+              </Button>
+            }
           >
             {error}
           </Alert>
@@ -560,7 +709,7 @@ const SiteSupervisorDashboard: React.FC = () => {
                   <Button
                     variant="outlined"
                     startIcon={<Refresh />}
-                    onClick={fetchData}
+                    onClick={() => fetchData(true)}
                     size="small"
                   >
                     Refresh
@@ -689,8 +838,6 @@ const SiteSupervisorDashboard: React.FC = () => {
                     onClick={() => {
                       setIncidentDialog(true);
                       setError(null);
-                      setWorkerSearchTerm('');
-                      setSelectedEmployer('');
                     }}
                     sx={{ mb: 1 }}
                   >
@@ -759,13 +906,14 @@ const SiteSupervisorDashboard: React.FC = () => {
           </Box>
         </Box>
 
+
         {/* Incident Report Dialog */}
         <Dialog 
           open={incidentDialog} 
           onClose={() => {
             setIncidentDialog(false);
-            setWorkerSearchTerm('');
-            setSelectedEmployer('');
+            setSelectedTeam('');
+            setTeamMembers([]);
           }} 
           maxWidth="md" 
           fullWidth
@@ -775,71 +923,74 @@ const SiteSupervisorDashboard: React.FC = () => {
           </DialogTitle>
           <DialogContent>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
-              {/* Search and Filter Controls */}
-              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2 }}>
-                <Box sx={{ flex: '1 1 200px', minWidth: '200px' }}>
-                  <TextField
-                    fullWidth
-                    label="Search Workers"
-                    value={workerSearchTerm}
-                    onChange={(e) => setWorkerSearchTerm(e.target.value)}
-                    InputProps={{
-                      startAdornment: <Search sx={{ mr: 1, color: 'text.secondary' }} />
-                    }}
-                    placeholder="Search by name or email..."
-                  />
-                </Box>
-                <Box sx={{ flex: '1 1 200px', minWidth: '200px' }}>
-                  <FormControl fullWidth>
-                    <InputLabel>Filter by Employer</InputLabel>
-                    <Select
-                      value={selectedEmployer}
-                      onChange={(e) => setSelectedEmployer(e.target.value)}
-                    >
-                      <MenuItem value="">
-                        <em>All Employers</em>
-                      </MenuItem>
-                      {employers.map((employer) => (
-                        <MenuItem key={employer.id} value={employer.id}>
-                          {employer.firstName} {employer.lastName}
-                        </MenuItem>
-                      ))}
-                    </Select>
-                  </FormControl>
-                </Box>
-              </Box>
-              
-              {/* Worker Selection */}
-              <Box sx={{ flex: '1 1 300px', minWidth: '300px' }}>
+              {/* Team Selection */}
+              <Box sx={{ mb: 2 }}>
+                <Typography variant="h6" gutterBottom>
+                  Select Team
+                </Typography>
                 <FormControl fullWidth required>
-                  <InputLabel>Worker *</InputLabel>
-                  <Select
-                    value={incidentForm.worker}
-                    onChange={(e) => setIncidentForm({ ...incidentForm, worker: e.target.value })}
-                  >
-                    {getFilteredWorkers().length > 0 ? (
-                      getFilteredWorkers().map((worker) => (
-                        <MenuItem key={worker.id} value={worker.id}>
+                  <InputLabel>Team *</InputLabel>
+                    <Select
+                    value={selectedTeam}
+                    onChange={(e) => handleTeamSelection(e.target.value)}
+                    >
+                    <MenuItem disabled>
+                      <em>Teams loaded: {teams.length}</em>
+                      </MenuItem>
+                    {teams.length > 0 ? (
+                      teams.map((team) => (
+                        <MenuItem key={team.teamId} value={team.teamId}>
                           <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
                             <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                              {worker.firstName} {worker.lastName}
+                              {team.teamName}
                             </Typography>
                             <Typography variant="caption" color="text.secondary">
-                              {worker.email} • {typeof worker.employer === 'object' && worker.employer ? `${(worker.employer as any).firstName} ${(worker.employer as any).lastName}` : 'No Employer'}
+                              Team Leader: {team.teamLeader.name} • {team.totalMembers} members
                             </Typography>
                           </Box>
                         </MenuItem>
                       ))
                     ) : (
                       <MenuItem disabled>
-                        {workerSearchTerm || selectedEmployer ? 'No workers match your search' : 'No workers available'}
+                        No teams available
+                      </MenuItem>
+                    )}
+                    </Select>
+                  </FormControl>
+              </Box>
+              
+              {/* Team Member Selection */}
+              <Box sx={{ flex: '1 1 300px', minWidth: '300px' }}>
+                <FormControl fullWidth required>
+                  <InputLabel>Team Member *</InputLabel>
+                  <Select
+                    value={incidentForm.worker}
+                    onChange={(e) => setIncidentForm({ ...incidentForm, worker: e.target.value })}
+                    disabled={!selectedTeam || teamMembers.length === 0}
+                  >
+                    {teamMembers.length > 0 ? (
+                      teamMembers.map((member: any) => (
+                        <MenuItem key={member.id} value={member.id}>
+                          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+                            <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                              {member.name}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              {member.email} • {member.role} • {member.package}
+                            </Typography>
+                          </Box>
+                        </MenuItem>
+                      ))
+                    ) : (
+                      <MenuItem disabled>
+                        {!selectedTeam ? 'Please select a team first' : 'No team members available'}
                       </MenuItem>
                     )}
                   </Select>
                 </FormControl>
-                {getFilteredWorkers().length > 0 && (
+                {teamMembers.length > 0 && (
                   <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-                    Showing {getFilteredWorkers().length} of {workers.length} workers
+                    Showing {teamMembers.length} team members
                   </Typography>
                 )}
               </Box>
@@ -1002,8 +1153,8 @@ const SiteSupervisorDashboard: React.FC = () => {
           <DialogActions>
             <Button onClick={() => {
               setIncidentDialog(false);
-              setWorkerSearchTerm('');
-              setSelectedEmployer('');
+              setSelectedTeam('');
+              setTeamMembers([]);
             }}>Cancel</Button>
             <Button 
               variant="contained" 
@@ -1015,7 +1166,7 @@ const SiteSupervisorDashboard: React.FC = () => {
           </DialogActions>
         </Dialog>
       </Box>
-    </Layout>
+    </LayoutWithSidebar>
   );
 };
 

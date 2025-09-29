@@ -8,7 +8,7 @@ async function checkUserAccounts() {
     console.log('🔍 Checking User Accounts and Database Connection...\n');
 
     // Connect to MongoDB
-    await mongoose.connect('mongodb://localhost:27017/data5', {
+    await mongoose.connect('mongodb://localhost:27017/occupational-rehab', {
       useNewUrlParser: true,
       useUnifiedTopology: true,
     });

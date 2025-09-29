@@ -17,14 +17,6 @@ export const getImageUrl = (imagePath: string): string => {
   // Construct the full URL
   const fullUrl = `${baseUrl}${normalizedPath}`;
   
-  console.log('🔍 Image URL construction:', {
-    imagePath,
-    baseUrl,
-    normalizedPath,
-    fullUrl,
-    envVar: process.env.REACT_APP_API_URL
-  });
-  
   return fullUrl;
 };
 
@@ -43,35 +35,19 @@ export const createImageProps = (
   const handleError = (e: React.SyntheticEvent<HTMLImageElement, Event>) => {
     const img = e.currentTarget;
     
-    console.error('🚨 Image error event triggered:', {
-      imagePath,
-      src: img.src,
-      complete: img.complete,
-      naturalWidth: img.naturalWidth,
-      naturalHeight: img.naturalHeight
-    });
-    
     // Check if the image actually failed to load
     if (img.complete && img.naturalWidth === 0) {
-      console.error('❌ Image failed to load:', imagePath);
-      console.error('Image URL:', img.src);
-      
       // Try alternative URL construction as fallback
       const alternativeUrl = `http://localhost:5000${imagePath}`;
-      console.log('🔄 Trying alternative URL:', alternativeUrl);
       
       // Only try alternative if it's different from current URL
       if (img.src !== alternativeUrl) {
         img.src = alternativeUrl;
       } else {
         // Show error placeholder
-        console.log('💥 Both URLs failed, showing error placeholder');
         img.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgdmlld0JveD0iMCAwIDIwMCAyMDAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIyMDAiIGhlaWdodD0iMjAwIiBmaWxsPSIjRjVGNUY1Ii8+CjxwYXRoIGQ9Ik03NSA3NUgxMjVWMTI1SDc1Vjc1WiIgZmlsbD0iI0NDQ0NDQyIvPgo8c3ZnIHg9Ijc1IiB5PSI3NSIgd2lkdGg9IjUwIiBoZWlnaHQ9IjUwIiB2aWV3Qm94PSIwIDAgMjQgMjQiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzk5OTk5OSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPgo8cGF0aCBkPSJNMTQuNSAySDkuNVY3SDE0LjVWMloiLz4KPHBhdGggZD0iTTE3IDlIN1YxOUgxN1Y5WiIvPgo8L3N2Zz4KPC9zdmc+';
         img.style.border = '2px dashed #ff0000';
       }
-    } else {
-      // Image is still loading or loaded successfully, ignore error
-      console.log('Image still loading or loaded successfully, ignoring error');
     }
     
     // Call the original onError callback if provided
@@ -81,13 +57,6 @@ export const createImageProps = (
   };
 
   const handleLoad = (e: React.SyntheticEvent<HTMLImageElement, Event>) => {
-    console.log('✅ Image loaded successfully:', {
-      imagePath,
-      src: e.currentTarget.src,
-      naturalWidth: e.currentTarget.naturalWidth,
-      naturalHeight: e.currentTarget.naturalHeight
-    });
-    
     // Call the original onLoad callback if provided
     if (onLoad) {
       onLoad(e);

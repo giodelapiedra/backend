@@ -38,7 +38,7 @@ import {
   Schedule,
   Refresh,
 } from '@mui/icons-material';
-import Layout from '../../components/Layout';
+import LayoutWithSidebar from '../../components/LayoutWithSidebar';
 import api from '../../utils/api';
 
 interface Report {
@@ -194,16 +194,16 @@ const Reports: React.FC = () => {
 
   if (loading) {
     return (
-      <Layout>
+      <LayoutWithSidebar>
         <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
           <CircularProgress />
         </Box>
-      </Layout>
+      </LayoutWithSidebar>
     );
   }
 
   return (
-    <Layout>
+    <LayoutWithSidebar>
       <Box sx={{ 
         minHeight: '100vh', 
         backgroundColor: '#f8fafc',
@@ -350,22 +350,7 @@ const Reports: React.FC = () => {
               overflow: 'auto',
               border: { xs: 'none', sm: '1px solid #e2e8f0' },
               maxWidth: '100%',
-              WebkitOverflowScrolling: 'touch',
-              '&::-webkit-scrollbar': {
-                height: '6px',
-                width: '6px',
-              },
-              '&::-webkit-scrollbar-track': {
-                backgroundColor: '#f1f1f1',
-                borderRadius: '3px',
-              },
-              '&::-webkit-scrollbar-thumb': {
-                backgroundColor: '#c1c1c1',
-                borderRadius: '3px',
-                '&:hover': {
-                  backgroundColor: '#a8a8a8',
-                },
-              },
+              WebkitOverflowScrolling: 'touch'
             }}>
               <Table size="small">
                 <TableHead sx={{ backgroundColor: '#f8fafc' }}>
@@ -773,11 +758,12 @@ const Reports: React.FC = () => {
           </DialogActions>
         </Dialog>
       </Box>
-    </Layout>
+    </LayoutWithSidebar>
   );
 };
 
 export default Reports;
+
 
 
 

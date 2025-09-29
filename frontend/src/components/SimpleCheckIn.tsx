@@ -21,15 +21,11 @@ import {
 } from '@mui/material';
 import {
   Work,
-  SentimentVerySatisfied,
-  SentimentNeutral,
-  SentimentDissatisfied,
   Bedtime,
   Close,
   Assignment,
   CheckCircle,
   Error,
-  Celebration,
 } from '@mui/icons-material';
 import api from '../utils/api';
 

@@ -45,7 +45,19 @@ const appointmentSchema = new mongoose.Schema({
     meetingId: String,
     meetingUrl: String,
     password: String,
-    instructions: String
+    instructions: String,
+    zoomMeeting: {
+      id: String,
+      topic: String,
+      startTime: Date,
+      duration: Number,
+      joinUrl: String,
+      password: String,
+      meetingId: String,
+      hostId: String,
+      createdAt: Date,
+      status: String
+    }
   },
   address: {
     street: String,
@@ -107,7 +119,25 @@ const appointmentSchema = new mongoose.Schema({
   rescheduledTo: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Appointment'
-  }
+  },
+  statusHistory: [{
+    status: {
+      type: String,
+      enum: ['scheduled', 'confirmed', 'in_progress', 'completed', 'cancelled', 'no_show'],
+      required: true
+    },
+    changedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true
+    },
+    changedAt: {
+      type: Date,
+      default: Date.now,
+      required: true
+    },
+    notes: String
+  }]
 }, {
   timestamps: true
 });

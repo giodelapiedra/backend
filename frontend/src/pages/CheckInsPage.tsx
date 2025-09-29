@@ -16,7 +16,6 @@ import {
   Chip,
   Avatar,
   Tooltip,
-  Badge,
   Button,
   TextField,
   InputAdornment,
@@ -29,19 +28,14 @@ import {
 } from '@mui/material';
 import {
   Search,
-  FilterList,
   Visibility,
-  TrendingUp,
-  TrendingDown,
   Warning,
   CheckCircle,
   Cancel,
   Refresh,
   CalendarToday,
-  Person,
-  LocalHospital,
 } from '@mui/icons-material';
-import Layout from '../components/Layout';
+import LayoutWithSidebar from '../components/LayoutWithSidebar';
 import api from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
@@ -98,48 +92,37 @@ const CheckInsPage: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [dateFilter, setDateFilter] = useState('all');
-  const [hasLoaded, setHasLoaded] = useState(false);
 
-  useEffect(() => {
-    if (user && !hasLoaded) {
-      fetchCheckIns();
-    }
-  }, [user, hasLoaded]);
-
-  // Reset loaded state when user changes
-  useEffect(() => {
-    if (user) {
-      setHasLoaded(false);
-    }
-  }, [user?.id]);
-
-  const fetchCheckIns = async () => {
+  const fetchCheckIns = React.useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
       
       const response = await api.get('/check-ins');
       setCheckIns(response.data.checkIns || []);
-      setHasLoaded(true);
     } catch (err: any) {
       console.error('Error fetching check-ins:', err);
       setError(err.response?.data?.message || 'Failed to fetch check-ins');
       setCheckIns([]);
-      setHasLoaded(true); // Still mark as loaded even if error
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const handleRefresh = async () => {
-    setHasLoaded(false);
+  useEffect(() => {
+    if (user) {
+      fetchCheckIns();
+    }
+  }, [user, user?.email, fetchCheckIns]); // Include fetchCheckIns dependency
+
+  const handleRefresh = React.useCallback(async () => {
     await fetchCheckIns();
-  };
+  }, [fetchCheckIns]);
 
-  const handleViewDetails = (checkIn: CheckIn) => {
+  const handleViewDetails = React.useCallback((checkIn: CheckIn) => {
     // Navigate to case details page instead of opening dialog
     navigate(`/cases/${checkIn.case._id}`);
-  };
+  }, [navigate]);
 
   const getPainLevelColor = (level: number) => {
     if (level >= 7) return '#dc2626'; // Red
@@ -188,16 +171,16 @@ const CheckInsPage: React.FC = () => {
 
   if (loading) {
     return (
-      <Layout>
+      <LayoutWithSidebar>
         <Box display="flex" justifyContent="center" alignItems="center" minHeight="60vh">
           <CircularProgress />
         </Box>
-      </Layout>
+      </LayoutWithSidebar>
     );
   }
 
   return (
-    <Layout>
+    <LayoutWithSidebar>
       <Box sx={{ p: 3 }}>
         {/* Header */}
         <Box sx={{ mb: 4 }}>
@@ -500,8 +483,9 @@ const CheckInsPage: React.FC = () => {
           </CardContent>
         </Card>
       </Box>
-    </Layout>
+    </LayoutWithSidebar>
   );
 };
 
 export default CheckInsPage;
+

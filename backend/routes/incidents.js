@@ -7,8 +7,16 @@ const Incident = require('../models/Incident');
 const User = require('../models/User');
 const Notification = require('../models/Notification');
 const { authMiddleware, roleMiddleware } = require('../middleware/auth');
-const { handleValidationErrors, asyncHandler } = require('../middleware/errorHandler');
-const { sendNotificationUpdate } = require('./notifications');
+const { asyncHandler } = require('../middleware/errorHandler');
+const NotificationService = require('../services/NotificationService');
+// Import centralized validators
+const { 
+  validateIncident,
+  handleValidationErrors,
+  isMongoId,
+  validatePagination,
+  validateDateRange 
+} = require('../middleware/validators');
 
 const router = express.Router();
 
@@ -31,12 +39,31 @@ const storage = multer.diskStorage({
 });
 
 const fileFilter = (req, file, cb) => {
-  // Accept only image files
-  if (file.mimetype.startsWith('image/')) {
-    cb(null, true);
-  } else {
-    cb(new Error('Only image files are allowed!'), false);
+  // Define allowed MIME types explicitly
+  const allowedTypes = [
+    'image/jpeg',
+    'image/jpg', 
+    'image/png',
+    'image/gif',
+    'image/webp'
+  ];
+  
+  // Check file size (5MB limit)
+  const maxSize = 5 * 1024 * 1024; // 5MB in bytes
+  
+  if (!allowedTypes.includes(file.mimetype)) {
+    return cb(new Error('Only JPEG, PNG, GIF, and WebP image files are allowed!'), false);
   }
+  
+  // Additional validation: check file extension
+  const allowedExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
+  const fileExtension = path.extname(file.originalname).toLowerCase();
+  
+  if (!allowedExtensions.includes(fileExtension)) {
+    return cb(new Error('Invalid file extension. Only .jpg, .jpeg, .png, .gif, .webp are allowed!'), false);
+  }
+  
+  cb(null, true);
 };
 
 const upload = multer({ 
@@ -171,13 +198,8 @@ router.post('/report', [
   upload.single('image')
 ], asyncHandler(async (req, res) => {
   try {
-    console.log('=== INCIDENT REPORT ENDPOINT HIT ===');
-    console.log('User:', req.user ? {
-      id: req.user._id,
-      email: req.user.email,
-      role: req.user.role,
-      employer: req.user.employer
-    } : 'No user');
+    // Log incident report attempt (secure - no sensitive data)
+    console.log('📝 Incident report submitted by role:', req.user?.role);
     
     const { feltUnsafe, hazards, comments } = req.body;
     
@@ -230,7 +252,7 @@ router.post('/report', [
     // Create notification for employer/supervisor
     try {
       if (req.user.employer) {
-        await Notification.createIncidentNotification(req.user.employer, incident._id, {
+        await NotificationService.createIncidentNotification(req.user.employer, incident._id, {
           reportedBy: req.user._id,
           incidentNumber: incident.incidentNumber,
           severity: incident.severity,
@@ -238,13 +260,46 @@ router.post('/report', [
           incidentDate: incident.incidentDate,
           hasPhoto: !!req.file
         });
-        
-        // Send real-time update
-        await sendNotificationUpdate(req.user.employer);
       }
     } catch (notificationError) {
       console.error('Error creating notification:', notificationError);
       // Don't fail the incident creation if notification fails
+    }
+
+    // 🔔 NOTIFY CASE MANAGER: Send notification to case manager about new mobile incident
+    try {
+      const caseManager = await User.findOne({ role: 'case_manager', isActive: true });
+      if (caseManager) {
+        await NotificationService.createNotification({
+          recipient: caseManager._id,
+          sender: req.user._id,
+          type: 'incident_reported',
+          title: '📱 Mobile Incident Report',
+          message: `${req.user.firstName} ${req.user.lastName} submitted a mobile incident report (${incident.incidentNumber}). Please review and create a case if needed.`,
+          relatedEntity: {
+            type: 'incident',
+            id: incident._id
+          },
+          priority: 'medium',
+          actionUrl: '/incidents',
+          metadata: {
+            incidentNumber: incident.incidentNumber,
+            severity: incident.severity,
+            incidentType: incident.incidentType,
+            reportedBy: req.user._id,
+            reportedByName: `${req.user.firstName} ${req.user.lastName}`,
+            hasPhoto: !!req.file,
+            isMobileReport: true
+          }
+        });
+        
+        console.log(`✅ Case Manager notified about mobile incident ${incident.incidentNumber}`);
+      } else {
+        console.log('⚠️ No case manager found to notify about mobile incident');
+      }
+    } catch (caseManagerNotificationError) {
+      console.error('❌ Error notifying case manager about mobile incident:', caseManagerNotificationError);
+      // Don't fail the incident creation if case manager notification fails
     }
 
     res.status(201).json({
@@ -313,11 +368,20 @@ router.post('/', [
     if (req.user.role === 'employer') {
       employerId = req.user._id;
     } else if (req.user.role === 'site_supervisor') {
-      // Site supervisor must have an employer assignment to report incidents
-      if (!req.user.employer) {
-        return res.status(400).json({ message: 'Site supervisor must be assigned to an employer to report incidents' });
+      // Site supervisor can report incidents directly
+      // If they have an employer assigned, use that; otherwise, they can report for any employer
+      if (req.user.employer) {
+        employerId = req.user.employer;
+      } else if (req.body.employer) {
+        // Allow site supervisor to specify employer if not assigned to one
+        const employerDoc = await User.findById(req.body.employer);
+        if (!employerDoc || employerDoc.role !== 'employer' || !employerDoc.isActive) {
+          return res.status(400).json({ message: 'Invalid employer' });
+        }
+        employerId = req.body.employer;
+      } else {
+        return res.status(400).json({ message: 'Employer ID is required for site supervisor incident reporting' });
       }
-      employerId = req.user.employer;
     } else {
       // Admin or Case Manager - need to specify employer
       if (!req.body.employer) {
@@ -389,18 +453,13 @@ router.post('/', [
       console.log('Creating automatic case for incident:', incident._id);
       const Case = require('../models/Case');
       
-      // Find a case manager and clinician to assign the case
-      const caseManager = await User.findOne({ role: 'case_manager', isActive: true });
-      const clinician = await User.findOne({ role: 'clinician', isActive: true });
+      // Use auto-assignment service to find case manager and clinician
+      const AutoAssignmentService = require('../services/AutoAssignmentService');
+      const caseManager = await AutoAssignmentService.autoAssignCaseManager();
       
       if (caseManager) {
-        // Determine priority based on severity
-        let priority = 'low';
-        if (severity === 'fatality') priority = 'urgent';
-        else if (severity === 'lost_time') priority = 'high';
-        else if (severity === 'medical_treatment') priority = 'medium';
-        else if (severity === 'first_aid') priority = 'low';
-        else if (severity === 'near_miss') priority = 'low';
+        // Determine priority based on severity using auto-assignment service
+        const priority = AutoAssignmentService.autoAssignPriority({ severity, incidentType });
         
         const caseDoc = new Case({
           worker,
@@ -483,7 +542,7 @@ router.post('/', [
 
       // Create notification for the worker
       try {
-        await Notification.createIncidentNotification(worker, incident._id, {
+        await NotificationService.createIncidentNotification(worker, incident._id, {
           reportedBy: req.user._id,
           incidentNumber: incident.incidentNumber,
           severity: severity,
@@ -491,13 +550,46 @@ router.post('/', [
           incidentDate: incidentDate
         });
         
-        // Send real-time update to worker
-        await sendNotificationUpdate(worker);
-        
         console.log(`Notification created for worker ${worker} regarding incident ${incident.incidentNumber}`);
       } catch (notificationError) {
         console.error('Error creating notification:', notificationError);
         // Don't fail the incident creation if notification creation fails
+      }
+
+      // 🔔 NOTIFY CASE MANAGER: Send notification to case manager about new incident
+      try {
+        const caseManager = await User.findOne({ role: 'case_manager', isActive: true });
+        if (caseManager) {
+          await NotificationService.createNotification({
+            recipient: caseManager._id,
+            sender: req.user._id,
+            type: 'incident_reported',
+            title: '🚨 New Incident Reported',
+            message: `Site Supervisor ${req.user.firstName} ${req.user.lastName} reported a new incident (${incident.incidentNumber}). Please review and create a case.`,
+            relatedEntity: {
+              type: 'incident',
+              id: incident._id
+            },
+            priority: 'high',
+            actionUrl: '/incidents',
+            metadata: {
+              incidentNumber: incident.incidentNumber,
+              severity: severity,
+              incidentType: incidentType,
+              reportedBy: req.user._id,
+              reportedByName: `${req.user.firstName} ${req.user.lastName}`,
+              workerId: worker,
+              employerId: employerId
+            }
+          });
+          
+          console.log(`✅ Case Manager notified about incident ${incident.incidentNumber}`);
+        } else {
+          console.log('⚠️ No case manager found to notify about incident');
+        }
+      } catch (caseManagerNotificationError) {
+        console.error('❌ Error notifying case manager:', caseManagerNotificationError);
+        // Don't fail the incident creation if case manager notification fails
       }
 
     res.status(201).json({

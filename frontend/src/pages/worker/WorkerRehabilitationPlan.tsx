@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useParams } from 'react-router-dom';
 import {
   Box,
   Typography,
@@ -33,10 +34,13 @@ import {
   FitnessCenter,
   Timer,
   Assignment,
+  PlayArrow,
 } from '@mui/icons-material';
-import Layout from '../../components/Layout';
+import LayoutWithSidebar from '../../components/LayoutWithSidebar';
 import api from '../../utils/api';
 import { useAuth } from '../../contexts/AuthContext';
+
+type ExerciseStatus = 'completed' | 'skipped' | 'not_started';
 
 interface Exercise {
   _id: string;
@@ -47,7 +51,7 @@ interface Exercise {
   difficulty: string;
   instructions: string;
   completion?: {
-    status: 'completed' | 'skipped' | 'not_started';
+    status: ExerciseStatus;
     completedAt?: string;
     skippedReason?: string;
     skippedNotes?: string;
@@ -90,35 +94,196 @@ interface RehabilitationPlan {
   };
 }
 
-const WorkerRehabilitationPlan: React.FC = () => {
+// Interface for exercise timer state
+interface ExerciseTimer {
+  exerciseId: string;
+  startTime: number; // timestamp when started
+  duration: number; // in seconds
+  remaining: number; // remaining seconds
+  isRunning: boolean;
+}
+
+// Loading overlay component
+const LoadingOverlay: React.FC<{ message?: string }> = ({ message }) => (
+  <Box
+    sx={{
+      position: 'fixed',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      backgroundColor: 'rgba(255, 255, 255, 0.7)',
+      display: 'flex',
+      flexDirection: 'column',
+      justifyContent: 'center',
+      alignItems: 'center',
+      zIndex: 9999,
+      gap: 2
+    }}
+  >
+    <CircularProgress />
+    {message && (
+      <Typography variant="body1" color="text.secondary">
+        {message}
+      </Typography>
+    )}
+  </Box>
+);
+
+const WorkerRehabilitationPlan: React.FC = (): JSX.Element => {
   const { user } = useAuth();
+  const { id } = useParams<{ id: string }>();
   const [plan, setPlan] = useState<RehabilitationPlan | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [skipDialog, setSkipDialog] = useState(false);
+  const [skipConfirmDialog, setSkipConfirmDialog] = useState(false);
+  const [painDialog, setPainDialog] = useState(false);
   const [selectedExercise, setSelectedExercise] = useState<Exercise | null>(null);
   const [skipReason, setSkipReason] = useState('');
   const [skipNotes, setSkipNotes] = useState('');
+  const [painLevel, setPainLevel] = useState<number | null>(null);
+  const [painNotes, setPainNotes] = useState('');
   const [completingExercise, setCompletingExercise] = useState<string | null>(null);
+  
+  // State for exercise timers
+  const [exerciseTimers, setExerciseTimers] = useState<ExerciseTimer[]>([]);
+  const [timerInterval, setTimerInterval] = useState<NodeJS.Timeout | null>(null);
+
+  // Initialize loading state
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
 
   useEffect(() => {
-    if (user) {
-      fetchRehabilitationPlan();
+    let mounted = true;
+
+    const initializeData = async () => {
+      if (!user) return;
+      
+      try {
+        setLoading(true);
+        await Promise.all([
+          fetchRehabilitationPlan(),
+          loadTimersFromLocalStorage()
+        ]);
+        
+        if (mounted) {
+          setIsInitialLoad(false);
+          setLoading(false);
+        }
+      } catch (error) {
+        if (mounted) {
+          setError('Failed to load rehabilitation plan');
+          setLoading(false);
+        }
+      }
+    };
+
+    initializeData();
+
+    // Cleanup function
+    return () => {
+      mounted = false;
+      if (timerInterval) {
+        clearInterval(timerInterval);
+      }
+    };
+  }, [user, id]);
+  
+  // Load timers from localStorage
+  const loadTimersFromLocalStorage = () => {
+    try {
+      const savedTimers = localStorage.getItem('exerciseTimers');
+      if (savedTimers) {
+        const parsedTimers = JSON.parse(savedTimers) as ExerciseTimer[];
+        
+        // Update remaining time based on elapsed time since last save
+        const updatedTimers = parsedTimers.map(timer => {
+          if (timer.isRunning) {
+            const elapsedSeconds = Math.floor((Date.now() - timer.startTime) / 1000);
+            const newRemaining = Math.max(0, timer.duration - elapsedSeconds);
+            return { ...timer, remaining: newRemaining };
+          }
+          return timer;
+        });
+        
+        setExerciseTimers(updatedTimers);
+        
+        // Start the timer interval if there are running timers
+        if (updatedTimers.some(t => t.isRunning)) {
+          startTimerInterval();
+        }
+      }
+    } catch (error) {
+      console.error('Error loading timers from localStorage:', error);
     }
-  }, [user]);
+  };
+  
+  // Save timers to localStorage
+  const saveTimersToLocalStorage = (timers: ExerciseTimer[]) => {
+    try {
+      localStorage.setItem('exerciseTimers', JSON.stringify(timers));
+    } catch (error) {
+      console.error('Error saving timers to localStorage:', error);
+    }
+  };
+  
+  // Start the timer interval
+  const startTimerInterval = () => {
+    if (timerInterval) {
+      clearInterval(timerInterval);
+    }
+    
+    const interval = setInterval(() => {
+      setExerciseTimers(prevTimers => {
+        const updatedTimers = prevTimers.map(timer => {
+          if (timer.isRunning) {
+            const newRemaining = Math.max(0, timer.remaining - 1);
+            return { ...timer, remaining: newRemaining };
+          }
+          return timer;
+        });
+        
+        // Save updated timers to localStorage
+        saveTimersToLocalStorage(updatedTimers);
+        
+        // If all timers have stopped, clear the interval
+        if (!updatedTimers.some(t => t.isRunning)) {
+          if (timerInterval) {
+            clearInterval(timerInterval);
+            setTimerInterval(null);
+          }
+        }
+        
+        return updatedTimers;
+      });
+    }, 1000);
+    
+    setTimerInterval(interval);
+  };
+  
+  // Clean up interval on unmount
+  useEffect(() => {
+    return () => {
+      if (timerInterval) {
+        clearInterval(timerInterval);
+      }
+    };
+  }, [timerInterval]);
 
   const fetchRehabilitationPlan = async () => {
     try {
       setLoading(true);
-      const response = await api.get('/rehabilitation-plans');
+      console.log('Fetching rehabilitation plan, ID from URL:', id);
       
-      if (response.data.plans && response.data.plans.length > 0) {
-        // Find the most recent active plan
-        const activePlan = response.data.plans.find((p: RehabilitationPlan) => p.status === 'active');
-        if (activePlan) {
-          // Get today's exercises for this plan
-          const todayResponse = await api.get(`/rehabilitation-plans/${activePlan._id}/today`);
+      // If ID is provided in the URL, fetch that specific plan
+      if (id) {
+        try {
+          console.log('Fetching specific plan with ID:', id);
+          // Get today's exercises for this specific plan
+          const todayResponse = await api.get(`/rehabilitation-plans/${id}/today`);
+          console.log('Today response for specific plan:', todayResponse.data);
+          
           // The API returns { plan: {...}, exercises: [...], progressStats: {...} }
           // We need to merge this data into a single plan object
           const planData = {
@@ -126,27 +291,156 @@ const WorkerRehabilitationPlan: React.FC = () => {
             exercises: todayResponse.data.exercises,
             progressStats: todayResponse.data.progressStats
           };
+          console.log('Setting plan data for specific plan:', planData);
           setPlan(planData);
-        } else {
-          setError('No active rehabilitation plan found');
+        } catch (planError) {
+          console.error("Error fetching specific plan:", planError);
+          setError('Failed to load the specified rehabilitation plan');
         }
       } else {
-        setError('No rehabilitation plan assigned');
+        // If no ID provided, get all plans and use the active one
+        console.log('No ID provided, fetching all plans');
+        const response = await api.get('/rehabilitation-plans');
+        console.log('All plans response:', response.data);
+        
+        if (response.data.plans && response.data.plans.length > 0) {
+          console.log('Found', response.data.plans.length, 'plans');
+          
+          // First try to find an active plan
+          const activePlan = response.data.plans.find((p: RehabilitationPlan) => p.status === 'active');
+          console.log('Active plan found:', activePlan ? 'Yes' : 'No', activePlan ? `(ID: ${activePlan._id})` : '');
+          
+          // If no active plan, use the most recent plan
+          const planToUse = activePlan || response.data.plans[0];
+          
+          if (planToUse) {
+            // Get today's exercises for this plan
+            console.log('Fetching exercises for plan ID:', planToUse._id, 'Status:', planToUse.status);
+            const todayResponse = await api.get(`/rehabilitation-plans/${planToUse._id}/today`);
+            console.log('Today response for plan:', todayResponse.data);
+            
+            // The API returns { plan: {...}, exercises: [...], progressStats: {...} }
+            // We need to merge this data into a single plan object
+            const planData = {
+              ...todayResponse.data.plan,
+              exercises: todayResponse.data.exercises,
+              progressStats: todayResponse.data.progressStats
+            };
+            console.log('Setting plan data:', planData);
+            setPlan(planData);
+          } else {
+            console.log('No plans found among', response.data.plans.length, 'plans');
+            console.log('Plan statuses:', response.data.plans.map((p: RehabilitationPlan) => p.status).join(', '));
+            setError('No rehabilitation plan found');
+          }
+        } else {
+          console.log('No plans returned from API');
+          setError('No rehabilitation plan assigned');
+        }
       }
     } catch (err: any) {
+      console.error('Error in fetchRehabilitationPlan:', err);
+      console.error('Error details:', err.response?.data);
       setError(err.response?.data?.message || 'Failed to fetch rehabilitation plan');
     } finally {
       setLoading(false);
     }
   };
 
+  // Start an exercise timer
+  const handleStartExercise = (exerciseId: string) => {
+    const exercise = plan?.exercises.find(e => e._id === exerciseId);
+    if (!exercise) return;
+    
+    // Convert minutes to seconds
+    const durationInSeconds = exercise.duration * 60;
+    
+    // Create new timer
+    const newTimer: ExerciseTimer = {
+      exerciseId,
+      startTime: Date.now(),
+      duration: durationInSeconds,
+      remaining: durationInSeconds,
+      isRunning: true
+    };
+    
+    // Add to timers state
+    const updatedTimers = [...exerciseTimers.filter(t => t.exerciseId !== exerciseId), newTimer];
+    setExerciseTimers(updatedTimers);
+    
+    // Save to localStorage
+    saveTimersToLocalStorage(updatedTimers);
+    
+    // Start the timer interval
+    startTimerInterval();
+    
+    setSuccessMessage('Exercise started! Timer is running.');
+    setTimeout(() => setSuccessMessage(''), 3000);
+  };
+  
+  // Check if an exercise can be completed
+  const canCompleteExercise = (exerciseId: string): boolean => {
+    const timer = exerciseTimers.find(t => t.exerciseId === exerciseId);
+    
+    // If no timer exists or timer has completed (remaining = 0), allow completion
+    return !timer || timer.remaining === 0;
+  };
+  
+  // Complete an exercise
   const handleCompleteExercise = async (exerciseId: string) => {
     try {
+      // Check if the timer has completed
+      if (!canCompleteExercise(exerciseId)) {
+        setError('Please wait for the timer to complete before marking this exercise as done.');
+        setTimeout(() => setError(null), 3000);
+        return;
+      }
+      
       setCompletingExercise(exerciseId);
       
-      await api.post(`/rehabilitation-plans/${plan?._id}/exercises/${exerciseId}/complete`, {
-        completedDuration: plan?.exercises.find(e => e._id === exerciseId)?.duration
+      // Find the selected exercise
+      const exercise = plan?.exercises.find(e => e._id === exerciseId);
+      if (!exercise) {
+        throw new Error('Exercise not found');
+      }
+      
+      // Set the selected exercise and show pain dialog
+      setSelectedExercise(exercise);
+      setPainLevel(null);
+      setPainNotes('');
+      setPainDialog(true);
+      
+    } catch (err: any) {
+      console.error('Error completing exercise:', err);
+      setError(err.response?.data?.message || 'Failed to complete exercise');
+      setCompletingExercise(null);
+    }
+  };
+  
+  // Submit exercise completion with pain data
+  const submitExerciseCompletion = async () => {
+    try {
+      if (!selectedExercise || !plan) return;
+      
+      setLoading(true);
+      
+      // Make the API call with pain data
+      await api.post(`/rehabilitation-plans/${plan._id}/exercises/${selectedExercise._id}/complete`, {
+        duration: selectedExercise.duration,
+        painLevel: painLevel,
+        painNotes: painNotes || undefined
       });
+      
+      // Remove the timer for this exercise
+      const updatedTimers = exerciseTimers.filter(t => t.exerciseId !== selectedExercise._id);
+      setExerciseTimers(updatedTimers);
+      saveTimersToLocalStorage(updatedTimers);
+      
+      // Close the pain dialog
+      setPainDialog(false);
+      setSelectedExercise(null);
+      setPainLevel(null);
+      setPainNotes('');
       
       setSuccessMessage('Exercise marked as completed! Great job!');
       setTimeout(() => setSuccessMessage(''), 3000);
@@ -154,40 +448,116 @@ const WorkerRehabilitationPlan: React.FC = () => {
       // Refresh the plan data
       await fetchRehabilitationPlan();
     } catch (err: any) {
+      console.error('Error submitting exercise completion:', err);
       setError(err.response?.data?.message || 'Failed to complete exercise');
     } finally {
       setCompletingExercise(null);
+      setLoading(false);
     }
   };
 
   const handleSkipExercise = async () => {
     try {
-      if (!selectedExercise || !skipReason) return;
+      if (!selectedExercise || !skipReason || !plan) return;
       
-      await api.post(`/rehabilitation-plans/${plan?._id}/exercises/${selectedExercise._id}/skip`, {
-        reason: skipReason,
-        notes: skipNotes
+      // Set loading state
+      setLoading(true);
+      
+      // Remove any active timer for this exercise
+      const updatedTimers = exerciseTimers.filter(t => t.exerciseId !== selectedExercise._id);
+      setExerciseTimers(updatedTimers);
+      saveTimersToLocalStorage(updatedTimers);
+      
+      // Immediately update the UI to show the exercise as skipped
+      const skippedExerciseId = selectedExercise._id;
+      
+      // Update local state immediately for better UX
+      setPlan(prevPlan => {
+        if (!prevPlan) return null;
+        
+        return {
+          ...prevPlan,
+          exercises: prevPlan.exercises.map(ex => 
+            ex._id === skippedExerciseId
+              ? {
+                  ...ex,
+                  completion: {
+                    status: 'skipped' as ExerciseStatus,
+                    skippedReason: skipReason,
+                    skippedNotes: skipNotes || '',
+                    skippedAt: new Date().toISOString()
+                  }
+                }
+              : ex
+          )
+        };
       });
       
-      setSuccessMessage('Exercise marked as skipped. Remember to communicate any concerns with your clinician.');
-      setTimeout(() => setSuccessMessage(''), 3000);
-      
-      // Reset skip dialog
+      // Reset all dialogs and form state immediately
       setSkipDialog(false);
+      setSkipConfirmDialog(false);
       setSelectedExercise(null);
       setSkipReason('');
       setSkipNotes('');
       
-      // Refresh the plan data
-      await fetchRehabilitationPlan();
+      setSuccessMessage('Exercise marked as skipped. Remember to communicate any concerns with your clinician.');
+      setTimeout(() => setSuccessMessage(''), 3000);
+      
+      // Make API call after UI updates
+      const response = await api.post(`/rehabilitation-plans/${plan._id}/exercises/${skippedExerciseId}/skip`, {
+        reason: skipReason,
+        notes: skipNotes
+      });
+      
+      // Refresh the plan data in the background to ensure consistency with server
+      fetchRehabilitationPlan().catch(error => {
+        console.error('Error refreshing plan data:', error);
+      });
     } catch (err: any) {
+      console.error('Error skipping exercise:', err);
       setError(err.response?.data?.message || 'Failed to skip exercise');
+      
+      // Refresh the plan to revert any optimistic updates if there was an error
+      fetchRehabilitationPlan().catch(error => {
+        console.error('Error refreshing plan data after error:', error);
+      });
+    } finally {
+      setLoading(false);
     }
   };
 
+  // Check if any exercise has an active timer
+  const hasActiveTimers = (): boolean => {
+    return exerciseTimers.some(timer => timer.isRunning && timer.remaining > 0);
+  };
+
+  // Check if any exercise is skipped
+  const hasSkippedExercises = (): boolean => {
+    if (!plan?.exercises) return false;
+    return plan.exercises.some(exercise => exercise.completion?.status === 'skipped' as ExerciseStatus);
+  };
+  
   const handleCompleteAll = async () => {
     try {
+      // Check if any timers are still running
+      if (hasActiveTimers()) {
+        setError('Please wait for all exercise timers to complete before marking all as done.');
+        setTimeout(() => setError(null), 3000);
+        return;
+      }
+
+      // Check if any exercises are skipped
+      if (hasSkippedExercises()) {
+        setError('Cannot mark all as done when some exercises are skipped. Please contact your clinician if you need to modify your plan.');
+        setTimeout(() => setError(null), 3000);
+        return;
+      }
+      
       await api.post(`/rehabilitation-plans/${plan?._id}/complete-all`);
+      
+      // Clear all timers
+      setExerciseTimers([]);
+      saveTimersToLocalStorage([]);
       
       setSuccessMessage('All exercises completed! Excellent work! 🎉');
       setTimeout(() => setSuccessMessage(''), 5000);
@@ -234,45 +604,82 @@ const WorkerRehabilitationPlan: React.FC = () => {
   const totalExercises = plan?.exercises.length || 0;
   const progressPercentage = totalExercises > 0 ? (completedExercises / totalExercises) * 100 : 0;
 
-  if (loading) {
+  // Show loading state only during initial load
+  if (isInitialLoad) {
     return (
-      <Layout>
-        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '50vh' }}>
+      <LayoutWithSidebar>
+        <Box 
+          sx={{ 
+            display: 'flex', 
+            flexDirection: 'column',
+            justifyContent: 'center', 
+            alignItems: 'center', 
+            height: '50vh',
+            gap: 2
+          }}
+        >
           <CircularProgress />
+          <Typography variant="body1" color="text.secondary">
+            Loading your rehabilitation plan...
+          </Typography>
         </Box>
-      </Layout>
+      </LayoutWithSidebar>
     );
   }
 
   if (error) {
     return (
-      <Layout>
+      <LayoutWithSidebar>
         <Box sx={{ p: 3 }}>
           <Alert severity="error" sx={{ mb: 3 }}>
             {error}
           </Alert>
-          <Button variant="contained" onClick={fetchRehabilitationPlan}>
+          
+          {error === 'No rehabilitation plan assigned' && (
+            <Card sx={{ mt: 2, p: 2, borderRadius: '10px', boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}>
+              <CardContent>
+                <Typography variant="h6" gutterBottom>
+                  What to do next:
+                </Typography>
+                <Typography variant="body1" paragraph>
+                  Your clinician needs to assign a rehabilitation plan to you. Please contact your clinician or case manager.
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  If you believe this is an error and you should have a rehabilitation plan assigned, please refresh the page or contact support.
+                </Typography>
+              </CardContent>
+            </Card>
+          )}
+          
+          <Button 
+            variant="contained" 
+            onClick={fetchRehabilitationPlan}
+            sx={{ mt: 2 }}
+          >
             Try Again
           </Button>
         </Box>
-      </Layout>
+      </LayoutWithSidebar>
     );
   }
 
   if (!plan) {
     return (
-      <Layout>
+      <LayoutWithSidebar>
         <Box sx={{ p: 3 }}>
           <Alert severity="info">
             No rehabilitation plan assigned. Please contact your clinician.
           </Alert>
         </Box>
-      </Layout>
+      </LayoutWithSidebar>
     );
   }
 
   return (
-    <Layout>
+    <LayoutWithSidebar>
+      {/* Show loading overlay for non-initial loading states */}
+      {loading && !isInitialLoad && <LoadingOverlay message="Updating..." />}
+      
       <Box sx={{ p: { xs: 2, md: 3 } }}>
         {/* Header */}
         <Box sx={{ mb: 4 }}>
@@ -380,27 +787,105 @@ const WorkerRehabilitationPlan: React.FC = () => {
                           {exercise.duration} min
                         </Typography>
                       </Box>
-                      {exercise.completion?.status === 'not_started' && (
-                        <Box sx={{ display: 'flex', gap: 1 }}>
-                          <Button
-                            variant="contained"
-                            color="success"
+                      {/* Show exercise controls only if not completed or skipped */}
+                      {(exercise.completion?.status === 'not_started' || !exercise.completion?.status) && (
+                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                          {/* Timer display */}
+                          {exerciseTimers.some(timer => timer.exerciseId === exercise._id) && (
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                              <Timer color="action" />
+                              <Typography variant="body2" color="text.secondary">
+                                {(() => {
+                                  const timer = exerciseTimers.find(t => t.exerciseId === exercise._id);
+                                  if (!timer) return '00:00';
+                                  const minutes = Math.floor(timer.remaining / 60);
+                                  const seconds = timer.remaining % 60;
+                                  return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+                                })()}
+                              </Typography>
+                              <LinearProgress 
+                                variant="determinate" 
+                                value={(() => {
+                                  const timer = exerciseTimers.find(t => t.exerciseId === exercise._id);
+                                  if (!timer) return 0;
+                                  return ((timer.duration - timer.remaining) / timer.duration) * 100;
+                                })()}
+                                sx={{ flexGrow: 1, height: 8, borderRadius: 4 }}
+                              />
+                            </Box>
+                          )}
+                          
+                          <Box sx={{ display: 'flex', gap: 1 }}>
+                            {/* Show Start button if no timer exists */}
+                            {!exerciseTimers.some(timer => timer.exerciseId === exercise._id) && (
+                              <Button
+                                variant="contained"
+                                color="primary"
+                                size="small"
+                                startIcon={<PlayArrow />}
+                                onClick={() => handleStartExercise(exercise._id)}
+                              >
+                                Start
+                              </Button>
+                            )}
+                            
+                            {/* Show Done button only if timer exists and has completed */}
+                            {exerciseTimers.some(timer => 
+                              timer.exerciseId === exercise._id && 
+                              timer.remaining === 0
+                            ) && (
+                              <Button
+                                variant="contained"
+                                color="success"
+                                size="small"
+                                startIcon={<CheckCircle />}
+                                onClick={() => handleCompleteExercise(exercise._id)}
+                                disabled={completingExercise === exercise._id}
+                              >
+                                Done
+                              </Button>
+                            )}
+                            
+                            {/* Show Skip button only if exercise is not completed and not skipped */}
+                            {(!exercise.completion?.status || exercise.completion.status === 'not_started') && (
+                              <Button
+                                variant="outlined"
+                                color="warning"
+                                size="small"
+                                startIcon={<SkipNext />}
+                                onClick={() => openSkipDialog(exercise)}
+                                disabled={loading}
+                                sx={{
+                                  '&:hover': {
+                                    backgroundColor: 'warning.light',
+                                    color: 'warning.contrastText',
+                                    borderColor: 'warning.main'
+                                  }
+                                }}
+                              >
+                                Skip
+                              </Button>
+                            )}
+                          </Box>
+                        </Box>
+                      )}
+                      {exercise.completion?.status === 'skipped' && (
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <Chip 
+                            label="Skipped" 
+                            color="warning" 
                             size="small"
-                            startIcon={<CheckCircle />}
-                            onClick={() => handleCompleteExercise(exercise._id)}
-                            disabled={completingExercise === exercise._id}
-                          >
-                            Done
-                          </Button>
-                          <Button
-                            variant="outlined"
-                            color="warning"
-                            size="small"
-                            startIcon={<SkipNext />}
-                            onClick={() => openSkipDialog(exercise)}
-                          >
-                            Skip
-                          </Button>
+                            icon={<SkipNext />}
+                            sx={{ 
+                              '& .MuiChip-icon': { 
+                                fontSize: '1.2rem',
+                                marginLeft: '4px'
+                              }
+                            }}
+                          />
+                          <Typography variant="caption" color="text.secondary">
+                            {exercise.completion.skippedReason}
+                          </Typography>
                         </Box>
                       )}
                       {exercise.completion?.status === 'completed' && (
@@ -418,17 +903,79 @@ const WorkerRehabilitationPlan: React.FC = () => {
         </Card>
 
         {/* Complete All Button */}
-        {completedExercises < totalExercises && (
+        {completedExercises < totalExercises && !hasSkippedExercises() && (
           <Box sx={{ textAlign: 'center', mb: 3 }}>
             <Button
               variant="contained"
               size="large"
               startIcon={<CheckCircle />}
               onClick={handleCompleteAll}
-              sx={{ px: 4, py: 1.5 }}
+              disabled={hasActiveTimers() || hasSkippedExercises()}
+              sx={{ 
+                px: 4, 
+                py: 1.5,
+                position: 'relative',
+                '&.Mui-disabled': {
+                  bgcolor: 'grey.300',
+                }
+              }}
             >
               All Done
+              {hasActiveTimers() && (
+                <Box 
+                  component="span" 
+                  sx={{ 
+                    position: 'absolute', 
+                    top: -10, 
+                    right: -10, 
+                    bgcolor: 'warning.main',
+                    color: 'warning.contrastText',
+                    borderRadius: '50%',
+                    width: 22,
+                    height: 22,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '0.75rem',
+                    fontWeight: 'bold'
+                  }}
+                >
+                  <Timer fontSize="small" />
+                </Box>
+              )}
+              {hasSkippedExercises() && (
+                <Box 
+                  component="span" 
+                  sx={{ 
+                    position: 'absolute', 
+                    top: -10, 
+                    right: -10, 
+                    bgcolor: 'warning.main',
+                    color: 'warning.contrastText',
+                    borderRadius: '50%',
+                    width: 22,
+                    height: 22,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '0.75rem',
+                    fontWeight: 'bold'
+                  }}
+                >
+                  <SkipNext fontSize="small" />
+                </Box>
+              )}
             </Button>
+            {hasActiveTimers() && (
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+                Please wait for all exercise timers to complete
+              </Typography>
+            )}
+            {hasSkippedExercises() && (
+              <Typography variant="caption" color="warning.main" sx={{ display: 'block', mt: 1 }}>
+                Cannot complete all exercises when some are skipped
+              </Typography>
+            )}
           </Box>
         )}
 
@@ -484,9 +1031,20 @@ const WorkerRehabilitationPlan: React.FC = () => {
         </Card>
 
         {/* Skip Exercise Dialog */}
-        <Dialog open={skipDialog} onClose={() => setSkipDialog(false)} maxWidth="sm" fullWidth>
+        <Dialog 
+          open={skipDialog} 
+          onClose={() => !loading && setSkipDialog(false)} 
+          maxWidth="sm" 
+          fullWidth
+        >
           <DialogTitle>Skip Exercise</DialogTitle>
           <DialogContent>
+            {exerciseTimers.some(t => t.exerciseId === selectedExercise?._id && t.isRunning) && (
+              <Alert severity="info" sx={{ mb: 2 }}>
+                Note: You can skip this exercise even though the timer has started. The timer will be cancelled.
+              </Alert>
+            )}
+            
             <Typography variant="body1" sx={{ mb: 2 }}>
               Why are you skipping "{selectedExercise?.name}"?
             </Typography>
@@ -497,11 +1055,14 @@ const WorkerRehabilitationPlan: React.FC = () => {
                 value={skipReason}
                 onChange={(e) => setSkipReason(e.target.value)}
                 label="Reason"
+                disabled={loading}
               >
                 <MenuItem value="pain">Pain or discomfort</MenuItem>
                 <MenuItem value="fatigue">Fatigue</MenuItem>
                 <MenuItem value="time_constraint">Time constraint</MenuItem>
                 <MenuItem value="equipment">Missing equipment</MenuItem>
+                <MenuItem value="environment">Unsuitable environment</MenuItem>
+                <MenuItem value="energy">Low energy level</MenuItem>
                 <MenuItem value="other">Other</MenuItem>
               </Select>
             </FormControl>
@@ -513,24 +1074,173 @@ const WorkerRehabilitationPlan: React.FC = () => {
               rows={3}
               value={skipNotes}
               onChange={(e) => setSkipNotes(e.target.value)}
-              placeholder="Please provide any additional details..."
+              placeholder="Please provide any additional details about why you need to skip this exercise. This will help your clinician adjust your plan if needed."
+              disabled={loading}
             />
           </DialogContent>
           <DialogActions>
-            <Button onClick={() => setSkipDialog(false)}>Cancel</Button>
             <Button 
-              onClick={handleSkipExercise} 
+              onClick={() => setSkipDialog(false)}
+              disabled={loading}
+            >
+              Cancel
+            </Button>
+            <Button 
+              onClick={() => {
+                if (skipReason) {
+                  setSkipConfirmDialog(true);
+                }
+              }}
               variant="contained" 
               color="warning"
-              disabled={!skipReason}
+              disabled={!skipReason || loading}
             >
               Skip Exercise
             </Button>
           </DialogActions>
         </Dialog>
+
+        {/* Skip Confirmation Dialog */}
+        <Dialog
+          open={skipConfirmDialog}
+          onClose={() => !loading && setSkipConfirmDialog(false)}
+          maxWidth="xs"
+          fullWidth
+        >
+          <DialogTitle sx={{ pb: 1 }}>Confirm Skip Exercise</DialogTitle>
+          <DialogContent sx={{ pt: '8px !important' }}>
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              Are you sure you want to skip "{selectedExercise?.name}"?
+            </Alert>
+            <Typography variant="body2" color="text.secondary">
+              Reason: {skipReason === 'other' ? 'Other' : skipReason.replace('_', ' ')}
+              {skipNotes && (
+                <>
+                  <br />
+                  Notes: {skipNotes}
+                </>
+              )}
+            </Typography>
+          </DialogContent>
+          <DialogActions>
+            <Button 
+              onClick={() => setSkipConfirmDialog(false)}
+              disabled={loading}
+            >
+              Cancel
+            </Button>
+            <Button 
+              onClick={handleSkipExercise}
+              variant="contained" 
+              color="warning"
+              disabled={loading}
+              startIcon={loading && <CircularProgress size={20} color="inherit" />}
+            >
+              {loading ? 'Confirming Skip...' : 'Yes, Skip Exercise'}
+            </Button>
+          </DialogActions>
+        </Dialog>
+        
+        {/* Pain Level Dialog */}
+        <Dialog
+          open={painDialog}
+          onClose={() => !loading && setPainDialog(false)}
+          maxWidth="sm"
+          fullWidth
+        >
+          <DialogTitle>
+            Rate Your Pain Level
+          </DialogTitle>
+          <DialogContent>
+            <Box sx={{ py: 2 }}>
+              <Typography variant="body1" gutterBottom>
+                How much pain did you experience during "{selectedExercise?.name}"?
+              </Typography>
+              
+              <Typography variant="body2" color="text.secondary" gutterBottom sx={{ mt: 2 }}>
+                Rate your pain from 0 (no pain) to 10 (worst pain imaginable)
+              </Typography>
+              
+              <Box sx={{ 
+                display: 'flex', 
+                justifyContent: 'space-between', 
+                alignItems: 'center', 
+                my: 3,
+                mx: 2
+              }}>
+                <Typography variant="body2" color="text.secondary">No Pain</Typography>
+                <Box sx={{ 
+                  display: 'flex', 
+                  gap: 1,
+                  flexWrap: 'wrap',
+                  justifyContent: 'center',
+                  width: '100%',
+                  maxWidth: 500,
+                  mx: 'auto'
+                }}>
+                  {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((level) => (
+                    <Button
+                      key={level}
+                      variant={painLevel === level ? "contained" : "outlined"}
+                      color={
+                        level <= 3 ? "success" : 
+                        level <= 6 ? "warning" : 
+                        "error"
+                      }
+                      onClick={() => setPainLevel(level)}
+                      sx={{ 
+                        minWidth: 40, 
+                        height: 40,
+                        borderRadius: '50%',
+                        p: 0
+                      }}
+                    >
+                      {level}
+                    </Button>
+                  ))}
+                </Box>
+                <Typography variant="body2" color="text.secondary">Severe Pain</Typography>
+              </Box>
+              
+              <Box sx={{ mt: 3 }}>
+                <TextField
+                  fullWidth
+                  label="Additional Notes (Optional)"
+                  placeholder="Describe your pain (location, type, when it occurred, etc.)"
+                  multiline
+                  rows={3}
+                  value={painNotes}
+                  onChange={(e) => setPainNotes(e.target.value)}
+                  disabled={loading}
+                />
+              </Box>
+            </Box>
+          </DialogContent>
+          <DialogActions>
+            <Button 
+              onClick={() => {
+                setPainDialog(false);
+                setCompletingExercise(null);
+              }}
+              disabled={loading}
+            >
+              Cancel
+            </Button>
+            <Button 
+              onClick={submitExerciseCompletion}
+              variant="contained" 
+              color="primary"
+              disabled={painLevel === null || loading}
+              startIcon={loading && <CircularProgress size={20} color="inherit" />}
+            >
+              {loading ? 'Submitting...' : 'Submit'}
+            </Button>
+          </DialogActions>
+        </Dialog>
       </Box>
-    </Layout>
+    </LayoutWithSidebar>
   );
 };
 
 export default WorkerRehabilitationPlan;
+

@@ -3,13 +3,9 @@ const tokens = new csrf();
 
 // CSRF protection middleware
 const csrfProtection = (req, res, next) => {
-  // Skip CSRF for GET requests and public auth endpoints only
+  // Skip CSRF for GET requests and health checks only
   if (req.method === 'GET' || 
       req.path.startsWith('/api/health') ||
-      req.path.startsWith('/api/auth/login') ||
-      req.path.startsWith('/api/auth/register') ||
-      req.path.startsWith('/api/auth/forgot-password') ||
-      req.path.startsWith('/api/auth/reset-password') ||
       req.path.startsWith('/api/csrf-token')) {
     return next();
   }

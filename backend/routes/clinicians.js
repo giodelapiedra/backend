@@ -6,6 +6,8 @@ const asyncHandler = require('../middleware/asyncHandler');
 const User = require('../models/User');
 const Case = require('../models/Case');
 const Appointment = require('../models/Appointment');
+const { getClinicianTasks, getClinicianWorkload } = require('../controllers/clinicianTaskController');
+const { getActivityMonitor } = require('../controllers/activityMonitorController');
 
 // Helper function to handle validation errors
 const handleValidationErrors = (req, res, next) => {
@@ -18,6 +20,30 @@ const handleValidationErrors = (req, res, next) => {
   }
   next();
 };
+
+// @route   GET /api/clinicians/tasks
+// @desc    Get clinician tasks (cases and appointments)
+// @access  Private (Clinician only)
+router.get('/tasks', [
+  authMiddleware,
+  roleMiddleware('clinician')
+], asyncHandler(getClinicianTasks));
+
+// @route   GET /api/clinicians/workload
+// @desc    Get clinician workload summary
+// @access  Private (Clinician only)
+router.get('/workload', [
+  authMiddleware,
+  roleMiddleware('clinician')
+], asyncHandler(getClinicianWorkload));
+
+// @route   GET /api/clinicians/activity-monitor
+// @desc    Get activity monitor data for clinician
+// @access  Private (Clinician only)
+router.get('/activity-monitor', [
+  authMiddleware,
+  roleMiddleware('clinician')
+], asyncHandler(getActivityMonitor));
 
 // @route   GET /api/clinicians/available
 // @desc    Get available clinicians with their current workload
@@ -243,3 +269,5 @@ router.get('/', [
 }));
 
 module.exports = router;
+
+

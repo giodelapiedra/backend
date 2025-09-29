@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import axios from 'axios';
 import Cookies from 'js-cookie';
-import { clearCSRFToken } from '../utils/api';
+import api, { clearCSRFToken } from '../utils/api';
 
 export interface User {
   id: string;
@@ -9,6 +9,9 @@ export interface User {
   lastName: string;
   email: string;
   role: string;
+  team?: string;
+  teamLeader?: string;
+  package?: string;
   phone?: string;
   address?: {
     street?: string;
@@ -33,6 +36,7 @@ export interface User {
     medications?: string[];
     medicalConditions?: string[];
   };
+  specialization?: string;
 }
 
 interface AuthContextType {
@@ -77,9 +81,6 @@ interface RegisterData {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Configure axios defaults
-axios.defaults.baseURL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
-
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(() => {
     // Try to get user from cookies immediately
@@ -105,10 +106,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   // Set up axios interceptor for token
   useEffect(() => {
     if (token) {
-      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+      api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
       console.log('Setting Authorization header with token');
     } else {
-      delete axios.defaults.headers.common['Authorization'];
+      delete api.defaults.headers.common['Authorization'];
       console.log('Removing Authorization header - no token');
     }
   }, [token]);
@@ -120,36 +121,51 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       
       if (storedToken) {
         try {
-          // Set token in axios headers
-          axios.defaults.headers.common['Authorization'] = `Bearer ${storedToken}`;
+          // Set token in api headers
+          api.defaults.headers.common['Authorization'] = `Bearer ${storedToken}`;
           
           // If we already have user data from cookies, verify in background
           if (user) {
             // Verify token with server in background
             try {
-              const response = await axios.get('/auth/me');
-              setUser(response.data.user);
-              setToken(storedToken);
+              const response = await api.get('/auth/me');
+              const freshUser = response.data.user;
               
-              // Update stored user data with fresh data from server
-              Cookies.set('user', JSON.stringify(response.data.user), { secure: true, sameSite: 'strict', expires: 7 });
+              // Only update if the user data has actually changed
+              if (JSON.stringify(freshUser) !== JSON.stringify(user)) {
+                setUser(freshUser);
+                
+                // Update stored user data with fresh data from server
+                Cookies.set('user', JSON.stringify(freshUser), { 
+                  secure: process.env.NODE_ENV === 'production', 
+                  sameSite: 'strict', 
+                  expires: 7,
+                  path: '/'
+                });
+              }
+              setToken(storedToken);
             } catch (error: any) {
               console.error('Error verifying authentication:', error.message);
               // Clear auth data
               Cookies.remove('token');
               Cookies.remove('user');
-              delete axios.defaults.headers.common['Authorization'];
+              delete api.defaults.headers.common['Authorization'];
               setUser(null);
               setToken(null);
             }
           } else {
             // No user data, need to verify token
-            const response = await axios.get('/auth/me');
+            const response = await api.get('/auth/me');
             setUser(response.data.user);
             setToken(storedToken);
             
             // Update stored user data with fresh data from server
-            Cookies.set('user', JSON.stringify(response.data.user), { secure: true, sameSite: 'strict', expires: 7 });
+            Cookies.set('user', JSON.stringify(response.data.user), { 
+              secure: process.env.NODE_ENV === 'production', 
+              sameSite: 'strict', 
+              expires: 7,
+              path: '/'
+            });
           }
         } catch (error: any) {
           console.error('Error verifying authentication:', error.message);
@@ -157,7 +173,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           // Clear auth data
           Cookies.remove('token');
           Cookies.remove('user');
-          delete axios.defaults.headers.common['Authorization'];
+          delete api.defaults.headers.common['Authorization'];
           setUser(null);
           setToken(null);
         }
@@ -167,7 +183,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     };
 
     checkAuth();
-  }, []); // Empty dependency array - only run once on mount
+  }, [user]); // Include user dependency
 
   const login = async (email: string, password: string) => {
     try {
@@ -175,7 +191,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setError(null);
       
       console.log('Attempting login for:', email);
-      const response = await axios.post('/auth/login', { email, password });
+      const response = await api.post('/auth/login', { email, password });
       console.log('Login response received:', response.status);
       
       const { token: newToken, user: userData } = response.data;
@@ -184,7 +200,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       
       // Store token in cookies (secure, httpOnly would be better but requires backend support)
       Cookies.set('token', newToken, { 
-        secure: true, 
+        secure: process.env.NODE_ENV === 'production', 
         sameSite: 'strict', 
         expires: 7, // 7 days expiry
         path: '/' // Ensure cookie is available on all paths
@@ -192,7 +208,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       
       // Store user data in cookies
       Cookies.set('user', JSON.stringify(userData), { 
-        secure: true, 
+        secure: process.env.NODE_ENV === 'production', 
         sameSite: 'strict', 
         expires: 7,
         path: '/'
@@ -203,7 +219,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       
       setToken(newToken);
       setUser(userData);
-      axios.defaults.headers.common['Authorization'] = `Bearer ${newToken}`;
+      api.defaults.headers.common['Authorization'] = `Bearer ${newToken}`;
       console.log('Authorization header set for future requests');
     } catch (error: any) {
       console.error('Login error:', error);
@@ -240,14 +256,14 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         if (userData.medicalInfo) formData.append('medicalInfo', JSON.stringify(userData.medicalInfo));
         formData.append('profileImage', profilePhoto);
         
-        response = await axios.post('/auth/register', formData, {
+        response = await api.post('/auth/register', formData, {
           headers: {
             'Content-Type': 'multipart/form-data',
           },
         });
       } else {
         // Regular JSON request without photo
-        response = await axios.post('/auth/register', userData);
+        response = await api.post('/auth/register', userData);
       }
       
       const { token: newToken, user: newUser } = response.data;
@@ -255,14 +271,24 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       console.log('Registration successful, storing user data:', newUser);
       
       // Store token in cookies
-      Cookies.set('token', newToken, { secure: true, sameSite: 'strict', expires: 7 }); // 7 days expiry
+      Cookies.set('token', newToken, { 
+        secure: process.env.NODE_ENV === 'production', 
+        sameSite: 'strict', 
+        expires: 7,
+        path: '/'
+      }); // 7 days expiry
       
       // Store user data in cookies
-      Cookies.set('user', JSON.stringify(newUser), { secure: true, sameSite: 'strict', expires: 7 });
+      Cookies.set('user', JSON.stringify(newUser), { 
+        secure: process.env.NODE_ENV === 'production', 
+        sameSite: 'strict', 
+        expires: 7,
+        path: '/'
+      });
       
       setToken(newToken);
       setUser(newUser);
-      axios.defaults.headers.common['Authorization'] = `Bearer ${newToken}`;
+      api.defaults.headers.common['Authorization'] = `Bearer ${newToken}`;
     } catch (error: any) {
       console.error('Registration error:', error);
       
@@ -289,13 +315,13 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const refreshUser = async () => {
     try {
-      const response = await axios.get('/auth/me');
+      const response = await api.get('/auth/me');
       const updatedUser = response.data.user;
       setUser(updatedUser);
       
       // Update stored user data with fresh data from server
       Cookies.set('user', JSON.stringify(updatedUser), { 
-        secure: true, 
+        secure: process.env.NODE_ENV === 'production', 
         sameSite: 'strict', 
         expires: 7,
         path: '/'
@@ -307,15 +333,31 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
-  const logout = () => {
-    Cookies.remove('token');
-    Cookies.remove('user');
+  const logout = async () => {
+    try {
+      // Call backend logout endpoint to clear server-side cookies
+      await api.post('/auth/logout');
+    } catch (error) {
+      // Continue with logout even if backend call fails
+      console.log('Backend logout failed, continuing with frontend logout');
+    }
+    
+    // Clear frontend cookies and state with all possible configurations
+    Cookies.remove('token', { path: '/' });
+    Cookies.remove('user', { path: '/' });
+    Cookies.remove('token', { path: '/', domain: 'localhost' });
+    Cookies.remove('user', { path: '/', domain: 'localhost' });
+    
     clearCSRFToken(); // Clear CSRF token
     // Clear password verification for auth logs
     sessionStorage.removeItem('authLogsPasswordVerified');
+    localStorage.clear(); // Clear all localStorage
+    
     setToken(null);
     setUser(null);
-    delete axios.defaults.headers.common['Authorization'];
+    delete api.defaults.headers.common['Authorization'];
+    
+    console.log('Logout completed - all cookies and state cleared');
   };
 
   const value = {

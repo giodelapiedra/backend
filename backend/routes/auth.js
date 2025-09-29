@@ -4,10 +4,17 @@ const fs = require('fs');
 const path = require('path');
 const User = require('../models/User');
 const { generateToken, authMiddleware } = require('../middleware/auth');
-const { handleValidationErrors, asyncHandler } = require('../middleware/errorHandler');
+const { asyncHandler } = require('../middleware/errorHandler');
 const { authLimiter, registrationLimiter, passwordResetLimiter } = require('../middleware/rateLimiter');
 const { uploadSingleUserPhoto } = require('../middleware/upload');
 const { logLoginActivity, logLogoutActivity } = require('../middleware/authLogger');
+// Import centralized validators
+const { 
+  validateLogin,
+  validateRegister,
+  validatePassword,
+  handleValidationErrors 
+} = require('../middleware/validators');
 
 const router = express.Router();
 
@@ -143,12 +150,13 @@ router.post('/register', [
   // Generate token
   const token = generateToken(user._id);
 
-  // Set cookie with token (secure in production, httpOnly for security)
+  // Import secure cookie settings
+  const { secureCookieSettings } = require('../middleware/securityHeaders');
+  
+  // Set cookie with enhanced security for registration
   res.cookie('token', token, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
-    maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+    ...secureCookieSettings,
+    priority: 'high'
   });
 
   res.status(201).json({
@@ -160,6 +168,9 @@ router.post('/register', [
       lastName: user.lastName,
       email: user.email,
       role: user.role,
+      team: user.team,
+      teamLeader: user.teamLeader,
+      package: user.package,
       phone: user.phone,
       address: user.address,
       emergencyContact: user.emergencyContact,
@@ -170,60 +181,53 @@ router.post('/register', [
 }));
 
 // @route   POST /api/auth/login
-// @desc    Login user
+// @desc    Login user - OPTIMIZED
 // @access  Public
 router.post('/login', [
   // authLimiter, // DISABLED
   body('email').isEmail().normalizeEmail().withMessage('Valid email is required'),
   body('password').notEmpty().withMessage('Password is required'),
+  body('rememberMe').optional().isBoolean().withMessage('Remember me must be a boolean'),
   handleValidationErrors
 ], asyncHandler(async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password, rememberMe = false } = req.body;
 
-  console.log('🔍 LOGIN DEBUG:');
-  console.log('  Email:', email);
-  console.log('  Password:', password);
+  // Security: Never log passwords or sensitive information
+  console.log('🔐 Login attempt for email:', email.substring(0, 3) + '***');
 
-  // Find user by email
-  const user = await User.findOne({ email }).select('+password');
-  console.log('  User found:', user ? 'YES' : 'NO');
+  // Optimized user lookup with projection
+  const user = await User.findOne({ email })
+    .select('+password')
+    .lean(); // Use lean() for better performance
+  
   if (!user) {
-    console.log('❌ User not found for email:', email);
+    // Security: Use generic error message to prevent user enumeration
     return res.status(401).json({ message: 'Invalid credentials' });
   }
 
   // Check if user is active
-  console.log('  User active:', user.isActive);
   if (!user.isActive) {
-    console.log('❌ User is not active');
     return res.status(401).json({ message: 'Account is deactivated' });
   }
 
-  // Check if account is locked (DISABLED)
-  // if (user.isLocked) {
-  //   return res.status(401).json({ 
-  //     message: 'Account is temporarily locked due to too many failed login attempts. Please try again later.' 
-  //   });
-  // }
-
   // Check password
-  console.log('  Checking password...');
-  const isMatch = await user.comparePassword(password);
-  console.log('  Password match:', isMatch);
+  const bcrypt = require('bcryptjs');
+  const isMatch = await bcrypt.compare(password, user.password);
+  
   if (!isMatch) {
-    console.log('❌ Password does not match');
-    // Increment login attempts
-    await user.incLoginAttempts();
+    // Security: Log failed attempt without exposing details
+    console.log('⚠️ Failed login attempt for user ID:', user._id);
+    // Increment login attempts (optimized update)
+    await User.findByIdAndUpdate(user._id, { $inc: { loginAttempts: 1 } });
     
     return res.status(401).json({ message: 'Invalid credentials' });
   }
 
-  // Reset login attempts on successful login
-  await user.resetLoginAttempts();
-
-  // Update last login
-  user.lastLogin = new Date();
-  await user.save();
+  // Optimized updates - use findByIdAndUpdate for better performance
+  await User.findByIdAndUpdate(user._id, {
+    $unset: { loginAttempts: 1, lockUntil: 1 },
+    $set: { lastLogin: new Date() }
+  });
 
   // Generate token
   const token = generateToken(user._id);
@@ -231,12 +235,17 @@ router.post('/login', [
   // Log successful login
   await logLoginActivity(user, req, true);
 
-  // Set cookie with token (secure in production, httpOnly for security)
+  // Import secure cookie settings
+  const { sessionCookieSettings, rememberMeCookieSettings } = require('../middleware/securityHeaders');
+  
+  // Set cookie with enhanced security based on remember me preference
+  const cookieSettings = rememberMe ? rememberMeCookieSettings : sessionCookieSettings;
+  
   res.cookie('token', token, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
-    maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+    ...cookieSettings,
+    // Add additional security headers
+    priority: 'high', // High priority cookie
+    partitioned: false // Not partitioned for main auth cookie
   });
 
   res.json({
@@ -248,6 +257,9 @@ router.post('/login', [
       lastName: user.lastName,
       email: user.email,
       role: user.role,
+      team: user.team,
+      teamLeader: user.teamLeader,
+      package: user.package,
       phone: user.phone,
       address: user.address,
       emergencyContact: user.emergencyContact,
@@ -270,6 +282,8 @@ router.get('/me', authMiddleware, asyncHandler(async (req, res) => {
       lastName: req.user.lastName,
       email: req.user.email,
       role: req.user.role,
+      team: req.user.team,
+      teamLeader: req.user.teamLeader,
       phone: req.user.phone,
       address: req.user.address,
       employer: req.user.employer,
@@ -320,14 +334,35 @@ router.post('/logout', authMiddleware, asyncHandler(async (req, res) => {
   // Log logout activity
   await logLogoutActivity(req.user, req);
   
-  // Clear the token cookie
+  // Import secure cookie settings for proper clearing
+  const { secureCookieSettings } = require('../middleware/securityHeaders');
+  
+  // Clear the token cookie with all possible configurations
   res.clearCookie('token', {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict'
+    sameSite: 'strict',
+    path: '/'
   });
   
-  res.json({ message: 'Logout successful' });
+  // Also clear any other session cookies that might exist
+  res.clearCookie('session', {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict',
+    path: '/'
+  });
+  
+  // Set additional security headers for logout
+  res.header('Clear-Site-Data', '"cookies", "storage"');
+  res.header('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.header('Pragma', 'no-cache');
+  res.header('Expires', '0');
+  
+  res.json({ 
+    message: 'Logout successful',
+    timestamp: new Date().toISOString()
+  });
 }));
 
 // @route   POST /api/auth/verify-password

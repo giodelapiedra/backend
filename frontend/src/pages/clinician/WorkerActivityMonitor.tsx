@@ -60,7 +60,7 @@ import {
   Sort,
 } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext';
-import Layout from '../../components/Layout';
+import LayoutWithSidebar from '../../components/LayoutWithSidebar';
 import api from '../../utils/api';
 
 interface ActivityLog {
@@ -141,6 +141,9 @@ const WorkerActivityMonitor: React.FC = () => {
     isReviewed: '',
     dateRange: ''
   });
+  
+  // Priority tab state
+  const [selectedPriority, setSelectedPriority] = useState<'all' | 'high' | 'medium' | 'low'>('all');
 
   const fetchData = async () => {
     try {
@@ -226,6 +229,13 @@ const WorkerActivityMonitor: React.FC = () => {
   };
 
   const filteredLogs = activityLogs.filter(log => {
+    // Priority tab filter
+    if (selectedPriority !== 'all') {
+      if (selectedPriority === 'high' && !(log.priority === 'high' || log.priority === 'urgent')) return false;
+      if (selectedPriority === 'medium' && log.priority !== 'medium') return false;
+      if (selectedPriority === 'low' && log.priority !== 'low') return false;
+    }
+
     // Search filter
     if (searchTerm) {
       const searchLower = searchTerm.toLowerCase();
@@ -311,59 +321,272 @@ const WorkerActivityMonitor: React.FC = () => {
 
   if (loading) {
     return (
-      <Layout>
+      <LayoutWithSidebar>
         <Box display="flex" justifyContent="center" alignItems="center" minHeight="50vh">
           <CircularProgress />
         </Box>
-      </Layout>
+      </LayoutWithSidebar>
     );
   }
 
+  // Get counts for each priority
+  const priorityCounts = {
+    high: activityLogs.filter(log => log.priority === 'high' || log.priority === 'urgent').length,
+    medium: activityLogs.filter(log => log.priority === 'medium').length,
+    low: activityLogs.filter(log => log.priority === 'low').length
+  };
+
   return (
-    <Layout>
+    <LayoutWithSidebar>
+      <Box sx={{
+        p: { xs: 1, sm: 2, md: 3 },
+        minHeight: '100vh',
+        background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)'
+      }}>
+        {/* Mobile-First Priority Tabs */}
+        <Card sx={{ 
+          mb: { xs: 2, sm: 3 },
+          borderRadius: { xs: 2, sm: 3 },
+          boxShadow: '0 4px 20px rgba(0, 0, 0, 0.08)',
+          overflow: 'hidden'
+        }}>
+          <Box sx={{
+            p: { xs: 2, sm: 3 },
+            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            color: 'white',
+            position: 'relative',
+            overflow: 'hidden'
+          }}>
+            {/* Background Pattern */}
+            <Box sx={{
+              position: 'absolute',
+              top: 0,
+              right: 0,
+              width: '150px',
+              height: '150px',
+              background: 'radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%)',
+              borderRadius: '50%',
+              transform: 'translate(50%, -50%)'
+            }} />
+            
+            <Box sx={{ zIndex: 1 }}>
+              <Box sx={{ 
+                display: 'flex',
+                alignItems: 'center',
+                gap: { xs: 1, sm: 2 },
+                mb: { xs: 2, sm: 3 }
+              }}>
+                <Box sx={{
+                  width: { xs: 40, sm: 48 },
+                  height: { xs: 40, sm: 48 },
+                  borderRadius: { xs: '10px', sm: '12px' },
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: 'rgba(255, 255, 255, 0.2)',
+                  backdropFilter: 'blur(10px)',
+                  boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)'
+                }}>
+                  <Timeline sx={{ fontSize: { xs: 24, sm: 28 } }} />
+                </Box>
       <Box>
-        <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mb: 3 }}>
-          <Box>
-            <Typography variant="h4" component="h1" gutterBottom>
-              Worker Activity Monitor
+                  <Typography variant="h5" sx={{ 
+                    fontWeight: 700,
+                    letterSpacing: '-0.02em',
+                    textShadow: '0 2px 4px rgba(0, 0, 0, 0.1)',
+                    fontSize: { xs: '1.25rem', sm: '1.5rem' }
+                  }}>
+                    Activity Monitor
+                  </Typography>
+                  <Typography variant="body2" sx={{ 
+                    opacity: 0.9,
+                    fontSize: { xs: '0.75rem', sm: '0.875rem' }
+                  }}>
+                    Track worker activities and progress
+                  </Typography>
+                </Box>
+              </Box>
+              
+              {/* Mobile-Optimized Priority Tabs */}
+              <Stack 
+                direction={{ xs: 'column', sm: 'row' }} 
+                spacing={{ xs: 1, sm: 2 }}
+                sx={{ 
+                  flexWrap: 'wrap',
+                  gap: { xs: 1, sm: 2 }
+                }}
+              >
+            <Button
+              variant={selectedPriority === 'all' ? 'contained' : 'outlined'}
+              onClick={() => setSelectedPriority('all')}
+                  sx={{ 
+                    borderRadius: { xs: 2, sm: 2 },
+                    fontSize: { xs: '0.75rem', sm: '0.875rem' },
+                    py: { xs: 1, sm: 1.5 },
+                    px: { xs: 2, sm: 3 },
+                    minWidth: { xs: '120px', sm: '140px' },
+                    bgcolor: selectedPriority === 'all' ? 'rgba(255,255,255,0.9)' : 'transparent',
+                    color: selectedPriority === 'all' ? 'primary.main' : 'white',
+                    borderColor: 'rgba(255,255,255,0.3)',
+                    '&:hover': {
+                      bgcolor: selectedPriority === 'all' ? 'white' : 'rgba(255,255,255,0.1)',
+                      borderColor: 'rgba(255,255,255,0.5)'
+                    }
+                  }}
+                >
+                  All ({activityLogs.length})
+            </Button>
+            <Button
+              variant={selectedPriority === 'high' ? 'contained' : 'outlined'}
+              onClick={() => setSelectedPriority('high')}
+                  sx={{ 
+                    borderRadius: { xs: 2, sm: 2 },
+                    fontSize: { xs: '0.75rem', sm: '0.875rem' },
+                    py: { xs: 1, sm: 1.5 },
+                    px: { xs: 2, sm: 3 },
+                    minWidth: { xs: '120px', sm: '140px' },
+                    bgcolor: selectedPriority === 'high' ? 'rgba(255,255,255,0.9)' : 'transparent',
+                    color: selectedPriority === 'high' ? 'error.main' : 'white',
+                    borderColor: 'rgba(255,255,255,0.3)',
+                    '&:hover': {
+                      bgcolor: selectedPriority === 'high' ? 'white' : 'rgba(255,255,255,0.1)',
+                      borderColor: 'rgba(255,255,255,0.5)'
+                    }
+                  }}
+                  startIcon={<Warning sx={{ fontSize: { xs: 16, sm: 18 } }} />}
+                >
+                  High ({priorityCounts.high})
+            </Button>
+            <Button
+              variant={selectedPriority === 'medium' ? 'contained' : 'outlined'}
+              onClick={() => setSelectedPriority('medium')}
+                  sx={{ 
+                    borderRadius: { xs: 2, sm: 2 },
+                    fontSize: { xs: '0.75rem', sm: '0.875rem' },
+                    py: { xs: 1, sm: 1.5 },
+                    px: { xs: 2, sm: 3 },
+                    minWidth: { xs: '120px', sm: '140px' },
+                    bgcolor: selectedPriority === 'medium' ? 'rgba(255,255,255,0.9)' : 'transparent',
+                    color: selectedPriority === 'medium' ? 'warning.main' : 'white',
+                    borderColor: 'rgba(255,255,255,0.3)',
+                    '&:hover': {
+                      bgcolor: selectedPriority === 'medium' ? 'white' : 'rgba(255,255,255,0.1)',
+                      borderColor: 'rgba(255,255,255,0.5)'
+                    }
+                  }}
+                >
+                  Medium ({priorityCounts.medium})
+            </Button>
+            <Button
+              variant={selectedPriority === 'low' ? 'contained' : 'outlined'}
+              onClick={() => setSelectedPriority('low')}
+                  sx={{ 
+                    borderRadius: { xs: 2, sm: 2 },
+                    fontSize: { xs: '0.75rem', sm: '0.875rem' },
+                    py: { xs: 1, sm: 1.5 },
+                    px: { xs: 2, sm: 3 },
+                    minWidth: { xs: '120px', sm: '140px' },
+                    bgcolor: selectedPriority === 'low' ? 'rgba(255,255,255,0.9)' : 'transparent',
+                    color: selectedPriority === 'low' ? 'success.main' : 'white',
+                    borderColor: 'rgba(255,255,255,0.3)',
+                    '&:hover': {
+                      bgcolor: selectedPriority === 'low' ? 'white' : 'rgba(255,255,255,0.1)',
+                      borderColor: 'rgba(255,255,255,0.5)'
+                    }
+                  }}
+                >
+                  Low ({priorityCounts.low})
+            </Button>
+          </Stack>
+        </Box>
+          </Box>
+        </Card>
+        
+        {/* Mobile-Optimized Action Bar */}
+        <Box sx={{ 
+          display: 'flex', 
+          justifyContent: 'space-between', 
+          alignItems: { xs: 'stretch', sm: 'center' },
+          mb: { xs: 2, sm: 3 },
+          flexDirection: { xs: 'column', sm: 'row' },
+          gap: { xs: 2, sm: 0 }
+        }}>
+          <Box sx={{ flex: 1 }}>
+            <Typography variant="h6" sx={{ 
+              fontWeight: 600,
+              color: '#1f2937',
+              fontSize: { xs: '1.125rem', sm: '1.25rem' },
+              mb: { xs: 0.5, sm: 1 }
+            }}>
+              Activity Overview
             </Typography>
-            <Typography variant="subtitle1" color="text.secondary">
-              Track and monitor worker activities across all assigned cases
+            <Typography variant="body2" color="text.secondary" sx={{
+              fontSize: { xs: '0.75rem', sm: '0.875rem' }
+            }}>
+              Monitor and review worker activities
             </Typography>
           </Box>
-          <Box display="flex" gap={2}>
+          <Box sx={{ 
+            display: 'flex', 
+            gap: { xs: 1, sm: 2 },
+            flexDirection: { xs: 'row', sm: 'row' },
+            width: { xs: '100%', sm: 'auto' }
+          }}>
             <Button
               variant="outlined"
-              startIcon={<FilterList />}
+              startIcon={<FilterList sx={{ fontSize: { xs: 16, sm: 18 } }} />}
               onClick={() => setShowFilters(!showFilters)}
               color={showFilters ? 'primary' : 'inherit'}
+              size={window.innerWidth < 600 ? 'small' : 'medium'}
+              sx={{
+                borderRadius: { xs: 2, sm: 2 },
+                fontSize: { xs: '0.75rem', sm: '0.875rem' },
+                flex: { xs: 1, sm: 'none' },
+                minWidth: { xs: '80px', sm: '100px' }
+              }}
             >
               Filters
             </Button>
             <Button
               variant="contained"
-              startIcon={<Refresh />}
+              startIcon={<Refresh sx={{ fontSize: { xs: 16, sm: 18 } }} />}
               onClick={fetchData}
+              size={window.innerWidth < 600 ? 'small' : 'medium'}
+              sx={{
+                borderRadius: { xs: 2, sm: 2 },
+                fontSize: { xs: '0.75rem', sm: '0.875rem' },
+                flex: { xs: 1, sm: 'none' },
+                minWidth: { xs: '80px', sm: '100px' },
+                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                '&:hover': {
+                  background: 'linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%)'
+                }
+              }}
             >
               Refresh
             </Button>
           </Box>
         </Box>
 
-        {/* Search and Filter Bar */}
-        <Card sx={{ mb: 3 }}>
-          <CardContent>
-            <Grid container spacing={2} alignItems="center">
+        {/* Mobile-Optimized Search and Filter Bar */}
+        <Card sx={{ 
+          mb: { xs: 2, sm: 3 },
+          borderRadius: { xs: 2, sm: 3 },
+          boxShadow: '0 4px 20px rgba(0, 0, 0, 0.08)'
+        }}>
+          <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
+            <Grid container spacing={{ xs: 2, sm: 2 }} alignItems="center">
               <Grid item xs={12} md={4}>
                 <TextField
                   fullWidth
-                  placeholder="Search by worker name, case number, or activity..."
+                  placeholder="Search activities..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
+                  size={window.innerWidth < 600 ? 'small' : 'medium'}
                   InputProps={{
                     startAdornment: (
                       <InputAdornment position="start">
-                        <Search />
+                        <Search sx={{ fontSize: { xs: 18, sm: 20 } }} />
                       </InputAdornment>
                     ),
                     endAdornment: searchTerm && (
@@ -371,63 +594,98 @@ const WorkerActivityMonitor: React.FC = () => {
                         <IconButton
                           size="small"
                           onClick={() => setSearchTerm('')}
+                          sx={{ 
+                            p: { xs: 0.5, sm: 1 },
+                            '&:hover': {
+                              bgcolor: 'rgba(0,0,0,0.04)'
+                            }
+                          }}
                         >
-                          <Clear />
+                          <Clear sx={{ fontSize: { xs: 16, sm: 18 } }} />
                         </IconButton>
                       </InputAdornment>
                     ),
                   }}
+                  sx={{
+                    '& .MuiOutlinedInput-root': {
+                      borderRadius: { xs: 2, sm: 2 },
+                      fontSize: { xs: '0.875rem', sm: '1rem' }
+                    }
+                  }}
                 />
               </Grid>
               
-              <Grid item xs={12} md={3}>
-                <FormControl fullWidth>
-                  <InputLabel>Sort By</InputLabel>
+              <Grid item xs={12} sm={6} md={3}>
+                <FormControl fullWidth size={window.innerWidth < 600 ? 'small' : 'medium'}>
+                  <InputLabel sx={{ fontSize: { xs: '0.875rem', sm: '1rem' } }}>Sort By</InputLabel>
                   <Select
                     value={sortBy}
                     onChange={(e) => setSortBy(e.target.value)}
                     startAdornment={
                       <InputAdornment position="start">
-                        <Sort />
+                        <Sort sx={{ fontSize: { xs: 16, sm: 18 } }} />
                       </InputAdornment>
                     }
+                    sx={{
+                      borderRadius: { xs: 2, sm: 2 },
+                      fontSize: { xs: '0.875rem', sm: '1rem' }
+                    }}
                   >
-                    <MenuItem value="createdAt">Date Created</MenuItem>
-                    <MenuItem value="worker">Worker Name</MenuItem>
-                    <MenuItem value="activityType">Activity Type</MenuItem>
-                    <MenuItem value="priority">Priority</MenuItem>
+                    <MenuItem value="createdAt" sx={{ fontSize: { xs: '0.875rem', sm: '1rem' } }}>Date Created</MenuItem>
+                    <MenuItem value="worker" sx={{ fontSize: { xs: '0.875rem', sm: '1rem' } }}>Worker Name</MenuItem>
+                    <MenuItem value="activityType" sx={{ fontSize: { xs: '0.875rem', sm: '1rem' } }}>Activity Type</MenuItem>
+                    <MenuItem value="priority" sx={{ fontSize: { xs: '0.875rem', sm: '1rem' } }}>Priority</MenuItem>
                   </Select>
                 </FormControl>
               </Grid>
               
-              <Grid item xs={12} md={2}>
-                <FormControl fullWidth>
-                  <InputLabel>Order</InputLabel>
+              <Grid item xs={12} sm={6} md={2}>
+                <FormControl fullWidth size={window.innerWidth < 600 ? 'small' : 'medium'}>
+                  <InputLabel sx={{ fontSize: { xs: '0.875rem', sm: '1rem' } }}>Order</InputLabel>
                   <Select
                     value={sortOrder}
                     onChange={(e) => setSortOrder(e.target.value as 'asc' | 'desc')}
+                    sx={{
+                      borderRadius: { xs: 2, sm: 2 },
+                      fontSize: { xs: '0.875rem', sm: '1rem' }
+                    }}
                   >
-                    <MenuItem value="desc">Newest First</MenuItem>
-                    <MenuItem value="asc">Oldest First</MenuItem>
+                    <MenuItem value="desc" sx={{ fontSize: { xs: '0.875rem', sm: '1rem' } }}>Newest First</MenuItem>
+                    <MenuItem value="asc" sx={{ fontSize: { xs: '0.875rem', sm: '1rem' } }}>Oldest First</MenuItem>
                   </Select>
                 </FormControl>
               </Grid>
               
               <Grid item xs={12} md={3}>
-                <Box display="flex" gap={1}>
+                <Box sx={{ 
+                  display: 'flex', 
+                  gap: { xs: 1, sm: 1 },
+                  flexWrap: 'wrap',
+                  justifyContent: { xs: 'center', md: 'flex-start' }
+                }}>
                   <Chip
                     label={`${totalItems} results`}
                     color="primary"
                     variant="outlined"
+                    size={window.innerWidth < 600 ? 'small' : 'medium'}
+                    sx={{
+                      fontSize: { xs: '0.75rem', sm: '0.875rem' },
+                      borderRadius: { xs: 2, sm: 2 }
+                    }}
                   />
                   {(searchTerm || Object.values(filters).some(f => f !== '')) && (
                     <Chip
                       label="Filtered"
                       color="secondary"
                       variant="outlined"
+                      size={window.innerWidth < 600 ? 'small' : 'medium'}
                       onDelete={() => {
                         setSearchTerm('');
                         setFilters({ worker: '', activityType: '', priority: '', isReviewed: '', dateRange: '' });
+                      }}
+                      sx={{
+                        fontSize: { xs: '0.75rem', sm: '0.875rem' },
+                        borderRadius: { xs: 2, sm: 2 }
                       }}
                     />
                   )}
@@ -513,100 +771,393 @@ const WorkerActivityMonitor: React.FC = () => {
           </Alert>
         )}
 
-        {/* Statistics Cards */}
-        <Grid container spacing={3} sx={{ mb: 4 }}>
-          <Grid item xs={12} sm={6} md={2}>
-            <Card sx={{ textAlign: 'center', bgcolor: 'primary.light', color: 'primary.contrastText' }}>
-              <CardContent>
-                <Timeline sx={{ fontSize: 32, mb: 1 }} />
-                <Typography variant="h6">Total Activities</Typography>
-                <Typography variant="h4" sx={{ fontWeight: 700 }}>{stats.total}</Typography>
+        {/* Mobile-Optimized Statistics Cards */}
+        <Grid container spacing={{ xs: 2, sm: 3 }} sx={{ mb: { xs: 3, sm: 4 } }}>
+          <Grid item xs={6} sm={4} md={2}>
+            <Card sx={{ 
+              textAlign: 'center', 
+              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+              color: 'white',
+              borderRadius: { xs: 2, sm: 3 },
+              boxShadow: '0 4px 20px rgba(102, 126, 234, 0.25)',
+              transition: 'transform 0.2s ease',
+              '&:hover': {
+                transform: 'translateY(-2px)',
+                boxShadow: '0 8px 30px rgba(102, 126, 234, 0.35)'
+              }
+            }}>
+              <CardContent sx={{ p: { xs: 1.5, sm: 2 } }}>
+                <Timeline sx={{ fontSize: { xs: 24, sm: 32 }, mb: { xs: 0.5, sm: 1 } }} />
+                <Typography variant="body2" sx={{ 
+                  fontSize: { xs: '0.75rem', sm: '0.875rem' },
+                  fontWeight: 500,
+                  mb: { xs: 0.5, sm: 1 }
+                }}>
+                  Total Activities
+                </Typography>
+                <Typography variant="h5" sx={{ 
+                  fontWeight: 700,
+                  fontSize: { xs: '1.5rem', sm: '2rem' }
+                }}>
+                  {stats.total}
+                </Typography>
               </CardContent>
             </Card>
           </Grid>
-          <Grid item xs={12} sm={6} md={2}>
-            <Card sx={{ textAlign: 'center', bgcolor: 'success.light', color: 'success.contrastText' }}>
-              <CardContent>
-                <CheckCircle sx={{ fontSize: 32, mb: 1 }} />
-                <Typography variant="h6">Completed</Typography>
-                <Typography variant="h4" sx={{ fontWeight: 700 }}>{stats.completed}</Typography>
+          <Grid item xs={6} sm={4} md={2}>
+            <Card sx={{ 
+              textAlign: 'center', 
+              background: 'linear-gradient(135deg, #4CAF50 0%, #45B649 100%)',
+              color: 'white',
+              borderRadius: { xs: 2, sm: 3 },
+              boxShadow: '0 4px 20px rgba(76, 175, 80, 0.25)',
+              transition: 'transform 0.2s ease',
+              '&:hover': {
+                transform: 'translateY(-2px)',
+                boxShadow: '0 8px 30px rgba(76, 175, 80, 0.35)'
+              }
+            }}>
+              <CardContent sx={{ p: { xs: 1.5, sm: 2 } }}>
+                <CheckCircle sx={{ fontSize: { xs: 24, sm: 32 }, mb: { xs: 0.5, sm: 1 } }} />
+                <Typography variant="body2" sx={{ 
+                  fontSize: { xs: '0.75rem', sm: '0.875rem' },
+                  fontWeight: 500,
+                  mb: { xs: 0.5, sm: 1 }
+                }}>
+                  Completed
+                </Typography>
+                <Typography variant="h5" sx={{ 
+                  fontWeight: 700,
+                  fontSize: { xs: '1.5rem', sm: '2rem' }
+                }}>
+                  {stats.completed}
+                </Typography>
               </CardContent>
             </Card>
           </Grid>
-          <Grid item xs={12} sm={6} md={2}>
-            <Card sx={{ textAlign: 'center', bgcolor: 'warning.light', color: 'warning.contrastText' }}>
-              <CardContent>
-                <Warning sx={{ fontSize: 32, mb: 1 }} />
-                <Typography variant="h6">Skipped</Typography>
-                <Typography variant="h4" sx={{ fontWeight: 700 }}>{stats.skipped}</Typography>
+          <Grid item xs={6} sm={4} md={2}>
+            <Card sx={{ 
+              textAlign: 'center', 
+              background: 'linear-gradient(135deg, #FF9800 0%, #F57C00 100%)',
+              color: 'white',
+              borderRadius: { xs: 2, sm: 3 },
+              boxShadow: '0 4px 20px rgba(255, 152, 0, 0.25)',
+              transition: 'transform 0.2s ease',
+              '&:hover': {
+                transform: 'translateY(-2px)',
+                boxShadow: '0 8px 30px rgba(255, 152, 0, 0.35)'
+              }
+            }}>
+              <CardContent sx={{ p: { xs: 1.5, sm: 2 } }}>
+                <Warning sx={{ fontSize: { xs: 24, sm: 32 }, mb: { xs: 0.5, sm: 1 } }} />
+                <Typography variant="body2" sx={{ 
+                  fontSize: { xs: '0.75rem', sm: '0.875rem' },
+                  fontWeight: 500,
+                  mb: { xs: 0.5, sm: 1 }
+                }}>
+                  Skipped
+                </Typography>
+                <Typography variant="h5" sx={{ 
+                  fontWeight: 700,
+                  fontSize: { xs: '1.5rem', sm: '2rem' }
+                }}>
+                  {stats.skipped}
+                </Typography>
               </CardContent>
             </Card>
           </Grid>
-          <Grid item xs={12} sm={6} md={2}>
-            <Card sx={{ textAlign: 'center', bgcolor: 'info.light', color: 'info.contrastText' }}>
-              <CardContent>
-                <Assessment sx={{ fontSize: 32, mb: 1 }} />
-                <Typography variant="h6">Check-ins</Typography>
-                <Typography variant="h4" sx={{ fontWeight: 700 }}>{stats.checkIns}</Typography>
+          <Grid item xs={6} sm={4} md={2}>
+            <Card sx={{ 
+              textAlign: 'center', 
+              background: 'linear-gradient(135deg, #2196F3 0%, #1E88E5 100%)',
+              color: 'white',
+              borderRadius: { xs: 2, sm: 3 },
+              boxShadow: '0 4px 20px rgba(33, 150, 243, 0.25)',
+              transition: 'transform 0.2s ease',
+              '&:hover': {
+                transform: 'translateY(-2px)',
+                boxShadow: '0 8px 30px rgba(33, 150, 243, 0.35)'
+              }
+            }}>
+              <CardContent sx={{ p: { xs: 1.5, sm: 2 } }}>
+                <Assessment sx={{ fontSize: { xs: 24, sm: 32 }, mb: { xs: 0.5, sm: 1 } }} />
+                <Typography variant="body2" sx={{ 
+                  fontSize: { xs: '0.75rem', sm: '0.875rem' },
+                  fontWeight: 500,
+                  mb: { xs: 0.5, sm: 1 }
+                }}>
+                  Check-ins
+                </Typography>
+                <Typography variant="h5" sx={{ 
+                  fontWeight: 700,
+                  fontSize: { xs: '1.5rem', sm: '2rem' }
+                }}>
+                  {stats.checkIns}
+                </Typography>
               </CardContent>
             </Card>
           </Grid>
-          <Grid item xs={12} sm={6} md={2}>
-            <Card sx={{ textAlign: 'center', bgcolor: 'success.main', color: 'success.contrastText' }}>
-              <CardContent>
-                <TrendingUp sx={{ fontSize: 32, mb: 1 }} />
-                <Typography variant="h6">Reviewed</Typography>
-                <Typography variant="h4" sx={{ fontWeight: 700 }}>{stats.reviewed}</Typography>
+          <Grid item xs={6} sm={4} md={2}>
+            <Card sx={{ 
+              textAlign: 'center', 
+              background: 'linear-gradient(135deg, #9C27B0 0%, #7B1FA2 100%)',
+              color: 'white',
+              borderRadius: { xs: 2, sm: 3 },
+              boxShadow: '0 4px 20px rgba(156, 39, 176, 0.25)',
+              transition: 'transform 0.2s ease',
+              '&:hover': {
+                transform: 'translateY(-2px)',
+                boxShadow: '0 8px 30px rgba(156, 39, 176, 0.35)'
+              }
+            }}>
+              <CardContent sx={{ p: { xs: 1.5, sm: 2 } }}>
+                <TrendingUp sx={{ fontSize: { xs: 24, sm: 32 }, mb: { xs: 0.5, sm: 1 } }} />
+                <Typography variant="body2" sx={{ 
+                  fontSize: { xs: '0.75rem', sm: '0.875rem' },
+                  fontWeight: 500,
+                  mb: { xs: 0.5, sm: 1 }
+                }}>
+                  Reviewed
+                </Typography>
+                <Typography variant="h5" sx={{ 
+                  fontWeight: 700,
+                  fontSize: { xs: '1.5rem', sm: '2rem' }
+                }}>
+                  {stats.reviewed}
+                </Typography>
               </CardContent>
             </Card>
           </Grid>
-          <Grid item xs={12} sm={6} md={2}>
-            <Card sx={{ textAlign: 'center', bgcolor: 'warning.main', color: 'warning.contrastText' }}>
-              <CardContent>
-                <TrendingDown sx={{ fontSize: 32, mb: 1 }} />
-                <Typography variant="h6">Pending</Typography>
-                <Typography variant="h4" sx={{ fontWeight: 700 }}>{stats.pending}</Typography>
+          <Grid item xs={6} sm={4} md={2}>
+            <Card sx={{ 
+              textAlign: 'center', 
+              background: 'linear-gradient(135deg, #F44336 0%, #D32F2F 100%)',
+              color: 'white',
+              borderRadius: { xs: 2, sm: 3 },
+              boxShadow: '0 4px 20px rgba(244, 67, 54, 0.25)',
+              transition: 'transform 0.2s ease',
+              '&:hover': {
+                transform: 'translateY(-2px)',
+                boxShadow: '0 8px 30px rgba(244, 67, 54, 0.35)'
+              }
+            }}>
+              <CardContent sx={{ p: { xs: 1.5, sm: 2 } }}>
+                <TrendingDown sx={{ fontSize: { xs: 24, sm: 32 }, mb: { xs: 0.5, sm: 1 } }} />
+                <Typography variant="body2" sx={{ 
+                  fontSize: { xs: '0.75rem', sm: '0.875rem' },
+                  fontWeight: 500,
+                  mb: { xs: 0.5, sm: 1 }
+                }}>
+                  Pending
+                </Typography>
+                <Typography variant="h5" sx={{ 
+                  fontWeight: 700,
+                  fontSize: { xs: '1.5rem', sm: '2rem' }
+                }}>
+                  {stats.pending}
+                </Typography>
               </CardContent>
             </Card>
           </Grid>
         </Grid>
 
-        {/* Activity Logs Table */}
-        <Card>
-          <CardContent>
-            <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
+        {/* Mobile-Optimized Activity Logs */}
+        <Card sx={{
+          borderRadius: { xs: 2, sm: 3 },
+          boxShadow: '0 4px 20px rgba(0, 0, 0, 0.08)',
+          overflow: 'hidden'
+        }}>
+          <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
+            <Typography variant="h6" sx={{ 
+              mb: { xs: 2, sm: 2 }, 
+              fontWeight: 600,
+              fontSize: { xs: '1.125rem', sm: '1.25rem' },
+              color: '#1f2937'
+            }}>
               Activity Logs ({totalItems})
             </Typography>
             
-            <TableContainer component={Paper} variant="outlined">
+            {/* Mobile Card View for Small Screens */}
+            {window.innerWidth < 768 ? (
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                {paginatedLogs.map((log) => (
+                  <Card 
+                    key={log._id} 
+                    sx={{
+                      borderRadius: 2,
+                      border: '1px solid',
+                      borderColor: log.isReviewed ? 'divider' : 'warning.main',
+                      bgcolor: log.isReviewed ? 'action.hover' : 'rgba(255, 152, 0, 0.05)',
+                      opacity: log.isReviewed ? 0.7 : 1,
+                      transition: 'all 0.2s ease',
+                      '&:hover': {
+                        boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+                        transform: 'translateY(-1px)'
+                      }
+                    }}
+                  >
+                    <CardContent sx={{ p: 2 }}>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flex: 1 }}>
+                          <Avatar sx={{ 
+                            bgcolor: 'primary.main',
+                            width: { xs: 32, sm: 40 },
+                            height: { xs: 32, sm: 40 },
+                            fontSize: { xs: '0.75rem', sm: '1rem' }
+                          }}>
+                            {log.worker.firstName[0]}{log.worker.lastName[0]}
+                          </Avatar>
+                          <Box sx={{ minWidth: 0, flex: 1 }}>
+                            <Typography variant="body2" sx={{ 
+                              fontWeight: 600,
+                              fontSize: { xs: '0.875rem', sm: '1rem' },
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap'
+                            }}>
+                              {log.worker.firstName} {log.worker.lastName}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary" sx={{
+                              fontSize: { xs: '0.7rem', sm: '0.75rem' }
+                            }}>
+                              Case #{log.case.caseNumber}
+                            </Typography>
+                          </Box>
+                        </Box>
+                        <Tooltip title="View Details">
+                          <IconButton 
+                            size="small" 
+                            onClick={() => {
+                              setSelectedLog(log);
+                              setReviewNotes(log.clinicianNotes || '');
+                              setLogDialog(true);
+                            }}
+                            sx={{
+                              bgcolor: 'rgba(0,0,0,0.04)',
+                              '&:hover': {
+                                bgcolor: 'rgba(0,0,0,0.08)'
+                              }
+                            }}
+                          >
+                            <Visibility sx={{ fontSize: { xs: 16, sm: 18 } }} />
+                          </IconButton>
+                        </Tooltip>
+                      </Box>
+                      
+                      <Box sx={{ mb: 2 }}>
+                        <Typography variant="body2" sx={{ 
+                          fontWeight: 500,
+                          fontSize: { xs: '0.875rem', sm: '1rem' },
+                          mb: 0.5,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap'
+                        }}>
+                          {log.title}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{
+                          fontSize: { xs: '0.7rem', sm: '0.75rem' },
+                          display: '-webkit-box',
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: 'vertical',
+                          overflow: 'hidden'
+                        }}>
+                          {log.description}
+                        </Typography>
+                      </Box>
+                      
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          {getActivityTypeIcon(log.activityType)}
+                          <Chip
+                            label={log.activityType.replace('_', ' ')}
+                            size="small"
+                            color={getActivityTypeColor(log.activityType) as any}
+                            sx={{
+                              fontSize: { xs: '0.65rem', sm: '0.75rem' },
+                              height: { xs: 20, sm: 24 }
+                            }}
+                          />
+                        </Box>
+                        <Box sx={{ display: 'flex', gap: 0.5 }}>
+                          <Chip
+                            label={log.priority}
+                            size="small"
+                            color={getPriorityColor(log.priority)}
+                            sx={{
+                              fontSize: { xs: '0.65rem', sm: '0.75rem' },
+                              height: { xs: 20, sm: 24 }
+                            }}
+                          />
+                          <Chip
+                            label={log.isReviewed ? 'Reviewed' : 'Pending'}
+                            size="small"
+                            color={log.isReviewed ? 'success' : 'warning'}
+                            sx={{
+                              fontSize: { xs: '0.65rem', sm: '0.75rem' },
+                              height: { xs: 20, sm: 24 }
+                            }}
+                          />
+                        </Box>
+                      </Box>
+                      
+                      <Typography variant="caption" color="text.secondary" sx={{
+                        fontSize: { xs: '0.65rem', sm: '0.7rem' },
+                        mt: 1,
+                        display: 'block'
+                      }}>
+                        {new Date(log.createdAt).toLocaleString()}
+                      </Typography>
+                    </CardContent>
+                  </Card>
+                ))}
+              </Box>
+            ) : (
+              /* Desktop Table View */
+              <TableContainer component={Paper} variant="outlined" sx={{
+                borderRadius: { xs: 2, sm: 2 },
+                overflow: 'auto'
+              }}>
               <Table>
                 <TableHead>
                   <TableRow>
-                    <TableCell>Worker</TableCell>
-                    <TableCell>Activity</TableCell>
-                    <TableCell>Type</TableCell>
-                    <TableCell>Priority</TableCell>
-                    <TableCell>Time</TableCell>
-                    <TableCell>Status</TableCell>
-                    <TableCell>Actions</TableCell>
+                      <TableCell sx={{ fontSize: { xs: '0.875rem', sm: '1rem' }, fontWeight: 600 }}>Worker</TableCell>
+                      <TableCell sx={{ fontSize: { xs: '0.875rem', sm: '1rem' }, fontWeight: 600 }}>Activity</TableCell>
+                      <TableCell sx={{ fontSize: { xs: '0.875rem', sm: '1rem' }, fontWeight: 600 }}>Type</TableCell>
+                      <TableCell sx={{ fontSize: { xs: '0.875rem', sm: '1rem' }, fontWeight: 600 }}>Priority</TableCell>
+                      <TableCell sx={{ fontSize: { xs: '0.875rem', sm: '1rem' }, fontWeight: 600 }}>Time</TableCell>
+                      <TableCell sx={{ fontSize: { xs: '0.875rem', sm: '1rem' }, fontWeight: 600 }}>Status</TableCell>
+                      <TableCell sx={{ fontSize: { xs: '0.875rem', sm: '1rem' }, fontWeight: 600 }}>Actions</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   {paginatedLogs.map((log) => (
                     <TableRow key={log._id} sx={{ 
-                      bgcolor: log.isReviewed ? 'action.hover' : 'warning.light',
-                      opacity: log.isReviewed ? 0.7 : 1
+                        bgcolor: log.isReviewed ? 'action.hover' : 'rgba(255, 152, 0, 0.05)',
+                        opacity: log.isReviewed ? 0.7 : 1,
+                        '&:hover': {
+                          bgcolor: log.isReviewed ? 'action.selected' : 'rgba(255, 152, 0, 0.1)'
+                        }
                     }}>
                       <TableCell>
                         <Box display="flex" alignItems="center" gap={2}>
-                          <Avatar sx={{ bgcolor: 'primary.main' }}>
+                            <Avatar sx={{ 
+                              bgcolor: 'primary.main',
+                              width: { xs: 32, sm: 40 },
+                              height: { xs: 32, sm: 40 }
+                            }}>
                             {log.worker.firstName[0]}{log.worker.lastName[0]}
                           </Avatar>
                           <Box>
-                            <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                              <Typography variant="body2" sx={{ 
+                                fontWeight: 600,
+                                fontSize: { xs: '0.875rem', sm: '1rem' }
+                              }}>
                               {log.worker.firstName} {log.worker.lastName}
                             </Typography>
-                            <Typography variant="caption" color="text.secondary">
+                              <Typography variant="caption" color="text.secondary" sx={{
+                                fontSize: { xs: '0.7rem', sm: '0.75rem' }
+                              }}>
                               Case #{log.case.caseNumber}
                             </Typography>
                           </Box>
@@ -614,10 +1165,19 @@ const WorkerActivityMonitor: React.FC = () => {
                       </TableCell>
                       <TableCell>
                         <Box>
-                          <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                            <Typography variant="body2" sx={{ 
+                              fontWeight: 500,
+                              fontSize: { xs: '0.875rem', sm: '1rem' }
+                            }}>
                             {log.title}
                           </Typography>
-                          <Typography variant="caption" color="text.secondary">
+                            <Typography variant="caption" color="text.secondary" sx={{
+                              fontSize: { xs: '0.7rem', sm: '0.75rem' },
+                              display: '-webkit-box',
+                              WebkitLineClamp: 2,
+                              WebkitBoxOrient: 'vertical',
+                              overflow: 'hidden'
+                            }}>
                             {log.description}
                           </Typography>
                         </Box>
@@ -629,6 +1189,10 @@ const WorkerActivityMonitor: React.FC = () => {
                             label={log.activityType.replace('_', ' ')}
                             size="small"
                             color={getActivityTypeColor(log.activityType) as any}
+                              sx={{
+                                fontSize: { xs: '0.65rem', sm: '0.75rem' },
+                                height: { xs: 20, sm: 24 }
+                              }}
                           />
                         </Box>
                       </TableCell>
@@ -637,10 +1201,16 @@ const WorkerActivityMonitor: React.FC = () => {
                           label={log.priority}
                           size="small"
                           color={getPriorityColor(log.priority)}
+                            sx={{
+                              fontSize: { xs: '0.65rem', sm: '0.75rem' },
+                              height: { xs: 20, sm: 24 }
+                            }}
                         />
                       </TableCell>
                       <TableCell>
-                        <Typography variant="caption">
+                          <Typography variant="caption" sx={{
+                            fontSize: { xs: '0.7rem', sm: '0.75rem' }
+                          }}>
                           {new Date(log.createdAt).toLocaleString()}
                         </Typography>
                       </TableCell>
@@ -649,6 +1219,10 @@ const WorkerActivityMonitor: React.FC = () => {
                           label={log.isReviewed ? 'Reviewed' : 'Pending'}
                           size="small"
                           color={log.isReviewed ? 'success' : 'warning'}
+                            sx={{
+                              fontSize: { xs: '0.65rem', sm: '0.75rem' },
+                              height: { xs: 20, sm: 24 }
+                            }}
                         />
                       </TableCell>
                       <TableCell>
@@ -660,8 +1234,14 @@ const WorkerActivityMonitor: React.FC = () => {
                               setReviewNotes(log.clinicianNotes || '');
                               setLogDialog(true);
                             }}
-                          >
-                            <Visibility />
+                              sx={{
+                                bgcolor: 'rgba(0,0,0,0.04)',
+                                '&:hover': {
+                                  bgcolor: 'rgba(0,0,0,0.08)'
+                                }
+                              }}
+                            >
+                              <Visibility sx={{ fontSize: { xs: 16, sm: 18 } }} />
                           </IconButton>
                         </Tooltip>
                       </TableCell>
@@ -670,6 +1250,7 @@ const WorkerActivityMonitor: React.FC = () => {
                 </TableBody>
               </Table>
             </TableContainer>
+            )}
             
             {paginatedLogs.length === 0 && (
               <Box textAlign="center" sx={{ py: 4 }}>
@@ -731,36 +1312,109 @@ const WorkerActivityMonitor: React.FC = () => {
           </CardContent>
         </Card>
 
-        {/* Activity Log Details Dialog */}
-        <Dialog open={logDialog} onClose={() => setLogDialog(false)} maxWidth="md" fullWidth>
-          <DialogTitle>
+        {/* Mobile-Optimized Activity Log Details Dialog */}
+        <Dialog 
+          open={logDialog} 
+          onClose={() => setLogDialog(false)} 
+          maxWidth="md" 
+          fullWidth
+          fullScreen={window.innerWidth < 600}
+          sx={{
+            '& .MuiDialog-paper': {
+              borderRadius: window.innerWidth < 600 ? 0 : '16px',
+              margin: window.innerWidth < 600 ? 0 : '32px',
+              maxHeight: window.innerWidth < 600 ? '100vh' : '90vh'
+            }
+          }}
+        >
+          <DialogTitle sx={{
+            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            color: 'white',
+            p: { xs: 2, sm: 3 },
+            borderRadius: window.innerWidth < 600 ? 0 : '16px 16px 0 0',
+            position: 'relative',
+            overflow: 'hidden'
+          }}>
+            {/* Background Pattern */}
+            <Box sx={{
+              position: 'absolute',
+              top: 0,
+              right: 0,
+              width: '100px',
+              height: '100px',
+              background: 'radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%)',
+              borderRadius: '50%',
+              transform: 'translate(50%, -50%)'
+            }} />
+            <Box sx={{ zIndex: 1 }}>
+              <Typography variant="h6" sx={{
+                fontWeight: 700,
+                fontSize: { xs: '1.125rem', sm: '1.25rem' },
+                textShadow: '0 2px 4px rgba(0, 0, 0, 0.1)'
+              }}>
             Activity Log Details
+              </Typography>
+              <Typography variant="body2" sx={{
+                opacity: 0.9,
+                fontSize: { xs: '0.75rem', sm: '0.875rem' },
+                mt: 0.5
+              }}>
+                Review and manage activity details
+              </Typography>
+            </Box>
           </DialogTitle>
-          <DialogContent>
+          <DialogContent sx={{
+            p: { xs: 2, sm: 3 },
+            maxHeight: window.innerWidth < 600 ? 'calc(100vh - 140px)' : '60vh',
+            overflow: 'auto'
+          }}>
             {selectedLog && (
               <Box>
-                <Grid container spacing={3}>
+                <Grid container spacing={{ xs: 2, sm: 3 }}>
                   <Grid item xs={12} md={6}>
-                    <Card variant="outlined">
-                      <CardContent>
-                        <Typography variant="h6" gutterBottom>Worker Information</Typography>
+                    <Card variant="outlined" sx={{
+                      borderRadius: { xs: 2, sm: 2 },
+                      boxShadow: '0 2px 8px rgba(0,0,0,0.05)'
+                    }}>
+                      <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
+                        <Typography variant="h6" gutterBottom sx={{
+                          fontSize: { xs: '1rem', sm: '1.25rem' },
+                          fontWeight: 600,
+                          color: '#1f2937'
+                        }}>
+                          Worker Information
+                        </Typography>
                         <List dense>
-                          <ListItem>
-                            <ListItemIcon>
-                              <Person />
+                          <ListItem sx={{ px: 0 }}>
+                            <ListItemIcon sx={{ minWidth: { xs: 36, sm: 40 } }}>
+                              <Person sx={{ fontSize: { xs: 20, sm: 24 } }} />
                             </ListItemIcon>
                             <ListItemText 
                               primary={`${selectedLog.worker.firstName} ${selectedLog.worker.lastName}`}
                               secondary={selectedLog.worker.email}
+                              primaryTypographyProps={{
+                                fontSize: { xs: '0.875rem', sm: '1rem' },
+                                fontWeight: 600
+                              }}
+                              secondaryTypographyProps={{
+                                fontSize: { xs: '0.75rem', sm: '0.875rem' }
+                              }}
                             />
                           </ListItem>
-                          <ListItem>
-                            <ListItemIcon>
-                              <Assignment />
+                          <ListItem sx={{ px: 0 }}>
+                            <ListItemIcon sx={{ minWidth: { xs: 36, sm: 40 } }}>
+                              <Assignment sx={{ fontSize: { xs: 20, sm: 24 } }} />
                             </ListItemIcon>
                             <ListItemText 
                               primary={`Case #${selectedLog.case.caseNumber}`}
                               secondary={`Status: ${selectedLog.case.status}`}
+                              primaryTypographyProps={{
+                                fontSize: { xs: '0.875rem', sm: '1rem' },
+                                fontWeight: 600
+                              }}
+                              secondaryTypographyProps={{
+                                fontSize: { xs: '0.75rem', sm: '0.875rem' }
+                              }}
                             />
                           </ListItem>
                         </List>
@@ -769,26 +1423,49 @@ const WorkerActivityMonitor: React.FC = () => {
                   </Grid>
                   
                   <Grid item xs={12} md={6}>
-                    <Card variant="outlined">
-                      <CardContent>
-                        <Typography variant="h6" gutterBottom>Activity Details</Typography>
+                    <Card variant="outlined" sx={{
+                      borderRadius: { xs: 2, sm: 2 },
+                      boxShadow: '0 2px 8px rgba(0,0,0,0.05)'
+                    }}>
+                      <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
+                        <Typography variant="h6" gutterBottom sx={{
+                          fontSize: { xs: '1rem', sm: '1.25rem' },
+                          fontWeight: 600,
+                          color: '#1f2937'
+                        }}>
+                          Activity Details
+                        </Typography>
                         <List dense>
-                          <ListItem>
-                            <ListItemIcon>
+                          <ListItem sx={{ px: 0 }}>
+                            <ListItemIcon sx={{ minWidth: { xs: 36, sm: 40 } }}>
                               {getActivityTypeIcon(selectedLog.activityType)}
                             </ListItemIcon>
                             <ListItemText 
                               primary={selectedLog.title}
                               secondary={selectedLog.description}
+                              primaryTypographyProps={{
+                                fontSize: { xs: '0.875rem', sm: '1rem' },
+                                fontWeight: 600
+                              }}
+                              secondaryTypographyProps={{
+                                fontSize: { xs: '0.75rem', sm: '0.875rem' }
+                              }}
                             />
                           </ListItem>
-                          <ListItem>
-                            <ListItemIcon>
-                              <Schedule />
+                          <ListItem sx={{ px: 0 }}>
+                            <ListItemIcon sx={{ minWidth: { xs: 36, sm: 40 } }}>
+                              <Schedule sx={{ fontSize: { xs: 20, sm: 24 } }} />
                             </ListItemIcon>
                             <ListItemText 
                               primary="Created"
                               secondary={new Date(selectedLog.createdAt).toLocaleString()}
+                              primaryTypographyProps={{
+                                fontSize: { xs: '0.875rem', sm: '1rem' },
+                                fontWeight: 600
+                              }}
+                              secondaryTypographyProps={{
+                                fontSize: { xs: '0.75rem', sm: '0.875rem' }
+                              }}
                             />
                           </ListItem>
                         </List>
@@ -935,23 +1612,67 @@ const WorkerActivityMonitor: React.FC = () => {
                     <TextField
                       fullWidth
                       multiline
-                      rows={4}
+                      rows={window.innerWidth < 600 ? 3 : 4}
                       label="Clinician Notes"
                       value={reviewNotes}
                       onChange={(e) => setReviewNotes(e.target.value)}
                       placeholder="Add your notes about this activity..."
+                      sx={{
+                        '& .MuiOutlinedInput-root': {
+                          borderRadius: { xs: 2, sm: 2 },
+                          fontSize: { xs: '0.875rem', sm: '1rem' }
+                        },
+                        '& .MuiInputLabel-root': {
+                          fontSize: { xs: '0.875rem', sm: '1rem' }
+                        }
+                      }}
                     />
                   </Grid>
                 </Grid>
               </Box>
             )}
           </DialogContent>
-          <DialogActions>
-            <Button onClick={() => setLogDialog(false)}>Close</Button>
+          <DialogActions sx={{
+            p: { xs: 2, sm: 3 },
+            borderTop: '1px solid',
+            borderColor: 'divider',
+            gap: { xs: 1, sm: 2 },
+            justifyContent: 'center'
+          }}>
+            <Button 
+              onClick={() => setLogDialog(false)}
+              variant="outlined"
+              size={window.innerWidth < 600 ? 'large' : 'medium'}
+              sx={{
+                borderRadius: { xs: 2, sm: 2 },
+                px: { xs: 4, sm: 3 },
+                py: { xs: 1.5, sm: 1 },
+                fontSize: { xs: '0.875rem', sm: '1rem' },
+                minWidth: { xs: '120px', sm: '100px' }
+              }}
+            >
+              Close
+            </Button>
             <Button 
               variant="contained" 
               onClick={handleReviewLog}
               disabled={isReviewing || selectedLog?.isReviewed}
+              size={window.innerWidth < 600 ? 'large' : 'medium'}
+              sx={{
+                borderRadius: { xs: 2, sm: 2 },
+                px: { xs: 4, sm: 3 },
+                py: { xs: 1.5, sm: 1 },
+                fontSize: { xs: '0.875rem', sm: '1rem' },
+                minWidth: { xs: '140px', sm: '120px' },
+                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                '&:hover': {
+                  background: 'linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%)'
+                },
+                '&:disabled': {
+                  background: 'rgba(0,0,0,0.12)',
+                  color: 'rgba(0,0,0,0.26)'
+                }
+              }}
             >
               {selectedLog?.isReviewed ? 'Already Reviewed' : 'Mark as Reviewed'}
             </Button>
@@ -959,8 +1680,9 @@ const WorkerActivityMonitor: React.FC = () => {
         </Dialog>
 
       </Box>
-    </Layout>
+    </LayoutWithSidebar>
   );
 };
 
 export default WorkerActivityMonitor;
+

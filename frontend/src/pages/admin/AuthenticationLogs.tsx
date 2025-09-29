@@ -47,7 +47,7 @@ import {
   Cancel as CancelIcon,
   Lock as LockIcon
 } from '@mui/icons-material';
-import Layout from '../../components/Layout';
+import LayoutWithSidebar from '../../components/LayoutWithSidebar';
 import api from '../../utils/api';
 
 interface AuthLog {
@@ -454,7 +454,7 @@ const AuthenticationLogs: React.FC = () => {
   // Show password dialog if not verified
   if (!passwordVerified) {
     return (
-      <Layout>
+      <LayoutWithSidebar>
         <Box display="flex" justifyContent="center" alignItems="center" minHeight="60vh">
           <CircularProgress size={60} />
         </Box>
@@ -503,32 +503,32 @@ const AuthenticationLogs: React.FC = () => {
             </Button>
           </DialogActions>
         </Dialog>
-      </Layout>
+      </LayoutWithSidebar>
     );
   }
 
   if (loading && !data) {
     return (
-      <Layout>
+      <LayoutWithSidebar>
         <Box display="flex" justifyContent="center" alignItems="center" minHeight="60vh">
           <CircularProgress size={60} />
         </Box>
-      </Layout>
+      </LayoutWithSidebar>
     );
   }
 
   if (error) {
     return (
-      <Layout>
+      <LayoutWithSidebar>
         <Alert severity="error" sx={{ mb: 3 }}>
           {error}
         </Alert>
-      </Layout>
+      </LayoutWithSidebar>
     );
   }
 
   return (
-    <Layout>
+    <LayoutWithSidebar>
       <Box>
         {/* Header */}
         <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mb: 4 }}>
@@ -892,8 +892,9 @@ const AuthenticationLogs: React.FC = () => {
           </DialogActions>
         </Dialog>
         </Box>
-    </Layout>
+    </LayoutWithSidebar>
   );
 };
 
 export default AuthenticationLogs;
+

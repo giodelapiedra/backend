@@ -11,11 +11,20 @@ const handleValidationErrors = (req, res, next) => {
   next();
 };
 
-const asyncHandler = (fn) => (req, res, next) => {
-  Promise.resolve(fn(req, res, next)).catch((error) => {
+const asyncHandler = (fn) => async (req, res, next) => {
+  try {
+    await fn(req, res, next);
+  } catch (error) {
     console.error('AsyncHandler caught error:', error);
-    next(error);
-  });
+    // Send error response directly instead of passing to next
+    res.status(500).json({
+      message: error.message || 'Internal Server Error',
+      ...(process.env.NODE_ENV === 'development' && { 
+        stack: error.stack,
+        details: error 
+      })
+    });
+  }
 };
 
 const errorHandler = (err, req, res, next) => {

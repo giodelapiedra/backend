@@ -58,7 +58,7 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 
-import Layout from '../../components/Layout';
+import LayoutWithSidebar from '../../components/LayoutWithSidebar';
 import api from '../../utils/api';
 
 // Optimized chart components
@@ -472,28 +472,28 @@ const EnhancedAnalytics: React.FC = memo(() => {
 
   if (loading && !analyticsData) {
     return (
-      <Layout>
+      <LayoutWithSidebar>
         <Box display="flex" justifyContent="center" alignItems="center" minHeight="60vh">
           <CircularProgress size={60} />
         </Box>
-      </Layout>
+      </LayoutWithSidebar>
     );
   }
 
   if (error) {
     return (
-      <Layout>
+      <LayoutWithSidebar>
         <Alert severity="error" sx={{ mb: 3 }}>
           {error}
         </Alert>
-      </Layout>
+      </LayoutWithSidebar>
     );
   }
 
   if (!analyticsData) return null;
 
   return (
-    <Layout>
+    <LayoutWithSidebar>
       <Box>
         {/* Header */}
         <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mb: 4, flexDirection: { xs: 'column', sm: 'row' }, gap: { xs: 2, sm: 0 } }}>
@@ -1194,10 +1194,11 @@ const EnhancedAnalytics: React.FC = memo(() => {
           </Box>
         </Card>
       </Box>
-    </Layout>
+    </LayoutWithSidebar>
   );
 });
 
 EnhancedAnalytics.displayName = 'EnhancedAnalytics';
 
 export default EnhancedAnalytics;
+

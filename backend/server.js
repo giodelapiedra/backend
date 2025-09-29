@@ -26,33 +26,53 @@ const preventiveTaskRoutes = require('./routes/preventiveTasks');
 const { router: notificationRoutes } = require('./routes/notifications');
 const activityLogRoutes = require('./routes/activityLogs');
 const adminRoutes = require('./routes/admin');
+const clinicianAnalyticsRoutes = require('./routes/clinicianAnalytics');
+const teamLeaderRoutes = require('./routes/teamLeader');
+const workReadinessRoutes = require('./routes/workReadiness');
 
 const app = express();
 
-// Rate limiting (DISABLED FOR DEVELOPMENT)
-// const limiter = rateLimit({
-//   windowMs: 15 * 60 * 1000, // 15 minutes
-//   max: 200, // Allow up to 200 requests per 15 minutes
-//   message: 'Too many requests from this IP, please try again later.',
-//   standardHeaders: true,
-//   legacyHeaders: false,
-// });
+// Rate limiting for general requests
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 1000, // Allow up to 1000 requests per 15 minutes per IP
+  message: 'Too many requests from this IP, please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => {
+    // Skip rate limiting for health checks, CSRF token, and OPTIONS requests (CORS preflight)
+    return req.path.startsWith('/api/health') || 
+           req.path.startsWith('/api/csrf-token') || 
+           req.method === 'OPTIONS';
+  }
+});
 
-// Apply rate limiting to all requests (DISABLED)
-// app.use(limiter);
+// Apply rate limiting to all requests
+app.use(limiter);
 
-// Auth rate limiting (DISABLED FOR DEVELOPMENT)
-// const authLimiter = rateLimit({
-//   windowMs: 15 * 60 * 1000, // 15 minutes
-//   max: 10, // Limit to 10 auth attempts per 15 minutes
-//   message: 'Too many authentication attempts, please try again later.',
-//   standardHeaders: true,
-//   legacyHeaders: false,
-//   skipSuccessfulRequests: true, // Don't count successful requests
-// });
+// Auth rate limiting for authentication endpoints
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20, // Limit to 20 auth attempts per 15 minutes per IP
+  message: 'Too many authentication attempts, please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true, // Don't count successful requests
+  skip: (req) => {
+    // Only apply to auth endpoints, but skip OPTIONS requests (CORS preflight) and CSRF token
+    return !req.path.startsWith('/api/auth') || 
+           req.method === 'OPTIONS' || 
+           req.path.startsWith('/api/csrf-token');
+  }
+});
 
-// Security middleware
-app.use(helmet());
+// Apply auth rate limiting
+app.use(authLimiter);
+
+// Enhanced security middleware
+const { securityHeaders, additionalSecurityHeaders } = require('./middleware/securityHeaders');
+app.use(securityHeaders());
+app.use(additionalSecurityHeaders);
 app.use(compression());
 
 // CORS configuration
@@ -67,7 +87,31 @@ app.use(morgan('combined'));
 // Body parsing middleware
 app.use(express.json({ limit: '1mb' })); // Reduced from 10mb for security
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
-app.use(cookieParser()); // Add cookie parsing middleware
+
+// Enhanced cookie parser with secret for signed cookies
+const cookieSecret = process.env.COOKIE_SECRET || 'your-cookie-secret-change-in-production';
+app.use(cookieParser(cookieSecret)); // Add cookie parsing with secret
+
+// Cookie security middleware
+app.use((req, res, next) => {
+  // Set secure cookie defaults for all responses
+  res.cookie = ((originalCookie) => {
+    return function(name, value, options = {}) {
+      const secureDefaults = {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict'
+      };
+      
+      // Merge with secure defaults
+      const finalOptions = { ...secureDefaults, ...options };
+      
+      return originalCookie.call(this, name, value, finalOptions);
+    };
+  })(res.cookie);
+  
+  next();
+});
 
 // Input sanitization middleware
 app.use(sanitizeInput);
@@ -102,70 +146,43 @@ if (process.env.NODE_ENV === 'development') {
 // CSRF protection for state-changing operations
 app.use(csrfProtection);
 
-// MongoDB connection
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/data5', {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-})
-.then(() => console.log('MongoDB connected successfully to database: data5'))
-.catch(err => console.error('MongoDB connection error:', err));
+// MongoDB connection using centralized config
+const { connectDB } = require('./config/database');
+const { dbHealthCheck, getDatabaseStatus } = require('./middleware/dbHealth');
 
-// Simple static file serving for testing
+// Suppress mongoose warnings about duplicate indexes
+mongoose.set('strictQuery', false);
+
+// Connect to MongoDB and log detailed information
+connectDB()
+  .then(connection => {
+    console.log('✅ Database connection established successfully');
+    return connection;
+  })
+  .catch(err => {
+    console.error('❌ MongoDB connection failed:', err);
+    // Don't exit the process, let it try to reconnect
+  });
+
+// Enhanced image serving
+const { 
+  imageServingMiddleware, 
+  serveImage, 
+  servePublicImage, 
+  proxyCloudinaryImage 
+} = require('./middleware/imageServing');
+
+// Static file serving for uploads
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
+// Public image serving (no authentication required)
+app.get('/images/:filename', imageServingMiddleware, servePublicImage);
+
+// Cloudinary image proxy
+app.get('/api/images/proxy', imageServingMiddleware, proxyCloudinaryImage);
+
 // Secure image serving endpoint with authentication
-app.get('/api/images/:type/:filename', authMiddleware, async (req, res) => {
-  try {
-    const { type, filename } = req.params;
-    
-    // Validate type parameter
-    if (!['users', 'incidents'].includes(type)) {
-      return res.status(400).json({ message: 'Invalid image type' });
-    }
-    
-    // Prevent path traversal
-    if (filename.includes('..') || filename.includes('~') || filename.includes('\\')) {
-      return res.status(403).json({ message: 'Access denied - invalid filename' });
-    }
-    
-    // Validate file extension
-    const allowedExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
-    const fileExtension = path.extname(filename).toLowerCase();
-    
-    if (!allowedExtensions.includes(fileExtension)) {
-      return res.status(403).json({ message: 'Access denied - invalid file type' });
-    }
-    
-    // For user images, check ownership
-    if (type === 'users') {
-      const userId = req.user._id.toString();
-      
-      // Check if the filename contains the user's ID
-      if (!filename.includes(userId) && req.user.role !== 'admin') {
-        return res.status(403).json({ message: 'Access denied - you can only access your own files' });
-      }
-    }
-    
-    const filePath = path.join(__dirname, 'uploads', type, filename);
-    
-    // Check if file exists
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ message: 'Image not found' });
-    }
-    
-    // Set security headers
-    res.header('X-Content-Type-Options', 'nosniff');
-    res.header('X-Frame-Options', 'DENY');
-    res.header('Cache-Control', 'private, max-age=3600');
-    
-    // Send the file
-    res.sendFile(filePath);
-    
-  } catch (error) {
-    console.error('Error serving image:', error);
-    res.status(500).json({ message: 'Error serving image' });
-  }
-});
+app.get('/api/images/:type/:filename', authMiddleware, imageServingMiddleware, serveImage);
 
 // Routes
 app.use('/api/auth', authRoutes); // Removed authLimiter
@@ -181,16 +198,27 @@ app.use('/api/preventive-tasks', preventiveTaskRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/activity-logs', activityLogRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/clinicians/analytics', clinicianAnalyticsRoutes);
+app.use('/api/team-leader', teamLeaderRoutes);
+app.use('/api/work-readiness', workReadinessRoutes);
 
-// Health check endpoint
+// Apply database health check middleware to all routes
+app.use(dbHealthCheck);
+
+// Enhanced health check endpoints
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+  res.json({ 
+    status: 'OK', 
+    timestamp: new Date().toISOString(),
+    database: req.dbHealthy ? 'connected' : 'disconnected'
+  });
 });
+
+// Database status endpoint
+app.get('/api/database/status', getDatabaseStatus);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error('Server error:', err.message);
-  
   // Don't expose internal errors in production
   const errorMessage = process.env.NODE_ENV === 'development' 
     ? err.message 
@@ -211,6 +239,8 @@ const PORT = process.env.PORT || 5000;
 
 // Start scheduled job runner for smart notifications
 const jobRunner = require('./services/ScheduledJobRunner');
+const notificationScheduler = require('./services/notificationScheduler');
+const NotificationService = require('./services/NotificationService');
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
@@ -219,9 +249,6 @@ app.listen(PORT, () => {
   // Start smart notification jobs
   if (process.env.NODE_ENV === 'production' || process.env.ENABLE_SCHEDULED_JOBS === 'true') {
     jobRunner.start();
-    console.log('🤖 Smart notification jobs started');
-  } else {
-    console.log('⏸️ Scheduled jobs disabled in development mode');
-    console.log('   Set ENABLE_SCHEDULED_JOBS=true to enable in development');
+    notificationScheduler.start();
   }
 });

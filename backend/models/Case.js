@@ -103,31 +103,58 @@ const caseSchema = new mongoose.Schema({
       type: Date,
       default: Date.now
     }
-  }]
+  }],
+  statusHistory: [{
+    status: {
+      type: String,
+      enum: ['new', 'triaged', 'assessed', 'in_rehab', 'return_to_work', 'closed'],
+      required: true
+    },
+    changedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true
+    },
+    changedAt: {
+      type: Date,
+      default: Date.now,
+      required: true
+    },
+    notes: String
+  }],
+  closedDate: Date,
+  closedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }
 }, {
   timestamps: true
 });
 
-// Generate case number before saving
-caseSchema.pre('save', async function(next) {
-  try {
-    if (!this.caseNumber) {
-      console.log('Generating case number...');
-      const currentDate = new Date();
-      const year = currentDate.getFullYear();
-      
-      // Generate a timestamp-based unique ID to avoid race conditions
-      const timestamp = Date.now();
-      const random = Math.floor(Math.random() * 1000);
-      
-      // Format: CASE-YYYY-TIMESTAMP-RRR (e.g., CASE-2025-1695020154321-123)
-      this.caseNumber = `CASE-${year}-${timestamp}-${random}`;
-      console.log('Generated case number:', this.caseNumber);
+// Generate case number before validation
+caseSchema.pre('validate', async function() {
+  if (!this.caseNumber) {
+    console.log('Generating case number...');
+    const currentDate = new Date();
+    const year = currentDate.getFullYear();
+    
+    // Generate a timestamp-based unique ID to avoid race conditions
+    const timestamp = Date.now();
+    const random = Math.floor(Math.random() * 1000);
+    
+    // Format: CASE-YYYY-TIMESTAMP-RRR (e.g., CASE-2025-1695020154321-123)
+    this.caseNumber = `CASE-${year}-${timestamp}-${random}`;
+    console.log('Generated case number:', this.caseNumber);
+  }
+});
+
+// Ensure case number is unique before saving
+caseSchema.pre('save', async function() {
+  if (this.isNew || this.isModified('caseNumber')) {
+    const existingCase = await this.constructor.findOne({ caseNumber: this.caseNumber });
+    if (existingCase && existingCase._id.toString() !== this._id.toString()) {
+      throw new Error('Case number must be unique');
     }
-    next();
-  } catch (error) {
-    console.error('Error in Case pre-save hook:', error);
-    next(error);
   }
 });
 

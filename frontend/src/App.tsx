@@ -10,24 +10,35 @@ import Dashboard from './pages/Dashboard';
 import AdminDashboard from './pages/admin/AdminDashboard';
 import EnhancedAnalytics from './pages/admin/Analytics';
 import AuthenticationLogs from './pages/admin/AuthenticationLogs';
+import Users from './pages/admin/Users';
 import WorkerDashboard from './pages/worker/WorkerDashboard';
 import WorkerRehabilitationPlan from './pages/worker/WorkerRehabilitationPlan';
 import ClinicianDashboard from './pages/clinician/ClinicianDashboard';
 import WorkerActivityMonitor from './pages/clinician/WorkerActivityMonitor';
+import AppointmentCalendar from './pages/clinician/AppointmentCalendar';
+import ClinicianAnalytics from './pages/clinician/ClinicianAnalytics';
 import EmployerDashboard from './pages/employer/EmployerDashboard';
 import Analytics from './pages/employer/Analytics';
 import CaseManagerDashboard from './pages/caseManager/CaseManagerDashboard';
 import SiteSupervisorDashboard from './pages/siteSupervisor/SiteSupervisorDashboard';
+import TeamLeaderMonitoring from './pages/siteSupervisor/TeamLeaderMonitoring';
 import GPInsurerDashboard from './pages/gpInsurer/GPInsurerDashboard';
+import TeamLeaderDashboard from './pages/teamLeader/TeamLeaderDashboard';
+import TeamAnalytics from './pages/teamLeader/TeamAnalytics';
+import TeamMemberManagement from './pages/teamLeader/TeamMemberManagement';
+import WorkReadinessDashboard from './pages/teamLeader/WorkReadinessDashboard';
+import AssessmentLogs from './pages/teamLeader/AssessmentLogs';
 import Cases from './pages/Cases';
 import CaseDetails from './pages/CaseDetails';
 import CheckInsPage from './pages/CheckInsPage';
 import Appointments from './pages/Appointments';
-import Users from './pages/admin/Users';
 import Profile from './pages/Profile';
 import Notifications from './pages/Notifications';
 import NotFound from './pages/NotFound';
 import './styles/dashboard.css';
+
+// Lazy-loaded components
+const TaskManagement = React.lazy(() => import('./pages/clinician/TaskManagement'));
 
 const theme = createTheme({
   palette: {
@@ -252,6 +263,26 @@ function App() {
               </ProtectedRoute>
             } />
             
+            <Route path="/clinician/tasks" element={
+              <ProtectedRoute allowedRoles={['clinician']}>
+                <Suspense fallback={<LoadingFallback />}>
+                  <TaskManagement />
+                </Suspense>
+              </ProtectedRoute>
+            } />
+            
+            <Route path="/clinician/calendar" element={
+              <ProtectedRoute allowedRoles={['clinician']}>
+                <AppointmentCalendar />
+              </ProtectedRoute>
+            } />
+            
+            <Route path="/clinician/analytics" element={
+              <ProtectedRoute allowedRoles={['clinician']}>
+                <ClinicianAnalytics />
+              </ProtectedRoute>
+            } />
+            
             <Route path="/employer" element={
               <ProtectedRoute allowedRoles={['employer']}>
                 <EmployerDashboard />
@@ -282,9 +313,45 @@ function App() {
               </ProtectedRoute>
             } />
             
+            <Route path="/site-supervisor/team-monitoring" element={
+              <ProtectedRoute allowedRoles={['site_supervisor']}>
+                <TeamLeaderMonitoring />
+              </ProtectedRoute>
+            } />
+            
             <Route path="/gp-insurer" element={
               <ProtectedRoute allowedRoles={['gp_insurer']}>
                 <GPInsurerDashboard />
+              </ProtectedRoute>
+            } />
+            
+            <Route path="/team-leader" element={
+              <ProtectedRoute allowedRoles={['team_leader']}>
+                <TeamLeaderDashboard />
+              </ProtectedRoute>
+            } />
+            
+            <Route path="/team-leader/analytics" element={
+              <ProtectedRoute allowedRoles={['team_leader']}>
+                <TeamAnalytics />
+              </ProtectedRoute>
+            } />
+            
+            <Route path="/team-leader/members" element={
+              <ProtectedRoute allowedRoles={['team_leader']}>
+                <TeamMemberManagement />
+              </ProtectedRoute>
+            } />
+            
+            <Route path="/team-leader/work-readiness" element={
+              <ProtectedRoute allowedRoles={['team_leader']}>
+                <WorkReadinessDashboard />
+              </ProtectedRoute>
+            } />
+            
+            <Route path="/team-leader/assessment-logs" element={
+              <ProtectedRoute allowedRoles={['team_leader']}>
+                <AssessmentLogs />
               </ProtectedRoute>
             } />
             

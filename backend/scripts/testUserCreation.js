@@ -8,7 +8,7 @@ async function testUserCreation() {
     console.log('Testing user creation...');
     
     // Connect to MongoDB
-    await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/data5', {
+    await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/occupational-rehab', {
       useNewUrlParser: true,
       useUnifiedTopology: true,
     });

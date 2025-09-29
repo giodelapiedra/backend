@@ -113,6 +113,15 @@ const rehabilitationPlanSchema = new mongoose.Schema({
       },
       duration: {
         type: Number // actual duration completed
+      },
+      painLevel: {
+        type: Number, // 0-10 pain scale
+        min: 0,
+        max: 10,
+        default: null
+      },
+      painNotes: {
+        type: String // Additional notes about pain experienced
       }
     }],
     overallStatus: {
@@ -155,6 +164,44 @@ const rehabilitationPlanSchema = new mongoose.Schema({
     },
     lastSkippedDate: {
       type: Date
+    },
+    // Pain tracking statistics
+    painStats: {
+      averagePainLevel: {
+        type: Number,
+        default: 0
+      },
+      lastReportedPainLevel: {
+        type: Number,
+        default: 0
+      },
+      lastReportedPainDate: {
+        type: Date
+      },
+      painTrend: {
+        type: String,
+        enum: ['increasing', 'decreasing', 'stable', 'fluctuating', 'unknown'],
+        default: 'unknown'
+      },
+      painHistory: [{
+        date: {
+          type: Date
+        },
+        averagePainLevel: {
+          type: Number
+        },
+        exerciseCount: {
+          type: Number
+        }
+      }],
+      highPainAlertTriggered: {
+        type: Boolean,
+        default: false
+      },
+      increasingPainAlertTriggered: {
+        type: Boolean,
+        default: false
+      }
     }
   },
   
@@ -162,7 +209,7 @@ const rehabilitationPlanSchema = new mongoose.Schema({
   alerts: [{
     type: {
       type: String,
-      enum: ['skipped_sessions', 'progress_milestone', 'plan_review_needed'],
+      enum: ['skipped_sessions', 'progress_milestone', 'plan_review_needed', 'high_pain_reported', 'increasing_pain_trend'],
       required: true
     },
     message: {
@@ -255,7 +302,7 @@ rehabilitationPlanSchema.methods.getTodaysExercises = function() {
 };
 
 // Method to mark exercise as completed
-rehabilitationPlanSchema.methods.markExerciseCompleted = function(exerciseId, duration) {
+rehabilitationPlanSchema.methods.markExerciseCompleted = function(exerciseId, duration, painLevel = null, painNotes = null) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   
@@ -282,13 +329,31 @@ rehabilitationPlanSchema.methods.markExerciseCompleted = function(exerciseId, du
     exerciseCompletion.status = 'completed';
     exerciseCompletion.completedAt = new Date();
     exerciseCompletion.duration = duration;
+    
+    // Add pain tracking information if provided
+    if (painLevel !== null && painLevel >= 0 && painLevel <= 10) {
+      exerciseCompletion.painLevel = painLevel;
+      if (painNotes) {
+        exerciseCompletion.painNotes = painNotes;
+      }
+    }
   } else {
-    todaysCompletion.exercises.push({
+    const completionData = {
       exerciseId,
       status: 'completed',
       completedAt: new Date(),
       duration: duration
-    });
+    };
+    
+    // Add pain tracking information if provided
+    if (painLevel !== null && painLevel >= 0 && painLevel <= 10) {
+      completionData.painLevel = painLevel;
+      if (painNotes) {
+        completionData.painNotes = painNotes;
+      }
+    }
+    
+    todaysCompletion.exercises.push(completionData);
   }
   
   // Update overall status
@@ -308,13 +373,14 @@ rehabilitationPlanSchema.methods.markExerciseCompleted = function(exerciseId, du
   
   console.log('Today\'s overall status:', todaysCompletion.overallStatus);
   
-  // Update progress stats
+  // Update progress stats and pain trends
   this.updateProgressStats();
+  this.updatePainStats();
   
   return this.save();
 };
 
-// Method to mark exercise as skipped
+  // Method to mark exercise as skipped
 rehabilitationPlanSchema.methods.markExerciseSkipped = function(exerciseId, reason, notes) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -342,13 +408,42 @@ rehabilitationPlanSchema.methods.markExerciseSkipped = function(exerciseId, reas
     exerciseCompletion.status = 'skipped';
     exerciseCompletion.skippedReason = reason;
     exerciseCompletion.skippedNotes = notes;
+    exerciseCompletion.skippedAt = new Date();
   } else {
     todaysCompletion.exercises.push({
       exerciseId,
       status: 'skipped',
       skippedReason: reason,
-      skippedNotes: notes
+      skippedNotes: notes,
+      skippedAt: new Date()
     });
+  }
+  
+  // Update overall status based on all exercises
+  const totalExercises = this.exercises.length;
+  const skippedExercises = todaysCompletion.exercises.filter(e => e.status === 'skipped').length;
+  const completedExercises = todaysCompletion.exercises.filter(e => e.status === 'completed').length;
+  
+  console.log('Exercise status counts:', {
+    total: totalExercises,
+    skipped: skippedExercises,
+    completed: completedExercises
+  });
+  
+  // If all exercises are skipped, mark the day as skipped
+  if (skippedExercises === totalExercises) {
+    todaysCompletion.overallStatus = 'skipped';
+    console.log('All exercises skipped - marking day as skipped');
+  }
+  // If some exercises are completed and some are skipped, mark as partial
+  else if ((skippedExercises > 0 || completedExercises > 0) && (skippedExercises + completedExercises === totalExercises)) {
+    todaysCompletion.overallStatus = 'partial';
+    console.log('Mix of skipped/completed - marking day as partial');
+  }
+  // If at least one exercise is skipped and not all exercises are accounted for
+  else if (skippedExercises > 0) {
+    todaysCompletion.overallStatus = 'partial';
+    console.log('Some exercises skipped - marking day as partial');
   }
   
   // Update progress stats
@@ -369,9 +464,31 @@ rehabilitationPlanSchema.methods.updateProgressStats = function() {
     exercises: c.exercises.length
   })));
   
-  this.progressStats.totalDays = completions.length;
-  this.progressStats.completedDays = completions.filter(c => c.overallStatus === 'completed').length;
-  this.progressStats.skippedDays = completions.filter(c => c.overallStatus === 'skipped').length;
+  // Count days with any activity (completed, skipped, or partial)
+  this.progressStats.totalDays = completions.filter(c => 
+    c.overallStatus === 'completed' || 
+    c.overallStatus === 'skipped' || 
+    c.overallStatus === 'partial'
+  ).length;
+  
+  // Count fully completed days
+  this.progressStats.completedDays = completions.filter(c => 
+    c.overallStatus === 'completed'
+  ).length;
+  
+  // Count days where any exercise was skipped
+  this.progressStats.skippedDays = completions.filter(c => 
+    c.exercises.some(e => e.status === 'skipped')
+  ).length;
+  
+  console.log('Days with skipped exercises:', this.progressStats.skippedDays);
+  console.log('Skipped exercise details:', completions
+    .filter(c => c.exercises.some(e => e.status === 'skipped'))
+    .map(c => ({
+      date: c.date,
+      skippedExercises: c.exercises.filter(e => e.status === 'skipped').length,
+      totalExercises: c.exercises.length
+    })));
   
   console.log('Calculated stats:', {
     totalDays: this.progressStats.totalDays,
@@ -452,6 +569,18 @@ rehabilitationPlanSchema.methods.ensureProgressStats = function() {
     };
   }
   
+  // Initialize pain stats if they don't exist
+  if (!this.progressStats.painStats) {
+    this.progressStats.painStats = {
+      averagePainLevel: 0,
+      lastReportedPainLevel: 0,
+      painTrend: 'unknown',
+      painHistory: [],
+      highPainAlertTriggered: false,
+      increasingPainAlertTriggered: false
+    };
+  }
+  
   // Always update stats to ensure they're current
   this.updateProgressStats();
   
@@ -466,6 +595,14 @@ rehabilitationPlanSchema.methods.checkForAlerts = async function() {
   console.log('Consecutive completed days:', this.progressStats.consecutiveCompletedDays);
   console.log('Consecutive skipped days:', this.progressStats.consecutiveSkippedDays);
   
+  // Ensure pain stats are available
+  if (!this.progressStats.painStats) {
+    this.updatePainStats();
+  }
+  
+  console.log('Pain trend:', this.progressStats.painStats?.painTrend);
+  console.log('Last reported pain level:', this.progressStats.painStats?.lastReportedPainLevel);
+  
   // Check for consecutive skipped sessions
   if (this.progressStats.consecutiveSkippedDays >= (this.settings?.maxConsecutiveSkips || 3)) {
     alerts.push({
@@ -477,6 +614,52 @@ rehabilitationPlanSchema.methods.checkForAlerts = async function() {
         caseId: this.case
       }
     });
+  }
+  
+  // Check for high pain level reported (pain level 7 or higher)
+  if (this.progressStats.painStats && 
+      this.progressStats.painStats.lastReportedPainLevel >= 7 && 
+      !this.progressStats.painStats.highPainAlertTriggered) {
+    
+    alerts.push({
+      type: 'high_pain_reported',
+      message: `Worker has reported a high pain level (${this.progressStats.painStats.lastReportedPainLevel.toFixed(1)}/10). Immediate plan review recommended.`,
+      metadata: {
+        painLevel: this.progressStats.painStats.lastReportedPainLevel,
+        reportedAt: this.progressStats.painStats.lastReportedPainDate,
+        workerId: this.worker,
+        caseId: this.case
+      }
+    });
+    
+    // Set flag to avoid duplicate alerts for the same high pain event
+    this.progressStats.painStats.highPainAlertTriggered = true;
+  } else if (this.progressStats.painStats && this.progressStats.painStats.lastReportedPainLevel < 7) {
+    // Reset the flag if pain level drops below threshold
+    this.progressStats.painStats.highPainAlertTriggered = false;
+  }
+  
+  // Check for increasing pain trend
+  if (this.progressStats.painStats && 
+      this.progressStats.painStats.painTrend === 'increasing' && 
+      !this.progressStats.painStats.increasingPainAlertTriggered) {
+    
+    alerts.push({
+      type: 'increasing_pain_trend',
+      message: `Worker is showing an increasing pain trend over the last several sessions. Consider reviewing and adjusting the rehabilitation plan.`,
+      metadata: {
+        painTrend: this.progressStats.painStats.painTrend,
+        averagePainLevel: this.progressStats.painStats.averagePainLevel,
+        workerId: this.worker,
+        caseId: this.case
+      }
+    });
+    
+    // Set flag to avoid duplicate alerts for the same trend
+    this.progressStats.painStats.increasingPainAlertTriggered = true;
+  } else if (this.progressStats.painStats && this.progressStats.painStats.painTrend !== 'increasing') {
+    // Reset the flag if trend changes
+    this.progressStats.painStats.increasingPainAlertTriggered = false;
   }
   
   // Check for 5-day consecutive completion milestone
@@ -584,6 +767,122 @@ rehabilitationPlanSchema.methods.checkForAlerts = async function() {
   }
   
   return alerts;
+};
+
+// Method to update pain statistics and analyze trends
+rehabilitationPlanSchema.methods.updatePainStats = function() {
+  console.log('Updating pain statistics...');
+  
+  // Ensure pain stats are initialized
+  if (!this.progressStats.painStats) {
+    this.progressStats.painStats = {
+      averagePainLevel: 0,
+      lastReportedPainLevel: 0,
+      painTrend: 'unknown',
+      painHistory: [],
+      highPainAlertTriggered: false,
+      increasingPainAlertTriggered: false
+    };
+  }
+  
+  // Get all exercise completions with pain levels reported
+  const painReports = [];
+  this.dailyCompletions.forEach(completion => {
+    const completionDate = new Date(completion.date);
+    completionDate.setHours(0, 0, 0, 0);
+    
+    // Filter exercises with pain levels reported
+    const exercisesWithPain = completion.exercises.filter(e => 
+      e.status === 'completed' && e.painLevel !== null && e.painLevel !== undefined
+    );
+    
+    if (exercisesWithPain.length > 0) {
+      // Calculate average pain for the day
+      const totalPain = exercisesWithPain.reduce((sum, e) => sum + e.painLevel, 0);
+      const avgPain = totalPain / exercisesWithPain.length;
+      
+      painReports.push({
+        date: completionDate,
+        averagePainLevel: avgPain,
+        exerciseCount: exercisesWithPain.length
+      });
+    }
+  });
+  
+  // Sort pain reports by date (oldest to newest)
+  painReports.sort((a, b) => a.date - b.date);
+  
+  // Update pain history (keep last 30 days)
+  this.progressStats.painStats.painHistory = painReports.slice(-30);
+  
+  // Calculate overall average pain level
+  if (painReports.length > 0) {
+    const totalPain = painReports.reduce((sum, report) => sum + report.averagePainLevel, 0);
+    this.progressStats.painStats.averagePainLevel = totalPain / painReports.length;
+    
+    // Update last reported pain level
+    const lastReport = painReports[painReports.length - 1];
+    this.progressStats.painStats.lastReportedPainLevel = lastReport.averagePainLevel;
+    this.progressStats.painStats.lastReportedPainDate = lastReport.date;
+  }
+  
+  // Analyze pain trend (need at least 3 data points)
+  if (painReports.length >= 3) {
+    // Get the last 7 days of pain reports or all if less than 7
+    const recentReports = painReports.slice(-7);
+    
+    // Simple trend analysis
+    let increasing = 0;
+    let decreasing = 0;
+    let stable = 0;
+    
+    for (let i = 1; i < recentReports.length; i++) {
+      const diff = recentReports[i].averagePainLevel - recentReports[i-1].averagePainLevel;
+      
+      if (diff > 0.5) {  // Pain increased by more than 0.5 points
+        increasing++;
+      } else if (diff < -0.5) {  // Pain decreased by more than 0.5 points
+        decreasing++;
+      } else {  // Pain relatively stable
+        stable++;
+      }
+    }
+    
+    // Determine trend
+    if (increasing > decreasing && increasing > stable) {
+      this.progressStats.painStats.painTrend = 'increasing';
+    } else if (decreasing > increasing && decreasing > stable) {
+      this.progressStats.painStats.painTrend = 'decreasing';
+    } else if (stable > increasing && stable > decreasing) {
+      this.progressStats.painStats.painTrend = 'stable';
+    } else {
+      this.progressStats.painStats.painTrend = 'fluctuating';
+    }
+  } else {
+    this.progressStats.painStats.painTrend = 'unknown';
+  }
+  
+  console.log('Pain trend analysis:', this.progressStats.painStats.painTrend);
+  console.log('Average pain level:', this.progressStats.painStats.averagePainLevel);
+  
+  return this.progressStats.painStats;
+};
+
+// Method to get pain trend data for visualization
+rehabilitationPlanSchema.methods.getPainTrendData = function(days = 30) {
+  // Ensure pain stats exist
+  if (!this.progressStats.painStats || !this.progressStats.painStats.painHistory) {
+    return [];
+  }
+  
+  // Get the most recent X days of pain data
+  const painData = this.progressStats.painStats.painHistory.slice(-days);
+  
+  return painData.map(entry => ({
+    date: entry.date,
+    painLevel: entry.averagePainLevel,
+    exerciseCount: entry.exerciseCount
+  }));
 };
 
 // Method to get milestone progress information

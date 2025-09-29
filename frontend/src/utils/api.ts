@@ -8,6 +8,7 @@ let csrfToken: string | null = null;
 const api = axios.create({
   baseURL: process.env.REACT_APP_API_URL || 'http://localhost:5000/api',
   timeout: 15000,
+  withCredentials: true, // Important for CSRF and cookie-based auth
   headers: {
     'Content-Type': 'application/json',
   },
@@ -17,12 +18,16 @@ const api = axios.create({
 export const getCSRFToken = async (): Promise<string> => {
   if (!csrfToken) {
     try {
-      console.log('Fetching CSRF token from server...');
-      const response = await axios.get(`${process.env.REACT_APP_API_URL || 'http://localhost:5000/api'}/csrf-token`);
+      console.log('Fetching CSRF token...');
+      const response = await axios.get(`${process.env.REACT_APP_API_URL || 'http://localhost:5000/api'}/csrf-token`, {
+        withCredentials: true
+      });
       csrfToken = response.data.csrfToken;
-      console.log('CSRF token fetched:', csrfToken ? csrfToken.substring(0, 10) + '...' : 'null');
+      if (csrfToken) {
+        console.log('CSRF token received:', csrfToken.substring(0, 10) + '...');
+      }
     } catch (error) {
-      console.error('Failed to get CSRF token:', error);
+      console.error('Error fetching CSRF token:', error);
       throw error;
     }
   }
@@ -37,25 +42,23 @@ api.interceptors.request.use(
       config.headers.Authorization = `Bearer ${token}`;
     }
 
-    // Add CSRF token for non-GET requests (except login/register)
+    // Add CSRF token for non-GET requests (except register)
     if (config.method !== 'get' && 
-        !config.url?.includes('/auth/login') && 
         !config.url?.includes('/auth/register') &&
         !config.url?.includes('/csrf-token')) {
       try {
         const csrf = await getCSRFToken();
         config.headers['X-CSRF-Token'] = csrf;
+        console.log('CSRF token added to request:', csrf.substring(0, 10) + '...');
       } catch (error) {
-        console.error('Failed to add CSRF token:', error);
-        // For now, continue without CSRF token to test if that's the issue
-        console.warn('Continuing without CSRF token for debugging');
+        console.error('Failed to get CSRF token:', error);
+        // Continue without CSRF token
       }
     }
 
     return config;
   },
   (error) => {
-    console.error('Request interceptor error:', error);
     return Promise.reject(error);
   }
 );
@@ -66,20 +69,34 @@ api.interceptors.response.use(
     return response;
   },
   (error) => {
-    console.error('API Error:', error);
-    
     if (error.response?.status === 401) {
-      console.log('Authentication error (401) - redirecting to login');
-      // Token expired or invalid
-      Cookies.remove('token');
-      Cookies.remove('user');
-      window.location.href = '/login';
+      // Only redirect if we're not already on the login page
+      if (!window.location.pathname.includes('/login')) {
+        // Token expired or invalid
+        Cookies.remove('token');
+        Cookies.remove('user');
+        window.location.href = '/login';
+        return Promise.reject(new Error('Your session has expired. Please log in again.'));
+      }
+      // If we're on login page, just reject the promise without redirecting
+      return Promise.reject(error);
+    }
+    
+    if (error.response?.status === 403) {
+      return Promise.reject(new Error('You do not have permission to access this resource.'));
+    }
+    
+    if (error.response?.status === 500) {
+      return Promise.reject(new Error('An unexpected error occurred. Our team has been notified.'));
     }
     
     // Enhance error message with more details
     if (error.response?.data) {
-      error.message = error.response.data.message || error.message;
-      error.details = error.response.data.details || error.response.data.errors || null;
+      const errorMessage = error.response.data.message || error.message;
+      const errorDetails = error.response.data.details || error.response.data.errors;
+      
+      error.message = errorMessage;
+      error.details = errorDetails;
     }
     
     return Promise.reject(error);
@@ -98,7 +115,6 @@ export const getCurrentUser = () => {
     try {
       return JSON.parse(userStr);
     } catch (e) {
-      console.error('Error parsing user from cookies', e);
       return null;
     }
   }

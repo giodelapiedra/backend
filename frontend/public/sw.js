@@ -46,41 +46,52 @@ self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
+  // Skip handling navigation requests for SPA routes to prevent auto-refreshes
+  if (request.mode === 'navigate' && !url.pathname.includes('.')) {
+    return;
+  }
+
   // Handle API requests - always go to network first
   if (url.pathname.startsWith('/api/')) {
-    event.respondWith(
-      fetch(request)
-        .then((response) => {
-          // Cache successful API responses for a short time
-          if (response.ok) {
-            const responseClone = response.clone();
-            caches.open(API_CACHE_NAME).then((cache) => {
-              cache.put(request, responseClone);
-            });
-          }
-          return response;
-        })
-        .catch(() => {
-          // If network fails, try to serve from cache
-          return caches.match(request).then((response) => {
-            if (response) {
-              return response;
+    // Only cache GET requests for API endpoints
+    if (request.method === 'GET') {
+      event.respondWith(
+        fetch(request)
+          .then((response) => {
+            // Cache successful GET API responses for a short time
+            if (response.ok) {
+              const responseClone = response.clone();
+              caches.open(API_CACHE_NAME).then((cache) => {
+                cache.put(request, responseClone);
+              });
             }
-            // Return a fallback response for API failures
-            return new Response(
-              JSON.stringify({ 
-                error: 'Network unavailable', 
-                message: 'Please check your internet connection' 
-              }),
-              {
-                status: 503,
-                statusText: 'Service Unavailable',
-                headers: { 'Content-Type': 'application/json' }
+            return response;
+          })
+          .catch(() => {
+            // If network fails, try to serve from cache
+            return caches.match(request).then((response) => {
+              if (response) {
+                return response;
               }
-            );
-          });
-        })
-    );
+              // Return a fallback response for API failures
+              return new Response(
+                JSON.stringify({ 
+                  error: 'Network unavailable', 
+                  message: 'Please check your internet connection' 
+                }),
+                {
+                  status: 503,
+                  statusText: 'Service Unavailable',
+                  headers: { 'Content-Type': 'application/json' }
+                }
+              );
+            });
+          })
+      );
+    } else {
+      // For non-GET requests (POST, PUT, DELETE), just pass through to network
+      event.respondWith(fetch(request));
+    }
     return;
   }
 

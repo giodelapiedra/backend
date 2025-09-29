@@ -4,7 +4,6 @@ import {
   TextField,
   Button,
   Typography,
-  Alert,
   CircularProgress,
   InputAdornment,
   IconButton,
@@ -17,6 +16,7 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import PhotoUpload from '../components/PhotoUpload';
+import ErrorPopup from '../components/ErrorPopup';
 
 const Login: React.FC = () => {
   const [isLogin, setIsLogin] = useState(true);
@@ -52,6 +52,7 @@ const Login: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [error, setError] = useState('');
+  const [showErrorPopup, setShowErrorPopup] = useState(false);
   const [profilePhoto, setProfilePhoto] = useState<File | null>(null);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   
@@ -74,9 +75,9 @@ const Login: React.FC = () => {
     checkAuthStatus();
   }, []);
 
-  // Redirect if user is already authenticated
+  // Redirect if user is already authenticated (but not if there's an error)
   useEffect(() => {
-    if (user && !loading) {
+    if (user && !loading && !error) {
       // Redirect based on user role - using exact role names from Dashboard component
       switch (user.role) {
         case 'admin':
@@ -97,6 +98,9 @@ const Login: React.FC = () => {
         case 'gp_insurer':
           navigate('/gp-insurer');
           break;
+        case 'team_leader':
+          navigate('/team-leader');
+          break;
         case 'worker':
         default:
           navigate('/worker');
@@ -106,7 +110,7 @@ const Login: React.FC = () => {
       // Only show login form when we're sure user is not authenticated
       setIsCheckingAuth(false);
     }
-  }, [user, loading, navigate]);
+  }, [user, loading, navigate, error]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
@@ -130,7 +134,11 @@ const Login: React.FC = () => {
         [name]: value,
       });
     }
-    setError('');
+    // Only clear error when user starts typing in password field
+    if (name === 'password') {
+      setError('');
+      setShowErrorPopup(false);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -162,12 +170,19 @@ const Login: React.FC = () => {
       }
     } catch (err: any) {
       setError(err.message);
+      setShowErrorPopup(true);
+      // Auto-hide popup after 5 seconds
+      setTimeout(() => {
+        setShowErrorPopup(false);
+        setError('');
+      }, 5000);
     }
   };
 
   const toggleMode = () => {
     setIsLogin(!isLogin);
     setError('');
+    setShowErrorPopup(false);
     setFormData({
       firstName: '',
       lastName: '',
@@ -360,11 +375,6 @@ const Login: React.FC = () => {
             }
           </Typography>
 
-          {error && (
-            <Alert severity="error" sx={{ mb: 3 }}>
-              {error}
-            </Alert>
-          )}
 
           <Box component="form" onSubmit={handleSubmit}>
             {!isLogin && (
@@ -672,6 +682,16 @@ const Login: React.FC = () => {
           </Box>
         </Box>
       </Box>
+      
+      {/* Error Popup */}
+      <ErrorPopup
+        message="Please check your email/username and password and try again."
+        onClose={() => {
+          setShowErrorPopup(false);
+          setError('');
+        }}
+        show={showErrorPopup}
+      />
     </Box>
   );
 };

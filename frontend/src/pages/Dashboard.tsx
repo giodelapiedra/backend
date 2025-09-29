@@ -1,8 +1,7 @@
 import React from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import Layout from '../components/Layout';
-import { Box, Typography, CircularProgress } from '@mui/material';
+import { Box, CircularProgress } from '@mui/material';
 
 const Dashboard: React.FC = () => {
   const { user, loading } = useAuth();
@@ -41,6 +40,8 @@ const Dashboard: React.FC = () => {
         return '/site-supervisor';
       case 'gp_insurer':
         return '/gp-insurer';
+      case 'team_leader':
+        return '/team-leader';
       default:
         return '/dashboard';
     }

@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Box,
   Card,
@@ -47,7 +47,7 @@ import {
   Visibility,
 } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext';
-import Layout from '../../components/Layout';
+import LayoutWithSidebar from '../../components/LayoutWithSidebar';
 import axios from 'axios';
 
 interface CheckIn {
@@ -313,16 +313,16 @@ const WorkerDashboard: React.FC = () => {
 
   if (loading) {
     return (
-      <Layout>
+      <LayoutWithSidebar>
         <Box display="flex" justifyContent="center" alignItems="center" minHeight="50vh">
           <CircularProgress />
         </Box>
-      </Layout>
+      </LayoutWithSidebar>
     );
   }
 
   return (
-    <Layout>
+    <LayoutWithSidebar>
       <Box sx={{ 
         minHeight: '100vh', 
         backgroundColor: '#f8fafc',
@@ -730,8 +730,9 @@ const WorkerDashboard: React.FC = () => {
           </DialogActions>
         </Dialog>
       </Box>
-    </Layout>
+    </LayoutWithSidebar>
   );
 };
 
 export default WorkerDashboard;
+

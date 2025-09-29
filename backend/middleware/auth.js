@@ -42,10 +42,10 @@ const authMiddleware = async (req, res, next) => {
       return res.status(401).json({ message: 'Account is deactivated' });
     }
 
-    // DISABLED: Account lockout check removed
-    // if (user.isLocked) {
-    //   return res.status(401).json({ message: 'Account is temporarily locked due to too many failed login attempts' });
-    // }
+    // Check if account is locked
+    if (user.isLocked) {
+      return res.status(401).json({ message: 'Account is temporarily locked due to too many failed login attempts' });
+    }
 
     req.user = user;
     next();

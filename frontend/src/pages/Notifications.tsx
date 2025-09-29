@@ -19,6 +19,9 @@ import {
   DialogContent,
   DialogActions,
   Grid,
+  Avatar,
+  Menu,
+  MenuItem,
 } from '@mui/material';
 import {
   Notifications,
@@ -39,8 +42,10 @@ import {
   CalendarToday,
   Description,
   Image as ImageIcon,
+  VideoCall,
+  MoreVert,
 } from '@mui/icons-material';
-import Layout from '../components/Layout';
+import LayoutWithSidebar from '../components/LayoutWithSidebar';
 import api from '../utils/api';
 import { createImageProps } from '../utils/imageUtils';
 import '../styles/print.css';
@@ -56,6 +61,7 @@ interface Notification {
   sender: {
     firstName: string;
     lastName: string;
+    profileImage?: string;
   };
   actionUrl?: string;
 }
@@ -102,12 +108,60 @@ const NotificationsPage: React.FC = () => {
   const [caseDetailDialog, setCaseDetailDialog] = useState(false);
   const [loadingCase, setLoadingCase] = useState(false);
 
+
   useEffect(() => {
     fetchNotifications();
     
     // Completely disable all notification polling to stop repeated requests
     // TODO: Re-enable with proper SSE authentication later
   }, []);
+
+  // Helper function to categorize notifications by time
+  const categorizeNotificationsByTime = (notifications: Notification[]) => {
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+
+    const categorized = {
+      today: [] as Notification[],
+      yesterday: [] as Notification[],
+      older: [] as Notification[]
+    };
+
+    notifications.forEach(notification => {
+      const notificationDate = new Date(notification.createdAt);
+      
+      if (notificationDate >= today) {
+        categorized.today.push(notification);
+      } else if (notificationDate >= yesterday) {
+        categorized.yesterday.push(notification);
+      } else {
+        categorized.older.push(notification);
+      }
+    });
+
+    return categorized;
+  };
+
+  // Helper function to format time ago
+  const getTimeAgo = (dateString: string) => {
+    const now = new Date();
+    const date = new Date(dateString);
+    const diffInMinutes = Math.floor((now.getTime() - date.getTime()) / (1000 * 60));
+    
+    if (diffInMinutes < 1) return 'Just now';
+    if (diffInMinutes < 60) return `${diffInMinutes} minute${diffInMinutes > 1 ? 's' : ''} ago`;
+    
+    const diffInHours = Math.floor(diffInMinutes / 60);
+    if (diffInHours < 24) return `${diffInHours} hour${diffInHours > 1 ? 's' : ''} ago`;
+    
+    const diffInDays = Math.floor(diffInHours / 24);
+    if (diffInDays < 7) return `${diffInDays} day${diffInDays > 1 ? 's' : ''} ago`;
+    
+    return date.toLocaleDateString();
+  };
+
 
   const fetchNotifications = async () => {
     try {
@@ -496,6 +550,14 @@ const NotificationsPage: React.FC = () => {
         return <Assignment sx={{ color: '#3b82f6' }} />;
       case 'incident_reported':
         return <Warning sx={{ color: '#f59e0b' }} />;
+    case 'zoom_meeting_scheduled':
+      return <VideoCall sx={{ color: '#2D8CFF' }} />;
+    case 'appointment_reminder':
+      return <CalendarToday sx={{ color: '#f59e0b' }} />;
+    case 'zoom_meeting_reminder':
+      return <VideoCall sx={{ color: '#f59e0b' }} />;
+    case 'appointment_scheduled':
+      return <CalendarToday sx={{ color: '#3b82f6' }} />;
       default:
         return <Info sx={{ color: '#6b7280' }} />;
     }
@@ -516,28 +578,217 @@ const NotificationsPage: React.FC = () => {
     }
   };
 
+  // Notification Item Component
+  const NotificationItem: React.FC<{
+    notification: Notification;
+    onMarkAsRead: (id: string) => void;
+    onDelete: (id: string) => void;
+    getTimeAgo: (dateString: string) => string;
+  }> = ({ notification, onMarkAsRead, onDelete, getTimeAgo }) => {
+    const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
+
+    const handleOptionsClick = (event: React.MouseEvent<HTMLElement>) => {
+      setAnchorEl(event.currentTarget);
+    };
+
+    const handleOptionsClose = () => {
+      setAnchorEl(null);
+    };
+
+    return (
+    <Box
+      sx={{
+        display: 'flex',
+        alignItems: 'center',
+        padding: '16px',
+        backgroundColor: notification.isRead ? 'transparent' : '#f8f9fa',
+        borderRadius: '12px',
+        transition: 'all 0.2s ease',
+        cursor: 'pointer',
+        border: '1px solid transparent',
+        '&:hover': {
+          backgroundColor: notification.isRead ? '#f8f9fa' : '#f1f3f4',
+          borderColor: '#e5e7eb'
+        }
+      }}
+    >
+      {/* User Avatar */}
+      <Box sx={{ marginRight: '16px', position: 'relative' }}>
+        {notification.sender.profileImage ? (
+          <img
+            {...createImageProps(notification.sender.profileImage)}
+            alt={`${notification.sender.firstName} ${notification.sender.lastName}`}
+            style={{
+              width: '48px',
+              height: '48px',
+              borderRadius: '50%',
+              objectFit: 'cover',
+            }}
+          />
+        ) : (
+          <Avatar
+            sx={{
+              width: '48px',
+              height: '48px',
+              backgroundColor: '#7B68EE',
+              fontSize: '1.25rem',
+              fontWeight: '600',
+            }}
+          >
+            {notification.sender.firstName.charAt(0)}{notification.sender.lastName.charAt(0)}
+          </Avatar>
+        )}
+        
+        {/* Notification Type Icon Overlay */}
+        <Box
+          sx={{
+            position: 'absolute',
+            bottom: '-2px',
+            right: '-2px',
+            width: '20px',
+            height: '20px',
+            borderRadius: '50%',
+            backgroundColor: 'white',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            border: '2px solid white',
+            boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+          }}
+        >
+          {getNotificationIcon(notification.type)}
+        </Box>
+      </Box>
+
+      {/* Notification Content */}
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Typography
+          variant="h6"
+          sx={{
+            fontWeight: notification.isRead ? 500 : 600,
+            color: notification.isRead ? '#6b7280' : '#111827',
+            marginBottom: '4px',
+            fontSize: '0.875rem',
+            lineHeight: 1.4
+          }}
+        >
+          {notification.title}
+        </Typography>
+        
+        <Typography
+          variant="body2"
+          sx={{
+            color: notification.isRead ? '#9ca3af' : '#6b7280',
+            fontSize: '0.75rem',
+            lineHeight: 1.4,
+            marginBottom: '4px'
+          }}
+        >
+          {notification.message}
+        </Typography>
+        
+        <Typography
+          variant="caption"
+          sx={{
+            color: '#9ca3af',
+            fontSize: '0.75rem'
+          }}
+        >
+          {getTimeAgo(notification.createdAt)}
+        </Typography>
+      </Box>
+
+      {/* Status and Options */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        {/* Unread Indicator */}
+        {!notification.isRead && (
+          <Box
+            sx={{
+              width: '8px',
+              height: '8px',
+              borderRadius: '50%',
+              backgroundColor: '#9c27b0',
+            }}
+          />
+        )}
+        
+        {/* Options Menu */}
+        <IconButton
+          size="small"
+          onClick={handleOptionsClick}
+          sx={{
+            color: '#6b7280',
+            '&:hover': {
+              backgroundColor: '#f3f4f6',
+              color: '#374151'
+            }
+          }}
+        >
+          <MoreVert fontSize="small" />
+        </IconButton>
+      </Box>
+
+      {/* Options Menu */}
+      <Menu
+        anchorEl={anchorEl}
+        open={Boolean(anchorEl)}
+        onClose={handleOptionsClose}
+        PaperProps={{
+          sx: {
+            borderRadius: 2,
+            boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
+            border: '1px solid #e5e7eb'
+          }
+        }}
+      >
+        <MenuItem
+          onClick={() => {
+            onMarkAsRead(notification._id);
+            handleOptionsClose();
+          }}
+          sx={{ fontSize: '0.875rem' }}
+        >
+          <MarkEmailRead sx={{ mr: 1, fontSize: '1rem' }} />
+          Mark as Read
+        </MenuItem>
+        <MenuItem
+          onClick={() => {
+            onDelete(notification._id);
+            handleOptionsClose();
+          }}
+          sx={{ fontSize: '0.875rem', color: '#dc2626' }}
+        >
+          <Delete sx={{ mr: 1, fontSize: '1rem' }} />
+          Delete
+        </MenuItem>
+      </Menu>
+    </Box>
+    );
+  };
+
   const unreadCount = notifications.filter(n => !n.isRead).length;
+  const categorizedNotifications = categorizeNotificationsByTime(notifications);
 
   if (loading) {
     return (
-      <Layout>
+      <LayoutWithSidebar>
         <Box display="flex" justifyContent="center" alignItems="center" minHeight="60vh">
           <CircularProgress size={60} />
         </Box>
-      </Layout>
+      </LayoutWithSidebar>
     );
   }
 
   return (
-    <Layout>
-      <Box sx={{ p: 3 }}>
+    <LayoutWithSidebar>
+      <Box sx={{ p: 3, maxWidth: '800px', margin: '0 auto' }}>
         {/* Header */}
-        <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mb: 3 }}>
+        <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mb: 4 }}>
           <Box>
-            <Typography variant="h4" component="h1" sx={{ fontWeight: 700, mb: 1 }}>
-              🔔 Notifications
+            <Typography variant="h4" component="h1" sx={{ fontWeight: 700, mb: 1, color: '#1f2937' }}>
+              Notifications
             </Typography>
-            <Typography variant="body1" color="text.secondary">
+            <Typography variant="body1" sx={{ color: '#6b7280' }}>
               {unreadCount > 0 ? `${unreadCount} unread notifications` : 'All notifications read'}
             </Typography>
           </Box>
@@ -547,7 +798,15 @@ const NotificationsPage: React.FC = () => {
               variant="outlined"
               startIcon={<MarkEmailRead />}
               onClick={markAllAsRead}
-              sx={{ borderRadius: 2 }}
+              sx={{ 
+                borderRadius: 2,
+                borderColor: '#d1d5db',
+                color: '#374151',
+                '&:hover': {
+                  borderColor: '#9ca3af',
+                  backgroundColor: '#f9fafb'
+                }
+              }}
             >
               Mark All as Read
             </Button>
@@ -562,122 +821,102 @@ const NotificationsPage: React.FC = () => {
 
         {/* Notifications List */}
         {notifications.length === 0 ? (
-          <Card sx={{ borderRadius: 2, border: '1px solid #e1e5e9', boxShadow: 'none' }}>
+          <Card sx={{ borderRadius: 2, border: '1px solid #e5e7eb', boxShadow: 'none' }}>
             <CardContent sx={{ textAlign: 'center', py: 6 }}>
               <Notifications sx={{ fontSize: 64, color: '#e5e7eb', mb: 2 }} />
-              <Typography variant="h6" color="text.secondary" sx={{ mb: 1 }}>
+              <Typography variant="h6" sx={{ mb: 1, color: '#6b7280' }}>
                 No notifications yet
               </Typography>
-              <Typography variant="body2" color="text.secondary">
+              <Typography variant="body2" sx={{ color: '#9ca3af' }}>
                 You'll see important updates and alerts here
               </Typography>
             </CardContent>
           </Card>
         ) : (
-          <List sx={{ bgcolor: 'background.paper', borderRadius: 2 }}>
-            {notifications.map((notification, index) => (
-              <React.Fragment key={notification._id}>
-                <ListItem
-                  sx={{
-                    bgcolor: notification.isRead ? 'transparent' : '#f8f9fa',
-                    borderRadius: 1,
-                    mb: 1,
-                    border: notification.isRead ? 'none' : '1px solid #e1e5e9',
-                    '&:hover': {
-                      bgcolor: notification.isRead ? '#f8f9fa' : '#f1f3f4',
-                    },
-                  }}
-                >
-                  <ListItemIcon sx={{ minWidth: 48 }}>
-                    {getNotificationIcon(notification.type)}
-                  </ListItemIcon>
-                  
-                  <ListItemText
-                    primary={
-                      <span style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                        <Typography 
-                          variant="h6" 
-                          component="span"
-                          sx={{ 
-                            fontWeight: notification.isRead ? 500 : 600,
-                            color: notification.isRead ? 'text.secondary' : 'text.primary'
-                          }}
-                        >
-                          {notification.title}
-                        </Typography>
-                        <Chip
-                          label={notification.priority.toUpperCase()}
-                          color={getPriorityColor(notification.priority) as any}
-                          size="small"
-                          sx={{ fontWeight: 600, fontSize: '0.7rem' }}
-                        />
-                      </span>
-                    }
-                    secondary={
-                      <span>
-                        <Typography 
-                          variant="body2" 
-                          component="span"
-                          sx={{ 
-                            display: 'block',
-                            mb: 1,
-                            color: notification.isRead ? 'text.secondary' : 'text.primary'
-                          }}
-                        >
-                          {notification.message}
-                        </Typography>
-                        <Typography variant="caption" color="text.secondary">
-                          From: {notification.sender.firstName} {notification.sender.lastName} • 
-                          {new Date(notification.createdAt).toLocaleString()}
-                        </Typography>
-                      </span>
-                    }
-                  />
-                  
-                  <Box display="flex" gap={1}>
-                    {notification.actionUrl && notification.actionUrl.includes('/cases/') && (
-                      <Button
-                        size="small"
-                        variant="outlined"
-                        startIcon={<Visibility />}
-                        onClick={() => handleViewCase(notification.actionUrl!)}
-                        disabled={loadingCase}
-                        sx={{ 
-                          color: '#4ecdc4',
-                          borderColor: '#4ecdc4',
-                          '&:hover': {
-                            backgroundColor: 'rgba(78, 205, 196, 0.1)',
-                            borderColor: '#4ecdc4'
-                          }
-                        }}
-                      >
-                        View Case
-                      </Button>
-                    )}
-                    {!notification.isRead && (
-                      <IconButton
-                        size="small"
-                        onClick={() => markAsRead(notification._id)}
-                        sx={{ color: '#3b82f6' }}
-                      >
-                        <CheckCircle fontSize="small" />
-                      </IconButton>
-                    )}
-                    <IconButton
-                      size="small"
-                      onClick={() => deleteNotification(notification._id)}
-                      sx={{ color: '#ef4444' }}
-                    >
-                      <Delete fontSize="small" />
-                    </IconButton>
-                  </Box>
-                </ListItem>
-                
-                {index < notifications.length - 1 && <Divider />}
-              </React.Fragment>
-            ))}
-          </List>
+          <Box>
+            {/* TODAY Section */}
+            {categorizedNotifications.today.length > 0 && (
+              <Box sx={{ mb: 4 }}>
+                <Typography variant="h6" sx={{ 
+                  fontWeight: 600, 
+                  color: '#374151', 
+                  mb: 2, 
+                  textTransform: 'uppercase',
+                  fontSize: '0.875rem',
+                  letterSpacing: '0.5px'
+                }}>
+                  TODAY
+                </Typography>
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  {categorizedNotifications.today.map((notification) => (
+                    <NotificationItem
+                      key={notification._id}
+                      notification={notification}
+                      onMarkAsRead={markAsRead}
+                      onDelete={deleteNotification}
+                      getTimeAgo={getTimeAgo}
+                    />
+                  ))}
+                </Box>
+              </Box>
+            )}
+
+            {/* YESTERDAY Section */}
+            {categorizedNotifications.yesterday.length > 0 && (
+              <Box sx={{ mb: 4 }}>
+                <Typography variant="h6" sx={{ 
+                  fontWeight: 600, 
+                  color: '#374151', 
+                  mb: 2, 
+                  textTransform: 'uppercase',
+                  fontSize: '0.875rem',
+                  letterSpacing: '0.5px'
+                }}>
+                  YESTERDAY
+                </Typography>
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  {categorizedNotifications.yesterday.map((notification) => (
+                    <NotificationItem
+                      key={notification._id}
+                      notification={notification}
+                      onMarkAsRead={markAsRead}
+                      onDelete={deleteNotification}
+                      getTimeAgo={getTimeAgo}
+                    />
+                  ))}
+                </Box>
+              </Box>
+            )}
+
+            {/* OLDER Section */}
+            {categorizedNotifications.older.length > 0 && (
+              <Box sx={{ mb: 4 }}>
+                <Typography variant="h6" sx={{ 
+                  fontWeight: 600, 
+                  color: '#374151', 
+                  mb: 2, 
+                  textTransform: 'uppercase',
+                  fontSize: '0.875rem',
+                  letterSpacing: '0.5px'
+                }}>
+                  OLDER
+                </Typography>
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  {categorizedNotifications.older.map((notification) => (
+                    <NotificationItem
+                      key={notification._id}
+                      notification={notification}
+                      onMarkAsRead={markAsRead}
+                      onDelete={deleteNotification}
+                      getTimeAgo={getTimeAgo}
+                    />
+                  ))}
+                </Box>
+              </Box>
+            )}
+          </Box>
         )}
+
 
         {/* Enhanced Case Detail Dialog */}
         <Dialog 
@@ -1000,8 +1239,9 @@ const NotificationsPage: React.FC = () => {
           </DialogActions>
         </Dialog>
       </Box>
-    </Layout>
+    </LayoutWithSidebar>
   );
 };
 
 export default NotificationsPage;
+

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Box,
   Card,
@@ -25,13 +25,9 @@ import {
   InputLabel,
   Select,
   MenuItem,
-  Grid,
   Avatar,
   Tooltip,
-  Badge,
-  Tabs,
-  Tab,
-  Fab,
+  Pagination,
 } from '@mui/material';
 import {
   Add,
@@ -39,23 +35,23 @@ import {
   Visibility,
   CalendarToday,
   Schedule,
-  Person,
   LocationOn,
-  AccessTime,
   CheckCircle,
   Cancel,
   Warning,
   PlayArrow,
-  Pause,
-  Stop,
   Assessment,
   LocalHospital,
   VideoCall,
   Home,
   Work,
+  ContentCopy,
+  Delete,
+  Download,
+  Event,
 } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
-import Layout from '../components/Layout';
+import LayoutWithSidebar from '../components/LayoutWithSidebar';
 import api from '../utils/api';
 
 interface Appointment {
@@ -89,6 +85,25 @@ interface Appointment {
   status: string;
   purpose: string;
   notes?: string;
+  telehealthInfo?: {
+    platform: string;
+    meetingId: string;
+    meetingUrl: string;
+    password: string;
+    instructions: string;
+    zoomMeeting: {
+      id: string;
+      topic: string;
+      startTime: string;
+      duration: number;
+      joinUrl: string;
+      password: string;
+      meetingId: string;
+      hostId: string;
+      createdAt: string;
+      status: string;
+    };
+  };
   createdAt: string;
   updatedAt: string;
 }
@@ -127,14 +142,59 @@ const Appointments: React.FC = () => {
   const { user } = useAuth();
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [cases, setCases] = useState<any[]>([]);
-  const [workers, setWorkers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
+  
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalAppointments, setTotalAppointments] = useState(0);
+  const [pageSize, setPageSize] = useState(15);
   const [tabValue, setTabValue] = useState(0);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
+  
+  
+  // Tab state for organizing appointments by date
+  const [activeTab, setActiveTab] = useState(0);
+  
+  // Function to organize appointments by date
+  const organizeAppointmentsByDate = (appointments: any[]) => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    
+    const nextWeek = new Date(today);
+    nextWeek.setDate(nextWeek.getDate() + 7);
+    
+    return {
+      today: appointments.filter(apt => {
+        const aptDate = new Date(apt.scheduledDate);
+        aptDate.setHours(0, 0, 0, 0);
+        return aptDate.getTime() === today.getTime();
+      }),
+      tomorrow: appointments.filter(apt => {
+        const aptDate = new Date(apt.scheduledDate);
+        aptDate.setHours(0, 0, 0, 0);
+        return aptDate.getTime() === tomorrow.getTime();
+      }),
+      thisWeek: appointments.filter(apt => {
+        const aptDate = new Date(apt.scheduledDate);
+        aptDate.setHours(0, 0, 0, 0);
+        return aptDate >= tomorrow && aptDate < nextWeek;
+      }),
+      upcoming: appointments.filter(apt => {
+        const aptDate = new Date(apt.scheduledDate);
+        aptDate.setHours(0, 0, 0, 0);
+        return aptDate >= nextWeek;
+      })
+    };
+  };
   
   // Form state
   const [formData, setFormData] = useState({
@@ -151,40 +211,47 @@ const Appointments: React.FC = () => {
   // Check if user is a worker
   const isWorker = user?.role === 'worker';
   
-  // Debug logging
-  console.log('Appointments component render:', { 
-    user: user?.email, 
-    role: user?.role, 
-    isWorker, 
-    tabValue,
-    appointmentsCount: appointments.length,
-    scheduledCount: appointments.filter(apt => apt.status === 'scheduled').length,
-    confirmedCount: appointments.filter(apt => apt.status === 'confirmed').length,
-    completedCount: appointments.filter(apt => apt.status === 'completed').length
-  });
+  // Debug logging - only log when user changes to prevent spam
+  React.useEffect(() => {
+    console.log('Appointments component render:', { 
+      user: user?.email, 
+      role: user?.role, 
+      isWorker, 
+      tabValue,
+      appointmentsCount: appointments.length,
+      scheduledCount: appointments.filter(apt => apt.status === 'scheduled').length,
+      confirmedCount: appointments.filter(apt => apt.status === 'confirmed').length,
+      completedCount: appointments.filter(apt => apt.status === 'completed').length
+    });
+  }, [user?.email, user?.role, isWorker, tabValue, appointments]);
 
-  useEffect(() => {
-    if (user) {
-      fetchAppointments();
-      // Only fetch cases and workers if user is not a worker
-      if (!isWorker) {
-        fetchCases();
-        fetchWorkers();
-      }
-    }
-  }, [user, isWorker]);
-
-  const fetchAppointments = async () => {
+  const fetchAppointments = useCallback(async (page = currentPage, limit = pageSize) => {
     try {
       setLoading(true);
-      const response = await api.get('/appointments');
+      const response = await api.get(`/appointments?page=${page}&limit=${limit}`);
       setAppointments(response.data.appointments || []);
+      
+      // Update pagination info
+      if (response.data.pagination) {
+        setTotalPages(response.data.pagination.pages || 1);
+        setTotalAppointments(response.data.pagination.total || 0);
+      }
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to fetch appointments');
     } finally {
       setLoading(false);
     }
-  };
+  }, [currentPage, pageSize]);
+
+  useEffect(() => {
+    if (user) {
+      fetchAppointments(currentPage, pageSize);
+      // Only fetch cases and workers if user is not a worker
+      if (!isWorker) {
+        fetchCases();
+      }
+    }
+  }, [user, user?.email, user?.role, isWorker, currentPage, pageSize, fetchAppointments]); // Include all dependencies
 
   const fetchCases = async () => {
     try {
@@ -195,35 +262,77 @@ const Appointments: React.FC = () => {
     }
   };
 
-  const fetchWorkers = async () => {
-    try {
-      const response = await api.get('/users?role=worker');
-      setWorkers(response.data.users || []);
-    } catch (err: any) {
-      console.error('Failed to fetch workers:', err);
-    }
+  // Pagination handlers
+  const handlePageChange = (event: React.ChangeEvent<unknown>, page: number) => {
+    setCurrentPage(page);
   };
+
+  const handlePageSizeChange = (event: any) => {
+    setPageSize(Number(event.target.value));
+    setCurrentPage(1); // Reset to first page when changing page size
+  };
+
 
   const handleCreateAppointment = async () => {
     try {
       setIsCreating(true);
       
-      const appointmentData = {
+      // Get worker ID from selected case
+      const selectedCase = cases.find(c => c._id === formData.case);
+      console.log('Selected case:', selectedCase);
+      
+      if (!selectedCase) {
+        setError('Please select a case');
+        return;
+      }
+      
+      // Check if case has a clinician assigned
+      if (!selectedCase.clinician || !selectedCase.clinician._id) {
+        setError('Selected case does not have a clinician assigned. Please assign a clinician to the case first.');
+        console.log('No clinician found in case:', selectedCase);
+        return;
+      }
+
+      console.log('Creating appointment with data:', {
         case: formData.case,
-        worker: formData.worker,
+        worker: selectedCase.worker?._id,
+        clinician: selectedCase.clinician?._id,
         appointmentType: formData.appointmentType,
         scheduledDate: formData.scheduledDate,
         duration: formData.duration,
-        location: formData.location,
-        purpose: formData.purpose,
-        notes: formData.notes
+        location: formData.location
+      });
+
+      // Prepare appointment data according to backend validation requirements
+      const appointmentData = {
+        case: formData.case, // Backend validator expects 'case', not 'caseId'
+        worker: selectedCase.worker._id,
+        clinician: selectedCase.clinician._id,
+        appointmentType: formData.appointmentType,
+        scheduledDate: formData.scheduledDate,
+        duration: formData.duration || 60, // Default to 60 minutes if not specified
+        location: formData.location || 'clinic', // Default to clinic if not specified
+        purpose: formData.purpose || '',
+        notes: formData.notes || '',
+        isVirtual: formData.location === 'telehealth' // Set to true if location is telehealth
       };
 
       await api.post('/appointments', appointmentData);
       
       setDialogOpen(false);
       resetForm();
-      fetchAppointments();
+      fetchAppointments(currentPage, pageSize);
+      
+      // Clear any previous errors and show success message
+      setError('');
+      const workerName = `${selectedCase.worker.firstName} ${selectedCase.worker.lastName}`;
+      const caseNumber = selectedCase.caseNumber;
+      const appointmentType = formData.appointmentType.replace('_', ' ');
+      const appointmentDate = new Date(formData.scheduledDate).toLocaleString();
+      const appointmentLocation = formData.location === 'telehealth' ? 'via telehealth' : `at ${formData.location}`;
+      
+      setSuccessMessage(`✅ Appointment created successfully! ${appointmentType.charAt(0).toUpperCase() + appointmentType.slice(1)} appointment scheduled for ${workerName} (Case ${caseNumber}) on ${appointmentDate} ${appointmentLocation}. The worker will be notified about the appointment.`);
+      setTimeout(() => setSuccessMessage(''), 8000); // Clear after 8 seconds
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to create appointment');
     } finally {
@@ -251,7 +360,16 @@ const Appointments: React.FC = () => {
       setDialogOpen(false);
       setSelectedAppointment(null);
       resetForm();
-      fetchAppointments();
+      fetchAppointments(currentPage, pageSize);
+      
+      // Show success message
+      setError('');
+      const workerName = `${selectedAppointment.worker.firstName} ${selectedAppointment.worker.lastName}`;
+      const appointmentType = formData.appointmentType.replace('_', ' ');
+      const appointmentDate = new Date(formData.scheduledDate).toLocaleString();
+      
+      setSuccessMessage(`✅ Appointment updated successfully! ${appointmentType.charAt(0).toUpperCase() + appointmentType.slice(1)} appointment for ${workerName} has been updated. New schedule: ${appointmentDate}.`);
+      setTimeout(() => setSuccessMessage(''), 6000);
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to update appointment');
     } finally {
@@ -262,7 +380,16 @@ const Appointments: React.FC = () => {
   const handleStatusUpdate = async (appointmentId: string, newStatus: string) => {
     try {
       await api.put(`/appointments/${appointmentId}/status`, { status: newStatus });
-      fetchAppointments();
+      fetchAppointments(currentPage, pageSize);
+      
+      // Show success message
+      setError('');
+      const appointment = appointments.find(apt => apt._id === appointmentId);
+      const workerName = appointment ? `${appointment.worker.firstName} ${appointment.worker.lastName}` : 'worker';
+      const statusText = newStatus.replace('_', ' ');
+      
+      setSuccessMessage(`✅ Appointment status updated! ${workerName}'s appointment status has been changed to "${statusText}".`);
+      setTimeout(() => setSuccessMessage(''), 5000);
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to update appointment status');
     }
@@ -271,8 +398,15 @@ const Appointments: React.FC = () => {
   const handleConfirmAppointment = async (appointmentId: string) => {
     try {
       await api.put(`/appointments/${appointmentId}/status`, { status: 'confirmed' });
-      fetchAppointments();
-      setError(''); // Clear any previous errors
+      fetchAppointments(currentPage, pageSize);
+      
+      // Show success message
+      setError('');
+      const appointment = appointments.find(apt => apt._id === appointmentId);
+      const workerName = appointment ? `${appointment.worker.firstName} ${appointment.worker.lastName}` : 'worker';
+      
+      setSuccessMessage(`✅ Appointment confirmed! ${workerName}'s appointment has been confirmed and they will be notified.`);
+      setTimeout(() => setSuccessMessage(''), 5000);
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to confirm appointment');
     }
@@ -284,10 +418,31 @@ const Appointments: React.FC = () => {
         status: 'cancelled',
         cancellationReason: 'Declined by worker'
       });
-      fetchAppointments();
-      setError(''); // Clear any previous errors
+      fetchAppointments(currentPage, pageSize);
+      
+      // Show success message
+      setError('');
+      const appointment = appointments.find(apt => apt._id === appointmentId);
+      const workerName = appointment ? `${appointment.worker.firstName} ${appointment.worker.lastName}` : 'worker';
+      
+      setSuccessMessage(`✅ Appointment cancelled! ${workerName}'s appointment has been cancelled and they will be notified.`);
+      setTimeout(() => setSuccessMessage(''), 5000);
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to decline appointment');
+    }
+  };
+
+  const handleDeleteAppointment = async (appointmentId: string) => {
+    if (!window.confirm('Are you sure you want to delete this appointment? This action cannot be undone and will also delete the associated Zoom meeting.')) {
+      return;
+    }
+
+    try {
+      await api.delete(`/appointments/${appointmentId}`);
+      fetchAppointments(currentPage, pageSize);
+      setError(''); // Clear any previous errors
+    } catch (err: any) {
+      setError(err.response?.data?.message || 'Failed to delete appointment');
     }
   };
 
@@ -367,6 +522,15 @@ const Appointments: React.FC = () => {
     return new Date(dateString).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
+  const copyToClipboard = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      // You could add a toast notification here
+    } catch (err) {
+      console.error('Failed to copy text: ', err);
+    }
+  };
+
   const getUpcomingAppointments = () => {
     const now = new Date();
     return appointments.filter(apt => 
@@ -375,13 +539,6 @@ const Appointments: React.FC = () => {
     ).sort((a, b) => new Date(a.scheduledDate).getTime() - new Date(b.scheduledDate).getTime());
   };
 
-  const getPastAppointments = () => {
-    const now = new Date();
-    return appointments.filter(apt => 
-      new Date(apt.scheduledDate) <= now || 
-      ['completed', 'cancelled', 'no_show'].includes(apt.status)
-    ).sort((a, b) => new Date(b.scheduledDate).getTime() - new Date(a.scheduledDate).getTime());
-  };
 
   const getTodayAppointments = () => {
     const today = new Date();
@@ -395,68 +552,160 @@ const Appointments: React.FC = () => {
     }).sort((a, b) => new Date(a.scheduledDate).getTime() - new Date(b.scheduledDate).getTime());
   };
 
+  const downloadAppointmentsAsExcel = () => {
+    // Create CSV content
+    const headers = [
+      'Date',
+      'Time',
+      'Patient Name',
+      'Case Number',
+      'Appointment Type',
+      'Status',
+      'Duration (min)',
+      'Location',
+      'Notes'
+    ];
+
+    const csvContent = [
+      headers.join(','),
+      ...appointments.map(appointment => {
+        const date = new Date(appointment.scheduledDate);
+        const dateStr = date.toLocaleDateString();
+        const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        
+        return [
+          `"${dateStr}"`,
+          `"${timeStr}"`,
+          `"${appointment.worker.firstName} ${appointment.worker.lastName}"`,
+          `"${appointment.case.caseNumber}"`,
+          `"${appointment.appointmentType.replace('_', ' ')}"`,
+          `"${appointment.status.replace('_', ' ')}"`,
+          `"${appointment.duration}"`,
+          `"${appointment.location || 'N/A'}"`,
+          `"${appointment.notes || 'N/A'}"`
+        ].join(',');
+      })
+    ].join('\n');
+
+    // Create and download file
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `appointments_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   // Don't render until user is loaded
   if (!user) {
     return (
-      <Layout>
+      <LayoutWithSidebar>
         <Box display="flex" justifyContent="center" alignItems="center" minHeight="50vh">
           <CircularProgress />
         </Box>
-      </Layout>
+      </LayoutWithSidebar>
     );
   }
 
   if (loading) {
     return (
-      <Layout>
+      <LayoutWithSidebar>
         <Box display="flex" justifyContent="center" alignItems="center" minHeight="50vh">
           <CircularProgress />
         </Box>
-      </Layout>
+      </LayoutWithSidebar>
     );
   }
 
   return (
-    <Layout>
+    <LayoutWithSidebar>
       <Box>
         <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mb: 3 }}>
-          <Box>
-            <Typography variant="h4" component="h1" gutterBottom sx={{ 
-              fontWeight: 600,
-              color: '#1a1a1a',
-              mb: 0.5
+          <Box sx={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            gap: 2,
+            p: 2,
+            borderRadius: 3,
+            background: 'linear-gradient(135deg, #7B68EE 0%, #20B2AA 100%)',
+            color: 'white',
+            boxShadow: '0 4px 20px rgba(123, 104, 238, 0.25)',
+            backdropFilter: 'blur(10px)'
+          }}>
+            <Box sx={{
+              width: 40,
+              height: 40,
+              borderRadius: '10px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: 'rgba(255, 255, 255, 0.2)',
+              backdropFilter: 'blur(10px)',
+              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)'
             }}>
-              {isWorker ? 'My Appointments' : 'Appointments'}
-            </Typography>
-            <Typography variant="body1" color="text.secondary" sx={{ fontWeight: 400 }}>
+              <Event sx={{ fontSize: 24 }} />
+            </Box>
+            <Typography variant="h6" sx={{ 
+              fontWeight: 600,
+              letterSpacing: '-0.01em',
+              textShadow: '0 2px 4px rgba(0, 0, 0, 0.1)',
+              fontSize: '1.1rem'
+            }}>
               {isWorker 
                 ? 'View and confirm your scheduled appointments' 
-                : 'Manage your appointments and schedule new ones'
+                : 'Appointment Management Dashboard'
               }
             </Typography>
           </Box>
-          {!isWorker && (
+          <Box sx={{ display: 'flex', gap: 2 }}>
             <Button
-              variant="contained"
-              startIcon={<Add />}
-              onClick={openCreateDialog}
+              variant="outlined"
+              startIcon={<Download />}
+              onClick={downloadAppointmentsAsExcel}
               sx={{ 
                 borderRadius: 1,
                 px: 3,
                 py: 1,
-                backgroundColor: '#0073e6',
+                borderColor: '#7B68EE',
+                color: '#7B68EE',
                 textTransform: 'none',
                 fontWeight: 500,
                 fontSize: '14px',
                 '&:hover': {
-                  backgroundColor: '#005bb5',
+                  backgroundColor: 'rgba(123, 104, 238, 0.04)',
+                  borderColor: '#7B68EE',
                 },
                 transition: 'all 0.2s ease'
               }}
             >
-              New Appointment
+              Download Excel
             </Button>
-          )}
+            {!isWorker && (
+              <Button
+                variant="contained"
+                startIcon={<Add />}
+                onClick={openCreateDialog}
+                sx={{ 
+                  borderRadius: 1,
+                  px: 3,
+                  py: 1,
+                  backgroundColor: '#0073e6',
+                  textTransform: 'none',
+                  fontWeight: 500,
+                  fontSize: '14px',
+                  '&:hover': {
+                    backgroundColor: '#005bb5',
+                  },
+                  transition: 'all 0.2s ease'
+                }}
+              >
+                New Appointment
+              </Button>
+            )}
+          </Box>
         </Box>
 
         {error && (
@@ -465,121 +714,292 @@ const Appointments: React.FC = () => {
           </Alert>
         )}
 
-        {/* Professional Stats Cards */}
-        <Box sx={{ display: 'flex', gap: 2, mb: 3, flexWrap: 'wrap' }}>
-          <Card sx={{ 
-            minWidth: 200, 
-            flex: 1, 
-            borderRadius: 1,
-            border: '1px solid #e1e5e9',
-            boxShadow: 'none',
-            '&:hover': {
-              boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-            },
-            transition: 'box-shadow 0.2s ease'
-          }}>
-            <CardContent sx={{ p: 2.5 }}>
-              <Box display="flex" alignItems="center" justifyContent="space-between">
-                <Box>
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1, fontSize: '13px', fontWeight: 500 }}>
-                    {isWorker ? "PENDING" : "TODAY'S APPOINTMENTS"}
-                  </Typography>
-                  <Typography variant="h4" sx={{ fontWeight: 600, color: '#1a1a1a' }}>
-                    {isWorker 
-                      ? appointments.filter(apt => apt.status === 'scheduled').length
-                      : getTodayAppointments().length
-                    }
-                  </Typography>
-                </Box>
-                <Box sx={{ 
-                  width: 40, 
-                  height: 40, 
-                  borderRadius: 1,
-                  backgroundColor: '#f0f7ff',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center'
-                }}>
-                  <Schedule sx={{ fontSize: 20, color: '#0073e6' }} />
-                </Box>
-              </Box>
-            </CardContent>
-          </Card>
+        {successMessage && (
+          <Alert 
+            severity="success" 
+            sx={{ 
+              mb: 3, 
+              borderRadius: 2,
+              backgroundColor: '#f0f9ff',
+              border: '1px solid #0ea5e9',
+              '& .MuiAlert-icon': {
+                color: '#0ea5e9'
+              }
+            }}
+            onClose={() => setSuccessMessage('')}
+          >
+            {successMessage}
+          </Alert>
+        )}
 
-          <Card sx={{ 
-            minWidth: 200, 
-            flex: 1, 
-            borderRadius: 1,
-            border: '1px solid #e1e5e9',
-            boxShadow: 'none',
-            '&:hover': {
-              boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-            },
-            transition: 'box-shadow 0.2s ease'
+        {/* Overview Section */}
+        <Box sx={{ mb: 4 }}>
+          <Typography variant="h3" component="h1" sx={{ 
+            fontWeight: 600,
+            color: '#1a1a1a',
+            mb: 3,
+            fontSize: '2rem'
           }}>
-            <CardContent sx={{ p: 2.5 }}>
-              <Box display="flex" alignItems="center" justifyContent="space-between">
-                <Box>
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1, fontSize: '13px', fontWeight: 500 }}>
-                    {isWorker ? "CONFIRMED" : "UPCOMING"}
-                  </Typography>
-                  <Typography variant="h4" sx={{ fontWeight: 600, color: '#1a1a1a' }}>
-                    {isWorker 
-                      ? appointments.filter(apt => apt.status === 'confirmed').length
-                      : getUpcomingAppointments().length
-                    }
-                  </Typography>
-                </Box>
-                <Box sx={{ 
-                  width: 40, 
-                  height: 40, 
-                  borderRadius: 1,
-                  backgroundColor: '#f0f9ff',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center'
-                }}>
-                  <CheckCircle sx={{ fontSize: 20, color: '#059669' }} />
-                </Box>
+            Overview
+          </Typography>
+          
+          {/* Dashboard Cards */}
+          <Box sx={{ display: 'flex', gap: 2, mb: 3, flexWrap: 'wrap' }}>
+            {/* Today's Appointments Card */}
+            <Card sx={{ 
+              minWidth: 250, 
+              flex: 1, 
+              borderRadius: 2,
+              border: 'none',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+              overflow: 'hidden',
+              '&:hover': {
+                boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+              },
+              transition: 'box-shadow 0.2s ease'
+            }}>
+              <Box sx={{ 
+                backgroundColor: '#0073e6', 
+                color: 'white', 
+                p: 1.5,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}>
+                <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '14px' }}>
+                  {isWorker ? "PENDING" : "TODAY'S APPOINTMENTS"}
+                </Typography>
               </Box>
-            </CardContent>
-          </Card>
+              <CardContent sx={{ p: 2.5 }}>
+                <Box display="flex" alignItems="center" justifyContent="space-between">
+                  <Box sx={{ flex: 1 }}>
+                    {/* Mini bar chart */}
+                    <Box sx={{ mb: 1, display: 'flex', alignItems: 'end', gap: 0.5 }}>
+                      <Box sx={{ width: 4, height: 12, backgroundColor: '#0073e6', borderRadius: 0.5 }} />
+                      <Box sx={{ width: 4, height: 18, backgroundColor: '#0073e6', borderRadius: 0.5 }} />
+                      <Box sx={{ width: 4, height: 8, backgroundColor: '#0073e6', borderRadius: 0.5 }} />
+                      <Box sx={{ width: 4, height: 15, backgroundColor: '#0073e6', borderRadius: 0.5 }} />
+                      <Box sx={{ width: 4, height: 10, backgroundColor: '#0073e6', borderRadius: 0.5 }} />
+                    </Box>
+                    <Typography variant="h4" sx={{ fontWeight: 600, color: '#1a1a1a', mb: 0.5 }}>
+                      {isWorker 
+                        ? appointments.filter(apt => apt.status === 'scheduled').length
+                        : getTodayAppointments().length
+                      }
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary" sx={{ fontSize: '13px' }}>
+                      Today's
+                    </Typography>
+                  </Box>
+                  <Box sx={{ textAlign: 'right' }}>
+                    <Typography variant="body2" sx={{ color: '#059669', fontWeight: 600, fontSize: '12px' }}>
+                      +11%
+                    </Typography>
+                  </Box>
+                </Box>
+              </CardContent>
+            </Card>
 
-          <Card sx={{ 
-            minWidth: 200, 
-            flex: 1, 
-            borderRadius: 1,
-            border: '1px solid #e1e5e9',
-            boxShadow: 'none',
-            '&:hover': {
+            {/* Upcoming Appointments Card */}
+            <Card sx={{ 
+              minWidth: 250, 
+              flex: 1, 
+              borderRadius: 2,
+              border: 'none',
               boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-            },
-            transition: 'box-shadow 0.2s ease'
-          }}>
-            <CardContent sx={{ p: 2.5 }}>
-              <Box display="flex" alignItems="center" justifyContent="space-between">
-                <Box>
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1, fontSize: '13px', fontWeight: 500 }}>
-                    COMPLETED
-                  </Typography>
-                  <Typography variant="h4" sx={{ fontWeight: 600, color: '#1a1a1a' }}>
-                    {appointments.filter(apt => apt.status === 'completed').length}
-                  </Typography>
-                </Box>
-                <Box sx={{ 
-                  width: 40, 
-                  height: 40, 
-                  borderRadius: 1,
-                  backgroundColor: '#f0fdf4',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center'
-                }}>
-                  <CheckCircle sx={{ fontSize: 20, color: '#16a34a' }} />
-                </Box>
+              overflow: 'hidden',
+              '&:hover': {
+                boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+              },
+              transition: 'box-shadow 0.2s ease'
+            }}>
+              <Box sx={{ 
+                backgroundColor: '#7B68EE', 
+                color: 'white', 
+                p: 1.5,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}>
+                <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '14px' }}>
+                  {isWorker ? "CONFIRMED" : "UPCOMING"}
+                </Typography>
               </Box>
-            </CardContent>
-          </Card>
+              <CardContent sx={{ p: 2.5 }}>
+                <Box display="flex" alignItems="center" justifyContent="space-between">
+                  <Box sx={{ flex: 1 }}>
+                    {/* Circular progress indicator */}
+                    <Box sx={{ 
+                      width: 40, 
+                      height: 40, 
+                      borderRadius: '50%',
+                      backgroundColor: '#f0f9ff',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      mb: 1,
+                      position: 'relative',
+                      border: '3px solid #e5e7eb'
+                    }}>
+                      <Box sx={{
+                        position: 'absolute',
+                        width: '100%',
+                        height: '100%',
+                        borderRadius: '50%',
+                        background: `conic-gradient(#7B68EE 0deg ${(appointments.filter(apt => apt.status === 'confirmed').length / 30) * 360}deg, transparent ${(appointments.filter(apt => apt.status === 'confirmed').length / 30) * 360}deg)`,
+                        zIndex: 1
+                      }} />
+                      <Typography variant="caption" sx={{ 
+                        fontWeight: 600, 
+                        color: '#7B68EE',
+                        zIndex: 2,
+                        fontSize: '10px'
+                      }}>
+                        {appointments.filter(apt => apt.status === 'confirmed').length}/30
+                      </Typography>
+                    </Box>
+                    <Typography variant="h4" sx={{ fontWeight: 600, color: '#1a1a1a', mb: 0.5 }}>
+                      {isWorker 
+                        ? appointments.filter(apt => apt.status === 'confirmed').length
+                        : getUpcomingAppointments().length
+                      }
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary" sx={{ fontSize: '13px' }}>
+                      Today's
+                    </Typography>
+                  </Box>
+                  <Box sx={{ textAlign: 'right' }}>
+                    <Typography variant="body2" sx={{ color: '#E74C3C', fontWeight: 600, fontSize: '12px' }}>
+                      -6.6%
+                    </Typography>
+                  </Box>
+                </Box>
+              </CardContent>
+            </Card>
+
+            {/* Completed Appointments Card */}
+            <Card sx={{ 
+              minWidth: 250, 
+              flex: 1, 
+              borderRadius: 2,
+              border: 'none',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+              overflow: 'hidden',
+              '&:hover': {
+                boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+              },
+              transition: 'box-shadow 0.2s ease'
+            }}>
+              <Box sx={{ 
+                backgroundColor: '#16a34a', 
+                color: 'white', 
+                p: 1.5,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}>
+                <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '14px' }}>
+                  COMPLETED
+                </Typography>
+              </Box>
+              <CardContent sx={{ p: 2.5 }}>
+                <Box display="flex" alignItems="center" justifyContent="space-between">
+                  <Box sx={{ flex: 1 }}>
+                    {/* Mini bar chart */}
+                    <Box sx={{ mb: 1, display: 'flex', alignItems: 'end', gap: 0.5 }}>
+                      <Box sx={{ width: 4, height: 8, backgroundColor: '#16a34a', borderRadius: 0.5 }} />
+                      <Box sx={{ width: 4, height: 15, backgroundColor: '#16a34a', borderRadius: 0.5 }} />
+                      <Box sx={{ width: 4, height: 12, backgroundColor: '#16a34a', borderRadius: 0.5 }} />
+                      <Box sx={{ width: 4, height: 18, backgroundColor: '#16a34a', borderRadius: 0.5 }} />
+                      <Box sx={{ width: 4, height: 10, backgroundColor: '#16a34a', borderRadius: 0.5 }} />
+                    </Box>
+                    <Typography variant="h4" sx={{ fontWeight: 600, color: '#1a1a1a', mb: 0.5 }}>
+                      {appointments.filter(apt => apt.status === 'completed').length}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary" sx={{ fontSize: '13px' }}>
+                      Today's
+                    </Typography>
+                  </Box>
+                  <Box sx={{ textAlign: 'right' }}>
+                    <Typography variant="body2" sx={{ color: '#059669', fontWeight: 600, fontSize: '12px' }}>
+                      +09%
+                    </Typography>
+                  </Box>
+                </Box>
+              </CardContent>
+            </Card>
+
+            {/* Cancelled Appointments Card */}
+            <Card sx={{ 
+              minWidth: 250, 
+              flex: 1, 
+              borderRadius: 2,
+              border: 'none',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+              overflow: 'hidden',
+              '&:hover': {
+                boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+              },
+              transition: 'box-shadow 0.2s ease'
+            }}>
+              <Box sx={{ 
+                backgroundColor: '#E74C3C', 
+                color: 'white', 
+                p: 1.5,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}>
+                <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '14px' }}>
+                  CANCELLED
+                </Typography>
+              </Box>
+              <CardContent sx={{ p: 2.5 }}>
+                <Box display="flex" alignItems="center" justifyContent="space-between">
+                  <Box sx={{ flex: 1 }}>
+                    {/* Circular progress with alarm icon */}
+                    <Box sx={{ 
+                      width: 40, 
+                      height: 40, 
+                      borderRadius: '50%',
+                      backgroundColor: '#fef2f2',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      mb: 1,
+                      position: 'relative',
+                      border: '3px solid #fecaca'
+                    }}>
+                      <Box sx={{
+                        position: 'absolute',
+                        width: '100%',
+                        height: '100%',
+                        borderRadius: '50%',
+                        background: `conic-gradient(#E74C3C 0deg ${(appointments.filter(apt => apt.status === 'cancelled').length / 10) * 360}deg, transparent ${(appointments.filter(apt => apt.status === 'cancelled').length / 10) * 360}deg)`,
+                        zIndex: 1
+                      }} />
+                      <Warning sx={{ 
+                        fontSize: 16, 
+                        color: '#E74C3C',
+                        zIndex: 2
+                      }} />
+                    </Box>
+                    <Typography variant="h4" sx={{ fontWeight: 600, color: '#1a1a1a', mb: 0.5 }}>
+                      {appointments.filter(apt => apt.status === 'cancelled').length}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary" sx={{ fontSize: '13px' }}>
+                      Today's
+                    </Typography>
+                  </Box>
+                  <Box sx={{ textAlign: 'right' }}>
+                    <Typography variant="body2" sx={{ color: '#059669', fontWeight: 600, fontSize: '12px' }}>
+                      +01%
+                    </Typography>
+                  </Box>
+                </Box>
+              </CardContent>
+            </Card>
+          </Box>
         </Box>
 
         {/* Professional Tabs */}
@@ -593,12 +1013,17 @@ const Appointments: React.FC = () => {
             backgroundColor: '#f8f9fa',
             borderBottom: '1px solid #e1e5e9'
           }}>
-            <Box sx={{ display: 'flex' }}>
+            <Box sx={{ 
+              display: 'flex', 
+              flexWrap: { xs: 'wrap', sm: 'nowrap' },
+              overflow: { xs: 'auto', sm: 'visible' }
+            }}>
               {isWorker ? (
                 <>
                   <Box
                     sx={{
-                      flex: 1,
+                      flex: { xs: '1 1 50%', sm: 1 },
+                      minWidth: { xs: '120px', sm: 'auto' },
                       py: 2,
                       px: 3,
                       cursor: 'pointer',
@@ -629,7 +1054,8 @@ const Appointments: React.FC = () => {
                   </Box>
                   <Box
                     sx={{
-                      flex: 1,
+                      flex: { xs: '1 1 50%', sm: 1 },
+                      minWidth: { xs: '120px', sm: 'auto' },
                       py: 2,
                       px: 3,
                       cursor: 'pointer',
@@ -660,7 +1086,8 @@ const Appointments: React.FC = () => {
                   </Box>
                   <Box
                     sx={{
-                      flex: 1,
+                      flex: { xs: '1 1 50%', sm: 1 },
+                      minWidth: { xs: '120px', sm: 'auto' },
                       py: 2,
                       px: 3,
                       cursor: 'pointer',
@@ -694,13 +1121,14 @@ const Appointments: React.FC = () => {
                 <>
                   <Box
                     sx={{
-                      flex: 1,
+                      flex: { xs: '1 1 50%', sm: 1 },
+                      minWidth: { xs: '120px', sm: 'auto' },
                       py: 2,
                       px: 3,
                       cursor: 'pointer',
-                      backgroundColor: tabValue === 0 ? 'white' : 'transparent',
-                      borderBottom: tabValue === 0 ? '2px solid #0073e6' : '2px solid transparent',
-                      color: tabValue === 0 ? '#0073e6' : '#6b7280',
+                      backgroundColor: activeTab === 0 ? 'white' : 'transparent',
+                      borderBottom: activeTab === 0 ? '2px solid #0073e6' : '2px solid transparent',
+                      color: activeTab === 0 ? '#0073e6' : '#6b7280',
                       transition: 'all 0.2s ease',
                       display: 'flex',
                       alignItems: 'center',
@@ -709,26 +1137,27 @@ const Appointments: React.FC = () => {
                       fontWeight: 500,
                       fontSize: '14px',
                       '&:hover': {
-                        backgroundColor: tabValue === 0 ? 'white' : '#f1f5f9',
-                        color: tabValue === 0 ? '#0073e6' : '#374151',
+                        backgroundColor: activeTab === 0 ? 'white' : '#f1f5f9',
+                        color: activeTab === 0 ? '#0073e6' : '#374151',
                       }
                     }}
-                    onClick={() => setTabValue(0)}
+                    onClick={() => setActiveTab(0)}
                   >
                     <CalendarToday sx={{ fontSize: 16 }} />
                     <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                      Today ({getTodayAppointments().length})
+                      Today's Scheduled ({organizeAppointmentsByDate(appointments).today.length})
                     </Typography>
                   </Box>
                   <Box
                     sx={{
-                      flex: 1,
+                      flex: { xs: '1 1 50%', sm: 1 },
+                      minWidth: { xs: '120px', sm: 'auto' },
                       py: 2,
                       px: 3,
                       cursor: 'pointer',
-                      backgroundColor: tabValue === 1 ? 'white' : 'transparent',
-                      borderBottom: tabValue === 1 ? '2px solid #0073e6' : '2px solid transparent',
-                      color: tabValue === 1 ? '#0073e6' : '#6b7280',
+                      backgroundColor: activeTab === 1 ? 'white' : 'transparent',
+                      borderBottom: activeTab === 1 ? '2px solid #0073e6' : '2px solid transparent',
+                      color: activeTab === 1 ? '#0073e6' : '#6b7280',
                       transition: 'all 0.2s ease',
                       display: 'flex',
                       alignItems: 'center',
@@ -737,26 +1166,56 @@ const Appointments: React.FC = () => {
                       fontWeight: 500,
                       fontSize: '14px',
                       '&:hover': {
-                        backgroundColor: tabValue === 1 ? 'white' : '#f1f5f9',
-                        color: tabValue === 1 ? '#0073e6' : '#374151',
+                        backgroundColor: activeTab === 1 ? 'white' : '#f1f5f9',
+                        color: activeTab === 1 ? '#0073e6' : '#374151',
                       }
                     }}
-                    onClick={() => setTabValue(1)}
+                    onClick={() => setActiveTab(1)}
+                  >
+                    <CheckCircle sx={{ fontSize: 16 }} />
+                    <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                      All Confirmed ({appointments.filter(apt => apt.status === 'confirmed').length})
+                    </Typography>
+                  </Box>
+                  <Box
+                    sx={{
+                      flex: { xs: '1 1 50%', sm: 1 },
+                      minWidth: { xs: '120px', sm: 'auto' },
+                      py: 2,
+                      px: 3,
+                      cursor: 'pointer',
+                      backgroundColor: activeTab === 2 ? 'white' : 'transparent',
+                      borderBottom: activeTab === 2 ? '2px solid #0073e6' : '2px solid transparent',
+                      color: activeTab === 2 ? '#0073e6' : '#6b7280',
+                      transition: 'all 0.2s ease',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 1,
+                      fontWeight: 500,
+                      fontSize: '14px',
+                      '&:hover': {
+                        backgroundColor: activeTab === 2 ? 'white' : '#f1f5f9',
+                        color: activeTab === 2 ? '#0073e6' : '#374151',
+                      }
+                    }}
+                    onClick={() => setActiveTab(2)}
                   >
                     <Schedule sx={{ fontSize: 16 }} />
                     <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                      Upcoming ({getUpcomingAppointments().length})
+                      This Week ({organizeAppointmentsByDate(appointments).thisWeek.length})
                     </Typography>
                   </Box>
                   <Box
                     sx={{
-                      flex: 1,
+                      flex: { xs: '1 1 50%', sm: 1 },
+                      minWidth: { xs: '120px', sm: 'auto' },
                       py: 2,
                       px: 3,
                       cursor: 'pointer',
-                      backgroundColor: tabValue === 2 ? 'white' : 'transparent',
-                      borderBottom: tabValue === 2 ? '2px solid #0073e6' : '2px solid transparent',
-                      color: tabValue === 2 ? '#0073e6' : '#6b7280',
+                      backgroundColor: activeTab === 3 ? 'white' : 'transparent',
+                      borderBottom: activeTab === 3 ? '2px solid #0073e6' : '2px solid transparent',
+                      color: activeTab === 3 ? '#0073e6' : '#6b7280',
                       transition: 'all 0.2s ease',
                       display: 'flex',
                       alignItems: 'center',
@@ -765,43 +1224,15 @@ const Appointments: React.FC = () => {
                       fontWeight: 500,
                       fontSize: '14px',
                       '&:hover': {
-                        backgroundColor: tabValue === 2 ? 'white' : '#f1f5f9',
-                        color: tabValue === 2 ? '#0073e6' : '#374151',
+                        backgroundColor: activeTab === 3 ? 'white' : '#f1f5f9',
+                        color: activeTab === 3 ? '#0073e6' : '#374151',
                       }
                     }}
-                    onClick={() => setTabValue(2)}
-                  >
-                    <AccessTime sx={{ fontSize: 16 }} />
-                    <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                      Past ({getPastAppointments().length})
-                    </Typography>
-                  </Box>
-                  <Box
-                    sx={{
-                      flex: 1,
-                      py: 2,
-                      px: 3,
-                      cursor: 'pointer',
-                      backgroundColor: tabValue === 3 ? 'white' : 'transparent',
-                      borderBottom: tabValue === 3 ? '2px solid #0073e6' : '2px solid transparent',
-                      color: tabValue === 3 ? '#0073e6' : '#6b7280',
-                      transition: 'all 0.2s ease',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 1,
-                      fontWeight: 500,
-                      fontSize: '14px',
-                      '&:hover': {
-                        backgroundColor: tabValue === 3 ? 'white' : '#f1f5f9',
-                        color: tabValue === 3 ? '#0073e6' : '#374151',
-                      }
-                    }}
-                    onClick={() => setTabValue(3)}
+                    onClick={() => setActiveTab(3)}
                   >
                     <Assessment sx={{ fontSize: 16 }} />
                     <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                      All ({appointments.length})
+                      Upcoming ({organizeAppointmentsByDate(appointments).upcoming.length})
                     </Typography>
                   </Box>
                 </>
@@ -809,124 +1240,191 @@ const Appointments: React.FC = () => {
             </Box>
           </Box>
 
+          {/* Summary Stats - Only for non-workers */}
+          {!isWorker && (
+            <Box sx={{ 
+              mb: 2, 
+              display: 'flex', 
+              gap: 1, 
+              alignItems: 'center', 
+              flexWrap: 'wrap',
+              justifyContent: { xs: 'center', sm: 'flex-start' }
+            }}>
+              <Chip 
+                label={`Confirmed: ${appointments.filter(apt => apt.status === 'confirmed').length}`} 
+                color="success" 
+                size="small" 
+                sx={{ fontSize: { xs: '0.75rem', sm: '0.8125rem' } }}
+              />
+              <Chip 
+                label={`Pending: ${appointments.filter(apt => apt.status === 'scheduled').length}`} 
+                color="warning" 
+                size="small" 
+                sx={{ fontSize: { xs: '0.75rem', sm: '0.8125rem' } }}
+              />
+              <Chip 
+                label={`Declined: ${appointments.filter(apt => apt.status === 'cancelled').length}`} 
+                color="error" 
+                size="small" 
+                sx={{ fontSize: { xs: '0.75rem', sm: '0.8125rem' } }}
+              />
+            </Box>
+          )}
+
           {isWorker ? (
             <>
-              <TabPanel value={tabValue} index={0}>
+              <TabPanel value={activeTab} index={0}>
                 <AppointmentTable 
-                  appointments={appointments.filter(apt => apt.status === 'scheduled')} 
+                  appointments={organizeAppointmentsByDate(appointments).today} 
                   onEdit={openEditDialog}
                   onStatusUpdate={handleStatusUpdate}
                   onConfirm={handleConfirmAppointment}
                   onDecline={handleDeclineAppointment}
+                  onDelete={handleDeleteAppointment}
                   getStatusColor={getStatusColor}
                   getStatusIcon={getStatusIcon}
                   getLocationIcon={getLocationIcon}
                   formatDate={formatDate}
                   formatTime={formatTime}
+                  copyToClipboard={copyToClipboard}
                   isWorker={true}
                 />
               </TabPanel>
 
-              <TabPanel value={tabValue} index={1}>
+              <TabPanel value={activeTab} index={1}>
                 <AppointmentTable 
                   appointments={appointments.filter(apt => apt.status === 'confirmed')} 
                   onEdit={openEditDialog}
                   onStatusUpdate={handleStatusUpdate}
                   onConfirm={handleConfirmAppointment}
                   onDecline={handleDeclineAppointment}
+                  onDelete={handleDeleteAppointment}
                   getStatusColor={getStatusColor}
                   getStatusIcon={getStatusIcon}
                   getLocationIcon={getLocationIcon}
                   formatDate={formatDate}
                   formatTime={formatTime}
+                  copyToClipboard={copyToClipboard}
                   isWorker={true}
                 />
               </TabPanel>
 
-              <TabPanel value={tabValue} index={2}>
+              <TabPanel value={activeTab} index={2}>
                 <AppointmentTable 
-                  appointments={appointments.filter(apt => apt.status === 'completed')} 
+                  appointments={organizeAppointmentsByDate(appointments).thisWeek} 
                   onEdit={openEditDialog}
                   onStatusUpdate={handleStatusUpdate}
                   onConfirm={handleConfirmAppointment}
                   onDecline={handleDeclineAppointment}
+                  onDelete={handleDeleteAppointment}
                   getStatusColor={getStatusColor}
                   getStatusIcon={getStatusIcon}
                   getLocationIcon={getLocationIcon}
                   formatDate={formatDate}
                   formatTime={formatTime}
+                  copyToClipboard={copyToClipboard}
+                  isWorker={true}
+                />
+              </TabPanel>
+
+              <TabPanel value={activeTab} index={3}>
+                <AppointmentTable 
+                  appointments={organizeAppointmentsByDate(appointments).upcoming} 
+                  onEdit={openEditDialog}
+                  onStatusUpdate={handleStatusUpdate}
+                  onConfirm={handleConfirmAppointment}
+                  onDecline={handleDeclineAppointment}
+                  onDelete={handleDeleteAppointment}
+                  getStatusColor={getStatusColor}
+                  getStatusIcon={getStatusIcon}
+                  getLocationIcon={getLocationIcon}
+                  formatDate={formatDate}
+                  formatTime={formatTime}
+                  copyToClipboard={copyToClipboard}
                   isWorker={true}
                 />
               </TabPanel>
             </>
           ) : (
             <>
-              <TabPanel value={tabValue} index={0}>
+              <TabPanel value={activeTab} index={0}>
                 <AppointmentTable 
-                  appointments={getTodayAppointments()} 
+                  appointments={organizeAppointmentsByDate(appointments).today} 
                   onEdit={openEditDialog}
                   onStatusUpdate={handleStatusUpdate}
                   onConfirm={handleConfirmAppointment}
                   onDecline={handleDeclineAppointment}
+                  onDelete={handleDeleteAppointment}
                   getStatusColor={getStatusColor}
                   getStatusIcon={getStatusIcon}
                   getLocationIcon={getLocationIcon}
                   formatDate={formatDate}
                   formatTime={formatTime}
+                  copyToClipboard={copyToClipboard}
                   isWorker={false}
                 />
               </TabPanel>
 
-              <TabPanel value={tabValue} index={1}>
+              <TabPanel value={activeTab} index={1}>
                 <AppointmentTable 
-                  appointments={getUpcomingAppointments()} 
+                  appointments={appointments.filter(apt => apt.status === 'confirmed')} 
                   onEdit={openEditDialog}
                   onStatusUpdate={handleStatusUpdate}
                   onConfirm={handleConfirmAppointment}
                   onDecline={handleDeclineAppointment}
+                  onDelete={handleDeleteAppointment}
                   getStatusColor={getStatusColor}
                   getStatusIcon={getStatusIcon}
                   getLocationIcon={getLocationIcon}
                   formatDate={formatDate}
                   formatTime={formatTime}
+                  copyToClipboard={copyToClipboard}
                   isWorker={false}
                 />
               </TabPanel>
 
-              <TabPanel value={tabValue} index={2}>
+              <TabPanel value={activeTab} index={2}>
                 <AppointmentTable 
-                  appointments={getPastAppointments()} 
+                  appointments={organizeAppointmentsByDate(appointments).thisWeek} 
                   onEdit={openEditDialog}
                   onStatusUpdate={handleStatusUpdate}
                   onConfirm={handleConfirmAppointment}
                   onDecline={handleDeclineAppointment}
+                  onDelete={handleDeleteAppointment}
                   getStatusColor={getStatusColor}
                   getStatusIcon={getStatusIcon}
                   getLocationIcon={getLocationIcon}
                   formatDate={formatDate}
                   formatTime={formatTime}
+                  copyToClipboard={copyToClipboard}
                   isWorker={false}
                 />
               </TabPanel>
 
-              <TabPanel value={tabValue} index={3}>
+              <TabPanel value={activeTab} index={3}>
                 <AppointmentTable 
-                  appointments={appointments} 
+                  appointments={organizeAppointmentsByDate(appointments).upcoming} 
                   onEdit={openEditDialog}
                   onStatusUpdate={handleStatusUpdate}
                   onConfirm={handleConfirmAppointment}
                   onDecline={handleDeclineAppointment}
+                  onDelete={handleDeleteAppointment}
                   getStatusColor={getStatusColor}
                   getStatusIcon={getStatusIcon}
                   getLocationIcon={getLocationIcon}
                   formatDate={formatDate}
                   formatTime={formatTime}
+                  copyToClipboard={copyToClipboard}
                   isWorker={false}
                 />
               </TabPanel>
+
             </>
           )}
         </Card>
+
+        {/* Automatic Pagination - Hidden UI */}
+        {/* Pagination is handled automatically in the background */}
 
         {/* Create/Edit Dialog - Only for non-workers */}
         {!isWorker && (
@@ -942,7 +1440,14 @@ const Appointments: React.FC = () => {
                     <InputLabel>Case</InputLabel>
                     <Select
                       value={formData.case}
-                      onChange={(e) => setFormData({ ...formData, case: e.target.value })}
+                      onChange={(e) => {
+                        const selectedCase = cases.find(c => c._id === e.target.value);
+                        setFormData({ 
+                          ...formData, 
+                          case: e.target.value,
+                          worker: selectedCase?.worker?._id || ''
+                        });
+                      }}
                       disabled={!!selectedAppointment}
                     >
                       {cases.map((caseItem) => (
@@ -955,20 +1460,17 @@ const Appointments: React.FC = () => {
                 </Box>
 
                 <Box sx={{ flex: '1 1 300px', minWidth: '300px' }}>
-                  <FormControl fullWidth>
-                    <InputLabel>Worker</InputLabel>
-                    <Select
-                      value={formData.worker}
-                      onChange={(e) => setFormData({ ...formData, worker: e.target.value })}
-                      disabled={!!selectedAppointment}
-                    >
-                      {workers.map((worker) => (
-                        <MenuItem key={worker._id} value={worker._id}>
-                          {worker.firstName} {worker.lastName}
-                        </MenuItem>
-                      ))}
-                    </Select>
-                  </FormControl>
+                  <TextField
+                    fullWidth
+                    label="Worker"
+                    value={formData.case ? (() => {
+                      const selectedCase = cases.find(c => c._id === formData.case);
+                      return selectedCase ? `${selectedCase.worker?.firstName} ${selectedCase.worker?.lastName}` : '';
+                    })() : ''}
+                    InputProps={{
+                      readOnly: true,
+                    }}
+                  />
                 </Box>
 
                 <Box sx={{ flex: '1 1 300px', minWidth: '300px' }}>
@@ -995,6 +1497,9 @@ const Appointments: React.FC = () => {
                     value={formData.scheduledDate}
                     onChange={(e) => setFormData({ ...formData, scheduledDate: e.target.value })}
                     InputLabelProps={{ shrink: true }}
+                    inputProps={{
+                      min: new Date().toISOString().slice(0, 16)
+                    }}
                   />
                 </Box>
 
@@ -1060,8 +1565,48 @@ const Appointments: React.FC = () => {
           </DialogActions>
         </Dialog>
         )}
+        
+        {/* Pagination Controls */}
+        <Box sx={{ 
+          display: 'flex', 
+          justifyContent: 'space-between', 
+          alignItems: 'center', 
+          mt: 3,
+          px: 2
+        }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            <Typography variant="body2" color="text.secondary">
+              Showing {((currentPage - 1) * pageSize) + 1} to {Math.min(currentPage * pageSize, totalAppointments)} of {totalAppointments} appointments
+            </Typography>
+            <FormControl size="small" sx={{ minWidth: 80 }}>
+              <Select
+                value={pageSize}
+                onChange={handlePageSizeChange}
+                displayEmpty
+              >
+                <MenuItem value={10}>10</MenuItem>
+                <MenuItem value={15}>15</MenuItem>
+                <MenuItem value={25}>25</MenuItem>
+                <MenuItem value={50}>50</MenuItem>
+              </Select>
+            </FormControl>
+            <Typography variant="body2" color="text.secondary">
+              per page
+            </Typography>
+          </Box>
+          
+          <Pagination
+            count={totalPages}
+            page={currentPage}
+            onChange={handlePageChange}
+            color="primary"
+            showFirstButton
+            showLastButton
+            size="large"
+          />
+        </Box>
       </Box>
-    </Layout>
+    </LayoutWithSidebar>
   );
 };
 
@@ -1072,11 +1617,13 @@ interface AppointmentTableProps {
   onStatusUpdate: (id: string, status: string) => void;
   onConfirm: (id: string) => void;
   onDecline: (id: string) => void;
+  onDelete: (id: string) => void;
   getStatusColor: (status: string) => any;
   getStatusIcon: (status: string) => React.ReactElement;
   getLocationIcon: (location: string) => React.ReactNode;
   formatDate: (date: string) => string;
   formatTime: (date: string) => string;
+  copyToClipboard: (text: string) => Promise<void>;
   isWorker: boolean;
 }
 
@@ -1086,11 +1633,13 @@ const AppointmentTable: React.FC<AppointmentTableProps> = ({
   onStatusUpdate,
   onConfirm,
   onDecline,
+  onDelete,
   getStatusColor,
   getStatusIcon,
   getLocationIcon,
   formatDate,
   formatTime,
+  copyToClipboard,
   isWorker
 }) => {
   if (appointments.length === 0) {
@@ -1104,28 +1653,36 @@ const AppointmentTable: React.FC<AppointmentTableProps> = ({
   }
 
   return (
-    <TableContainer component={Paper} variant="outlined">
+    <Box>
+      <TableContainer 
+        component={Paper} 
+        variant="outlined"
+        sx={{ 
+          overflowX: 'auto'
+        }}
+      >
       <Table>
         <TableHead>
           <TableRow>
-            <TableCell>Date & Time</TableCell>
+            <TableCell sx={{ minWidth: { xs: '120px', sm: 'auto' } }}>Date & Time</TableCell>
             {isWorker ? (
               <>
-                <TableCell>Clinician</TableCell>
-                <TableCell>Type</TableCell>
-                <TableCell>Location</TableCell>
-                <TableCell>Duration</TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell>Actions</TableCell>
+                <TableCell sx={{ minWidth: { xs: '100px', sm: 'auto' } }}>Clinician</TableCell>
+                <TableCell sx={{ minWidth: { xs: '80px', sm: 'auto' } }}>Type</TableCell>
+                <TableCell sx={{ minWidth: { xs: '80px', sm: 'auto' } }}>Location</TableCell>
+                <TableCell sx={{ minWidth: { xs: '60px', sm: 'auto' } }}>Duration</TableCell>
+                <TableCell sx={{ minWidth: { xs: '80px', sm: 'auto' } }}>Status</TableCell>
+                <TableCell sx={{ minWidth: { xs: '100px', sm: 'auto' } }}>Actions</TableCell>
               </>
             ) : (
               <>
-                <TableCell>Patient</TableCell>
-                <TableCell>Type</TableCell>
-                <TableCell>Location</TableCell>
-                <TableCell>Duration</TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell>Actions</TableCell>
+                <TableCell sx={{ minWidth: { xs: '100px', sm: 'auto' } }}>Patient</TableCell>
+                <TableCell sx={{ minWidth: { xs: '80px', sm: 'auto' } }}>Type</TableCell>
+                <TableCell sx={{ minWidth: { xs: '80px', sm: 'auto' } }}>Location</TableCell>
+                <TableCell sx={{ minWidth: { xs: '60px', sm: 'auto' } }}>Duration</TableCell>
+                <TableCell sx={{ minWidth: { xs: '100px', sm: 'auto' } }}>Confirmation Status</TableCell>
+                <TableCell sx={{ minWidth: { xs: '80px', sm: 'auto' } }}>Status</TableCell>
+                <TableCell sx={{ minWidth: { xs: '100px', sm: 'auto' } }}>Actions</TableCell>
               </>
             )}
           </TableRow>
@@ -1189,6 +1746,11 @@ const AppointmentTable: React.FC<AppointmentTableProps> = ({
                   <Typography variant="body2">
                     {appointment.location}
                   </Typography>
+                  {appointment.location === 'telehealth' && appointment.telehealthInfo?.zoomMeeting && (
+                    <Tooltip title="Zoom Meeting Available">
+                      <VideoCall sx={{ fontSize: 16, color: '#2D8CFF', ml: 1 }} />
+                    </Tooltip>
+                  )}
                 </Box>
               </TableCell>
               <TableCell>
@@ -1196,6 +1758,16 @@ const AppointmentTable: React.FC<AppointmentTableProps> = ({
                   {appointment.duration} min
                 </Typography>
               </TableCell>
+              {!isWorker && (
+                <TableCell>
+                  <Chip
+                    icon={appointment.status === 'confirmed' ? <CheckCircle /> : appointment.status === 'cancelled' ? <Cancel /> : <Schedule />}
+                    label={appointment.status === 'confirmed' ? 'Confirmed' : appointment.status === 'cancelled' ? 'Declined' : 'Pending'}
+                    color={appointment.status === 'confirmed' ? 'success' : appointment.status === 'cancelled' ? 'error' : 'warning'}
+                    size="small"
+                  />
+                </TableCell>
+              )}
               <TableCell>
                 <Chip
                   icon={getStatusIcon(appointment.status)}
@@ -1207,7 +1779,7 @@ const AppointmentTable: React.FC<AppointmentTableProps> = ({
               <TableCell>
                 <Box display="flex" gap={0.5}>
                   {isWorker ? (
-                    // Worker actions - simple confirm/decline
+                    // Worker actions - simple confirm/decline + Zoom meeting
                     <>
                       {appointment.status === 'scheduled' && (
                         <>
@@ -1232,9 +1804,35 @@ const AppointmentTable: React.FC<AppointmentTableProps> = ({
                         </>
                       )}
                       {appointment.status === 'confirmed' && (
-                        <Typography variant="caption" color="success.main">
-                          Confirmed ✓
-                        </Typography>
+                        <>
+                          <Typography variant="caption" color="success.main" sx={{ mr: 1 }}>
+                            Confirmed ✓
+                          </Typography>
+                          {appointment.location === 'telehealth' && appointment.telehealthInfo?.zoomMeeting && (
+                            <>
+                              <Tooltip title="Join Zoom Meeting">
+                                <IconButton 
+                                  size="small" 
+                                  color="primary"
+                                  onClick={() => {
+                                    console.log('Worker joining Zoom meeting:', appointment.telehealthInfo?.zoomMeeting?.joinUrl);
+                                    window.open(appointment.telehealthInfo!.zoomMeeting!.joinUrl, '_blank');
+                                  }}
+                                >
+                                  <VideoCall />
+                                </IconButton>
+                              </Tooltip>
+                              <Tooltip title="Copy Meeting Link">
+                                <IconButton 
+                                  size="small" 
+                                  onClick={() => copyToClipboard(appointment.telehealthInfo!.zoomMeeting!.joinUrl)}
+                                >
+                                  <ContentCopy />
+                                </IconButton>
+                              </Tooltip>
+                            </>
+                          )}
+                        </>
                       )}
                       {appointment.status === 'completed' && (
                         <Typography variant="caption" color="info.main">
@@ -1243,7 +1841,7 @@ const AppointmentTable: React.FC<AppointmentTableProps> = ({
                       )}
                     </>
                   ) : (
-                    // Clinician actions - full management
+                    // Clinician actions - full management + Zoom
                     <>
                       <Tooltip title="View Details">
                         <IconButton size="small">
@@ -1255,6 +1853,20 @@ const AppointmentTable: React.FC<AppointmentTableProps> = ({
                           <Edit />
                         </IconButton>
                       </Tooltip>
+                      {appointment.location === 'telehealth' && appointment.telehealthInfo?.zoomMeeting && (
+                        <Tooltip title="Start Zoom Meeting">
+                          <IconButton 
+                            size="small" 
+                            color="primary"
+                            onClick={() => {
+                              console.log('Starting Zoom meeting:', appointment.telehealthInfo?.zoomMeeting?.joinUrl);
+                              window.open(appointment.telehealthInfo!.zoomMeeting!.joinUrl, '_blank');
+                            }}
+                          >
+                            <VideoCall />
+                          </IconButton>
+                        </Tooltip>
+                      )}
                       {appointment.status === 'scheduled' && (
                         <Tooltip title="Confirm">
                           <IconButton 
@@ -1285,6 +1897,15 @@ const AppointmentTable: React.FC<AppointmentTableProps> = ({
                           </IconButton>
                         </Tooltip>
                       )}
+                      <Tooltip title="Delete Appointment">
+                        <IconButton 
+                          size="small" 
+                          color="error"
+                          onClick={() => onDelete(appointment._id)}
+                        >
+                          <Delete />
+                        </IconButton>
+                      </Tooltip>
                     </>
                   )}
                 </Box>
@@ -1294,6 +1915,7 @@ const AppointmentTable: React.FC<AppointmentTableProps> = ({
         </TableBody>
       </Table>
     </TableContainer>
+    </Box>
   );
 };
 

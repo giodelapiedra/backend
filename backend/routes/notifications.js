@@ -6,40 +6,7 @@ const { authMiddleware, roleMiddleware } = require('../middleware/auth');
 const { asyncHandler, handleValidationErrors } = require('../middleware/errorHandler');
 const Notification = require('../models/Notification');
 const User = require('../models/User');
-
-// Store active SSE connections
-const activeConnections = new Map();
-
-// Helper function to send notification updates to specific user
-const sendNotificationUpdate = async (userId) => {
-  const unreadCount = await Notification.getUnreadCount(userId);
-  const connections = activeConnections.get(userId.toString());
-  
-  if (connections) {
-    const message = JSON.stringify({
-      type: 'notification_count_update',
-      unreadCount: unreadCount
-    });
-    
-    connections.forEach(res => {
-      try {
-        res.write(`data: ${message}\n\n`);
-      } catch (error) {
-        console.error('Error sending SSE message:', error);
-        // Remove broken connection
-        const index = connections.indexOf(res);
-        if (index > -1) {
-          connections.splice(index, 1);
-        }
-      }
-    });
-    
-    // Clean up empty connections
-    if (connections.length === 0) {
-      activeConnections.delete(userId.toString());
-    }
-  }
-};
+const NotificationService = require('../services/NotificationService');
 
 // Custom SSE authentication middleware
 const sseAuthMiddleware = async (req, res, next) => {
@@ -79,27 +46,12 @@ router.get('/stream', sseAuthMiddleware, (req, res) => {
     'Access-Control-Allow-Headers': 'Cache-Control'
   });
   
-  // Add connection to active connections
-  if (!activeConnections.has(userId)) {
-    activeConnections.set(userId, []);
-  }
-  activeConnections.get(userId).push(res);
-  
-  // Send initial connection message
-  res.write('data: {"type":"connected"}\n\n');
+  // Register connection with NotificationService
+  NotificationService.registerConnection(userId, res);
   
   // Handle client disconnect
   req.on('close', () => {
-    const connections = activeConnections.get(userId);
-    if (connections) {
-      const index = connections.indexOf(res);
-      if (index > -1) {
-        connections.splice(index, 1);
-      }
-      if (connections.length === 0) {
-        activeConnections.delete(userId);
-      }
-    }
+    NotificationService.removeConnection(userId, res);
   });
 });
 
@@ -161,7 +113,7 @@ router.put('/:id/read', [
   await notification.markAsRead();
 
   // Send real-time update to user
-  await sendNotificationUpdate(req.user._id);
+  await NotificationService.sendNotificationUpdate(req.user._id);
 
   res.json({
     message: 'Notification marked as read',
@@ -184,7 +136,7 @@ router.put('/read-all', [
   );
 
   // Send real-time update to user
-  await sendNotificationUpdate(req.user._id);
+  await NotificationService.sendNotificationUpdate(req.user._id);
 
   res.json({
     message: 'All notifications marked as read',
@@ -214,7 +166,7 @@ router.delete('/:id', [
   await Notification.findByIdAndDelete(req.params.id);
 
   // Send real-time update to user
-  await sendNotificationUpdate(req.user._id);
+  await NotificationService.sendNotificationUpdate(req.user._id);
 
   res.json({ message: 'Notification deleted successfully' });
 }));
@@ -242,7 +194,7 @@ router.post('/', [
     return res.status(400).json({ message: 'Invalid recipient' });
   }
 
-  const notification = new Notification({
+  const notificationData = {
     recipient,
     sender: req.user._id,
     type,
@@ -251,9 +203,10 @@ router.post('/', [
     priority: priority || 'medium',
     actionUrl,
     metadata: metadata || {}
-  });
+  };
 
-  await notification.save();
+  // Use NotificationService to create notification
+  const notification = await NotificationService.createNotification(notificationData);
 
   // Populate the created notification
   await notification.populate([
@@ -261,12 +214,39 @@ router.post('/', [
     { path: 'sender', select: 'firstName lastName email' }
   ]);
 
-  // Send real-time update to recipient
-  await sendNotificationUpdate(recipient);
-
   res.status(201).json({
     message: 'Notification created successfully',
     notification
+  });
+}));
+
+// @route   POST /api/notifications/batch
+// @desc    Create multiple notifications in batch (Admin/Case Manager only)
+// @access  Private (Admin, Case Manager)
+router.post('/batch', [
+  authMiddleware,
+  roleMiddleware('admin', 'case_manager'),
+  body('notifications').isArray().withMessage('Notifications must be an array'),
+  body('notifications.*.recipient').isMongoId().withMessage('Valid recipient ID is required'),
+  body('notifications.*.type').isIn(['incident_reported', 'case_created', 'appointment_scheduled', 'check_in_reminder', 'task_assigned', 'case_status_change', 'general', 'high_pain', 'rtw_review', 'fatigue_resource']).withMessage('Valid notification type is required'),
+  body('notifications.*.title').notEmpty().withMessage('Title is required').isLength({ max: 200 }).withMessage('Title cannot exceed 200 characters'),
+  body('notifications.*.message').notEmpty().withMessage('Message is required').isLength({ max: 1000 }).withMessage('Message cannot exceed 1000 characters'),
+  handleValidationErrors
+], asyncHandler(async (req, res) => {
+  const { notifications } = req.body;
+  
+  // Add sender to each notification
+  const notificationsWithSender = notifications.map(notification => ({
+    ...notification,
+    sender: req.user._id
+  }));
+  
+  // Use NotificationService to create batch notifications
+  const createdNotifications = await NotificationService.createBatchNotifications(notificationsWithSender);
+  
+  res.status(201).json({
+    message: `Successfully created ${createdNotifications.length} notifications`,
+    count: createdNotifications.length
   });
 }));
 
@@ -299,12 +279,22 @@ router.get('/stats', [
     .sort({ createdAt: -1 })
     .limit(10);
 
+  // Get active connection stats
+  const activeConnections = NotificationService.getActiveConnectionsCount();
+  const activeUsers = NotificationService.getActiveUsersCount();
+
   res.json({
     totalNotifications,
     unreadNotifications,
     notificationsByType,
-    recentNotifications
+    recentNotifications,
+    activeConnections,
+    activeUsers
   });
 }));
 
-module.exports = { router, sendNotificationUpdate };
+// Export router and sendNotificationUpdate for backward compatibility
+module.exports = { 
+  router, 
+  sendNotificationUpdate: NotificationService.sendNotificationUpdate 
+};

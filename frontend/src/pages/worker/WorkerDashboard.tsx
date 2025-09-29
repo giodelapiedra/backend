@@ -6,64 +6,31 @@ import {
   Typography,
   Button,
   Chip,
-  List,
-  ListItem,
-  ListItemText,
-  ListItemIcon,
-  Avatar,
   Alert,
   Grid,
 } from '@mui/material';
 import {
   CheckCircle,
-  Assignment,
-  TrendingUp,
-  FitnessCenter,
   LocalHospital,
   Work,
-  Add,
-  Visibility,
   PlayArrow,
-  History,
   Assessment,
-  BarChart,
-  Menu,
   Favorite,
   Warning,
 } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext';
-import Layout from '../../components/Layout';
+import LayoutWithSidebar from '../../components/LayoutWithSidebar';
 import SimpleCheckIn from '../../components/SimpleCheckIn';
 import { useNavigate } from 'react-router-dom';
 import api from '../../utils/api';
 
 // Interfaces
-interface CheckIn {
-  _id: string;
-  checkInDate: string;
-  painLevel?: {
-    current: number;
-  };
-}
-
-interface RehabPlan {
-  _id: string;
-  planName: string;
-  status: string;
-}
-
 interface Case {
   _id: string;
   caseNumber: string;
   status: string;
-    description: string;
+  description: string;
   priority: string;
-}
-
-interface PreventiveTask {
-  _id: string;
-  title: string;
-  status: string;
 }
 
 interface Appointment {
@@ -98,25 +65,127 @@ const WorkerDashboard: React.FC = memo(() => {
   const { user } = useAuth();
   const navigate = useNavigate();
   
-  const [checkIns, setCheckIns] = useState<CheckIn[]>([]);
-  const [rehabPlans, setRehabPlans] = useState<RehabPlan[]>([]);
   const [cases, setCases] = useState<Case[]>([]);
-  const [preventiveTasks, setPreventiveTasks] = useState<PreventiveTask[]>([]);
-  const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [showSimpleCheckIn, setShowSimpleCheckIn] = useState(false);
   const [selectedCase, setSelectedCase] = useState<Case | null>(null);
   const [checkInLoading, setCheckInLoading] = useState(false);
   const [checkInSuccess, setCheckInSuccess] = useState(false);
   const [checkInError, setCheckInError] = useState<string | null>(null);
+  const [showWorkReadinessModal, setShowWorkReadinessModal] = useState(false);
+  const [workReadinessForm, setWorkReadinessForm] = useState({
+    fatigueLevel: '',
+    painDiscomfort: '',
+    painAreas: [] as string[],
+    readinessLevel: '',
+    mood: '',
+    notes: ''
+  });
+  const [workReadinessLoading, setWorkReadinessLoading] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const [hasSubmittedToday, setHasSubmittedToday] = useState(false);
+  const [todaySubmission, setTodaySubmission] = useState<any>(null);
+
+  const fetchWorkerData = useCallback(async () => {
+    try {
+      setLoading(true);
+      const [casesRes, notificationsRes] = await Promise.all([
+        api.get('/cases'),
+        api.get('/notifications')
+      ]);
+
+      setCases(casesRes.data.cases || []);
+      setNotifications(notificationsRes.data.notifications || []);
+    } catch (error) {
+      console.error('Error fetching worker data:', error);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     fetchWorkerData();
-  }, []);
+    checkTodaySubmission();
+  }, [fetchWorkerData]);
+
+  const checkTodaySubmission = async () => {
+    try {
+      const response = await api.get('/work-readiness/check-today');
+      setHasSubmittedToday(response.data.alreadySubmitted);
+      setTodaySubmission(response.data.assessment);
+    } catch (error) {
+      console.error('Error checking today submission:', error);
+    }
+  };
+
+  // Global mouse and touch events for dragging
+  useEffect(() => {
+    const handleGlobalMouseMove = (e: MouseEvent) => {
+      if (!isDragging) return;
+      
+      const sliderTrack = document.querySelector('[data-slider-track]') as HTMLElement;
+      if (!sliderTrack) return;
+      
+      const rect = sliderTrack.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const percentage = Math.max(0, Math.min(100, (x / rect.width) * 100));
+      
+      // Convert percentage to level (1-5)
+      let level: number;
+      if (percentage <= 20) level = 1;
+      else if (percentage <= 40) level = 2;
+      else if (percentage <= 60) level = 3;
+      else if (percentage <= 80) level = 4;
+      else level = 5;
+      
+      setWorkReadinessForm(prev => ({ ...prev, fatigueLevel: level.toString() }));
+    };
+
+    const handleGlobalTouchMove = (e: TouchEvent) => {
+      if (!isDragging) return;
+      
+      const sliderTrack = document.querySelector('[data-slider-track]') as HTMLElement;
+      if (!sliderTrack) return;
+      
+      const rect = sliderTrack.getBoundingClientRect();
+      const x = e.touches[0].clientX - rect.left;
+      const percentage = Math.max(0, Math.min(100, (x / rect.width) * 100));
+      
+      // Convert percentage to level (1-5)
+      let level: number;
+      if (percentage <= 20) level = 1;
+      else if (percentage <= 40) level = 2;
+      else if (percentage <= 60) level = 3;
+      else if (percentage <= 80) level = 4;
+      else level = 5;
+      
+      setWorkReadinessForm(prev => ({ ...prev, fatigueLevel: level.toString() }));
+    };
+
+    const handleGlobalMouseUp = () => {
+      setIsDragging(false);
+    };
+
+    const handleGlobalTouchEnd = () => {
+      setIsDragging(false);
+    };
+
+    if (isDragging) {
+      document.addEventListener('mousemove', handleGlobalMouseMove);
+      document.addEventListener('mouseup', handleGlobalMouseUp);
+      document.addEventListener('touchmove', handleGlobalTouchMove, { passive: false });
+      document.addEventListener('touchend', handleGlobalTouchEnd);
+    }
+
+    return () => {
+      document.removeEventListener('mousemove', handleGlobalMouseMove);
+      document.removeEventListener('mouseup', handleGlobalMouseUp);
+      document.removeEventListener('touchmove', handleGlobalTouchMove);
+      document.removeEventListener('touchend', handleGlobalTouchEnd);
+    };
+  }, [isDragging]);
 
   // Memoized calculations
   const unreadNotifications = useMemo(() => 
@@ -136,33 +205,6 @@ const WorkerDashboard: React.FC = memo(() => {
       setSelectedCase(cases[0]);
     }
   }, [showSimpleCheckIn, cases, selectedCase]);
-
-  const fetchWorkerData = useCallback(async () => {
-    try {
-      setLoading(true);
-      const [checkInsRes, rehabPlansRes, casesRes, tasksRes, appointmentsRes, statsRes, notificationsRes] = await Promise.all([
-        api.get('/check-ins'),
-        api.get('/rehabilitation-plans'),
-        api.get('/cases'),
-        api.get('/preventive-tasks'),
-        api.get('/appointments'),
-        api.get('/check-ins/dashboard/stats'),
-        api.get('/notifications')
-      ]);
-
-      setCheckIns(checkInsRes.data.checkIns || []);
-      setRehabPlans(rehabPlansRes.data.plans || []);
-      setCases(casesRes.data.cases || []);
-      setPreventiveTasks(tasksRes.data.tasks || []);
-      setAppointments(appointmentsRes.data.appointments || []);
-      setStats(statsRes.data);
-      setNotifications(notificationsRes.data.notifications || []);
-    } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to fetch dashboard data');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
 
   const handleSimpleCheckInSubmit = useCallback(async (data: any) => {
     try {
@@ -232,16 +274,6 @@ const WorkerDashboard: React.FC = memo(() => {
     }
   }, [selectedCase, cases, fetchWorkerData]);
 
-  const getStatusColor = useCallback((status: string) => {
-    switch (status.toLowerCase()) {
-      case 'active': return '#10b981';
-      case 'completed': return '#3b82f6';
-      case 'pending': return '#f59e0b';
-      case 'cancelled': return '#ef4444';
-      default: return '#6b7280';
-    }
-  }, []);
-
   // Callback handlers
   const handleNotificationAction = useCallback((notification: Notification) => {
     api.put(`/notifications/${notification._id}/read`);
@@ -267,6 +299,87 @@ const WorkerDashboard: React.FC = memo(() => {
     navigate('/worker/rehabilitation-plan');
   }, [navigate]);
 
+  const handleWorkReadinessClick = useCallback(() => {
+    setShowWorkReadinessModal(true);
+  }, []);
+
+  const handleWorkReadinessSubmit = useCallback(async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (!workReadinessForm.fatigueLevel || !workReadinessForm.painDiscomfort || 
+        !workReadinessForm.readinessLevel || !workReadinessForm.mood) {
+      return;
+    }
+
+    try {
+      setWorkReadinessLoading(true);
+      
+      // Submit work readiness data
+      const response = await api.post('/work-readiness/submit', {
+        fatigueLevel: workReadinessForm.fatigueLevel,
+        painDiscomfort: workReadinessForm.painDiscomfort,
+        painAreas: workReadinessForm.painAreas,
+        readinessLevel: workReadinessForm.readinessLevel,
+        mood: workReadinessForm.mood,
+        notes: workReadinessForm.notes
+      });
+      
+      console.log('Work readiness submitted:', response.data);
+      
+      // Reset form and close modal
+      setWorkReadinessForm({
+        fatigueLevel: '',
+        painDiscomfort: '',
+        painAreas: [],
+        readinessLevel: '',
+        mood: '',
+        notes: ''
+      });
+      setShowWorkReadinessModal(false);
+      
+      // Show success message
+      setSuccessMessage('Work readiness assessment submitted successfully!');
+      
+      // Update submission status
+      setHasSubmittedToday(true);
+      setTodaySubmission(response.data.assessment);
+      
+    } catch (error: any) {
+      console.error('Error submitting work readiness:', error);
+      if (error.response?.data?.alreadySubmitted) {
+        setHasSubmittedToday(true);
+        setTodaySubmission(error.response.data);
+        setSuccessMessage('You have already submitted your work readiness assessment for today.');
+      }
+    } finally {
+      setWorkReadinessLoading(false);
+    }
+  }, [workReadinessForm]);
+
+  const handleSliderMouseDown = useCallback(() => {
+    setIsDragging(true);
+  }, []);
+
+  const handleSliderTouchStart = useCallback(() => {
+    setIsDragging(true);
+  }, []);
+
+  const handleSliderClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const percentage = Math.max(0, Math.min(100, (x / rect.width) * 100));
+    
+    // Convert percentage to level (1-5)
+    let level: number;
+    if (percentage <= 20) level = 1;
+    else if (percentage <= 40) level = 2;
+    else if (percentage <= 60) level = 3;
+    else if (percentage <= 80) level = 4;
+    else level = 5;
+    
+    setWorkReadinessForm(prev => ({ ...prev, fatigueLevel: level.toString() }));
+  }, []);
+
   const handleCloseCheckIn = useCallback(() => {
     setShowSimpleCheckIn(false);
     setSelectedCase(null);
@@ -276,16 +389,16 @@ const WorkerDashboard: React.FC = memo(() => {
 
   if (loading) {
     return (
-      <Layout>
+      <LayoutWithSidebar>
         <Box display="flex" justifyContent="center" alignItems="center" minHeight="50vh">
           <Typography>Loading dashboard...</Typography>
         </Box>
-      </Layout>
+      </LayoutWithSidebar>
     );
   }
 
   return (
-    <Layout>
+    <LayoutWithSidebar>
       <Box sx={{ 
         minHeight: '100vh', 
         background: 'linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%)',
@@ -337,11 +450,60 @@ const WorkerDashboard: React.FC = memo(() => {
               color: '#64748b',
               fontWeight: 400,
               fontSize: { xs: '0.9rem', sm: '1rem', md: '1.25rem' },
-              px: { xs: 2, sm: 0 }
+              px: { xs: 2, sm: 0 },
+              mb: 3
             }}
           >
             Let's check in on your recovery progress today
           </Typography>
+          
+          {/* Team Information */}
+          {user?.team && (
+            <Box sx={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              backgroundColor: '#ffffff',
+              border: '1px solid #e2e8f0',
+              borderRadius: '12px',
+              padding: '0.5rem 1rem',
+              boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)',
+              transition: 'all 0.2s ease',
+              '&:hover': {
+                boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+                borderColor: '#3b82f6'
+              }
+            }}>
+              <Work sx={{ 
+                color: '#6b7280', 
+                mr: 1, 
+                fontSize: '1.25rem' 
+              }} />
+              <Typography 
+                variant="body2" 
+                sx={{ 
+                  fontWeight: 500, 
+                  color: '#374151',
+                  fontSize: '0.875rem',
+                  mr: 1
+                }}
+              >
+                {user.team}
+              </Typography>
+              {user?.package && (
+                <Chip
+                  label={user.package === 'package1' ? 'Package 1' : user.package === 'package2' ? 'Package 2' : 'Package 3'}
+                  size="small"
+                  sx={{
+                    backgroundColor: user.package === 'package1' ? '#dcfce7' : user.package === 'package2' ? '#dbeafe' : '#fef3c7',
+                    color: user.package === 'package1' ? '#166534' : user.package === 'package2' ? '#1e40af' : '#92400e',
+                    fontSize: '0.75rem',
+                    height: '20px',
+                    fontWeight: 500
+                  }}
+                />
+              )}
+            </Box>
+          )}
         </Box>
 
         {/* Main Action Cards */}
@@ -501,65 +663,70 @@ const WorkerDashboard: React.FC = memo(() => {
           </Card>
         )}
 
-        <Grid container spacing={3} sx={{ 
+
+        <Grid container spacing={window.innerWidth <= 768 ? 2 : 3} sx={{ 
           maxWidth: { xs: '100%', sm: 600 }, 
           mx: 'auto',
           px: { xs: 2, sm: 0 }
         }}>
-          {/* Daily Check-In Card */}
-          <Grid item xs={12}>
-            <Card 
-              sx={{ 
-                borderRadius: 3,
-                boxShadow: '0 4px 20px rgba(59, 130, 246, 0.15)',
-                background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
-                color: 'white',
-                cursor: 'pointer',
-                transition: 'all 0.3s ease',
-                '&:hover': {
-                  transform: 'translateY(-2px)',
-                  boxShadow: '0 8px 30px rgba(59, 130, 246, 0.25)',
-                }
-              }}
-              onClick={handleCheckInClick}
-            >
-              <CardContent sx={{ textAlign: 'center', py: 4 }}>
-                <Box sx={{ mb: 2 }}>
-                  <Favorite sx={{ fontSize: 48, opacity: 0.9 }} />
-                </Box>
-                <Typography variant="h5" sx={{ fontWeight: 600 }}>
-                  Daily Check-In
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
+          {/* Daily Check-In Card - Only for Package 2+ */}
+          {user?.package && user.package !== 'package1' && (
+            <Grid item xs={12}>
+              <Card 
+                sx={{ 
+                  borderRadius: 3,
+                  boxShadow: '0 4px 20px rgba(59, 130, 246, 0.15)',
+                  background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
+                  color: 'white',
+                  cursor: 'pointer',
+                  transition: 'all 0.3s ease',
+                  '&:hover': {
+                    transform: 'translateY(-2px)',
+                    boxShadow: '0 8px 30px rgba(59, 130, 246, 0.25)',
+                  }
+                }}
+                onClick={handleCheckInClick}
+              >
+                <CardContent sx={{ textAlign: 'center', py: 4 }}>
+                  <Box sx={{ mb: 2 }}>
+                    <Favorite sx={{ fontSize: 48, opacity: 0.9 }} />
+                  </Box>
+                  <Typography variant="h5" sx={{ fontWeight: 600 }}>
+                    Daily Check-In
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+          )}
 
-          {/* Recovery Exercises Card */}
-          <Grid item xs={12}>
-            <Card 
-              sx={{ 
-                borderRadius: 3,
-                boxShadow: '0 4px 20px rgba(0, 0, 0, 0.08)',
-                backgroundColor: 'white',
-                cursor: 'pointer',
-                transition: 'all 0.3s ease',
-                '&:hover': {
-                  transform: 'translateY(-2px)',
-                  boxShadow: '0 8px 30px rgba(0, 0, 0, 0.12)',
-                }
-              }}
-              onClick={handleRehabPlanClick}
-            >
-              <CardContent sx={{ textAlign: 'center', py: 4 }}>
-                <Box sx={{ mb: 2 }}>
-                  <PlayArrow sx={{ fontSize: 48, color: '#1e293b' }} />
-                </Box>
-                <Typography variant="h5" sx={{ fontWeight: 600, color: '#1e293b' }}>
-                  Recovery Exercises
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
+          {/* Recovery Exercises Card - Only for Package 2+ */}
+          {user?.package && user.package !== 'package1' && (
+            <Grid item xs={12}>
+              <Card 
+                sx={{ 
+                  borderRadius: 3,
+                  boxShadow: '0 4px 20px rgba(0, 0, 0, 0.08)',
+                  backgroundColor: 'white',
+                  cursor: 'pointer',
+                  transition: 'all 0.3s ease',
+                  '&:hover': {
+                    transform: 'translateY(-2px)',
+                    boxShadow: '0 8px 30px rgba(0, 0, 0, 0.12)',
+                  }
+                }}
+                onClick={handleRehabPlanClick}
+              >
+                <CardContent sx={{ textAlign: 'center', py: 4 }}>
+                  <Box sx={{ mb: 2 }}>
+                    <PlayArrow sx={{ fontSize: 48, color: '#1e293b' }} />
+                  </Box>
+                  <Typography variant="h5" sx={{ fontWeight: 600, color: '#1e293b' }}>
+                    Recovery Exercises
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+          )}
 
           {/* Work Readiness Card */}
           <Grid item xs={12}>
@@ -567,23 +734,33 @@ const WorkerDashboard: React.FC = memo(() => {
               sx={{ 
                 borderRadius: 3,
                 boxShadow: '0 4px 20px rgba(0, 0, 0, 0.08)',
-                backgroundColor: 'white',
-                cursor: 'pointer',
+                backgroundColor: hasSubmittedToday ? '#f0f9ff' : 'white',
+                cursor: hasSubmittedToday ? 'not-allowed' : 'pointer',
                 transition: 'all 0.3s ease',
-                '&:hover': {
+                opacity: hasSubmittedToday ? 0.7 : 1,
+                '&:hover': hasSubmittedToday ? {} : {
                   transform: 'translateY(-2px)',
                   boxShadow: '0 8px 30px rgba(0, 0, 0, 0.12)',
                 }
               }}
-              onClick={() => {/* Navigate to work readiness */}}
+              onClick={hasSubmittedToday ? undefined : handleWorkReadinessClick}
             >
               <CardContent sx={{ textAlign: 'center', py: 4 }}>
                 <Box sx={{ mb: 2 }}>
-                  <Work sx={{ fontSize: 48, color: '#1e293b' }} />
+                  {hasSubmittedToday ? (
+                    <CheckCircle sx={{ fontSize: 48, color: '#10b981' }} />
+                  ) : (
+                    <Work sx={{ fontSize: 48, color: '#1e293b' }} />
+                  )}
                 </Box>
-                <Typography variant="h5" sx={{ fontWeight: 600, color: '#1e293b' }}>
-                  Work Readiness
+                <Typography variant="h5" sx={{ fontWeight: 600, color: hasSubmittedToday ? '#10b981' : '#1e293b' }}>
+                  {hasSubmittedToday ? 'Already Submitted Today' : 'Work Readiness'}
                 </Typography>
+                {hasSubmittedToday && todaySubmission && (
+                  <Typography variant="body2" sx={{ color: '#6b7280', mt: 1 }}>
+                    Submitted at {new Date(todaySubmission.submittedAt).toLocaleTimeString()}
+                  </Typography>
+                )}
               </CardContent>
             </Card>
           </Grid>
@@ -616,6 +793,633 @@ const WorkerDashboard: React.FC = memo(() => {
           </Grid>
         </Grid>
 
+        {/* Work Readiness Modal */}
+        {showWorkReadinessModal && (
+          <div style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: window.innerWidth <= 768 ? '0' : '1rem'
+          }}>
+            <div style={{
+              backgroundColor: 'white',
+              borderRadius: window.innerWidth <= 768 ? '0' : '1rem',
+              padding: window.innerWidth <= 768 ? '1rem' : '2rem',
+              maxWidth: '600px',
+              width: '100%',
+              height: window.innerWidth <= 768 ? '100vh' : 'auto',
+              maxHeight: window.innerWidth <= 768 ? '100vh' : '90vh',
+              overflowY: 'auto',
+              boxShadow: window.innerWidth <= 768 ? 'none' : '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+              display: 'flex',
+              flexDirection: 'column'
+            }}>
+              {/* Header */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                marginBottom: window.innerWidth <= 768 ? '1rem' : '1.5rem',
+                paddingBottom: window.innerWidth <= 768 ? '0.75rem' : '1rem',
+                borderBottom: '1px solid #e5e7eb',
+                position: 'sticky',
+                top: 0,
+                backgroundColor: 'white',
+                zIndex: 10
+              }}>
+                <div style={{
+                  backgroundColor: '#3b82f6',
+                  borderRadius: window.innerWidth <= 768 ? '0.5rem' : '0.75rem',
+                  padding: window.innerWidth <= 768 ? '0.5rem' : '0.75rem',
+                  marginRight: window.innerWidth <= 768 ? '0.75rem' : '1rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}>
+                  <Work sx={{ fontSize: window.innerWidth <= 768 ? 20 : 24, color: 'white' }} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <h2 style={{
+                    fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem',
+                    fontWeight: 'bold',
+                    color: '#111827',
+                    margin: 0,
+                    lineHeight: 1.2
+                  }}>
+                    Work Readiness Assessment
+                  </h2>
+                  <p style={{
+                    fontSize: window.innerWidth <= 768 ? '0.75rem' : '0.875rem',
+                    color: '#6b7280',
+                    margin: 0,
+                    marginTop: '0.25rem'
+                  }}>
+                    Help us understand your current work readiness
+                  </p>
+                </div>
+                <button
+                  onClick={() => setShowWorkReadinessModal(false)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    fontSize: '1.5rem',
+                    color: '#6b7280',
+                    cursor: 'pointer',
+                    padding: '0.25rem',
+                    borderRadius: '0.25rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+
+              {/* Form */}
+              <form onSubmit={handleWorkReadinessSubmit} style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                {/* Fatigue Level */}
+                <div style={{ marginBottom: window.innerWidth <= 768 ? '1.25rem' : '1.5rem' }}>
+                  <label style={{
+                    display: 'block',
+                    fontSize: window.innerWidth <= 768 ? '1rem' : '0.875rem',
+                    fontWeight: '600',
+                    color: '#374151',
+                    marginBottom: window.innerWidth <= 768 ? '0.75rem' : '0.5rem',
+                    textAlign: 'center'
+                  }}>
+                    Fatigue Level *
+                  </label>
+                  
+                  {/* Range Slider Container */}
+                  <div style={{
+                    padding: '1.5rem 1rem',
+                    backgroundColor: '#f8fafc',
+                    borderRadius: '1rem',
+                    border: '1px solid #e2e8f0'
+                  }}>
+                    {/* Slider Track */}
+                    <div 
+                      data-slider-track
+                      style={{
+                        position: 'relative',
+                        height: '6px',
+                        backgroundColor: '#e2e8f0',
+                        borderRadius: '3px',
+                        marginBottom: '2rem',
+                        cursor: 'pointer'
+                      }}
+                      onClick={handleSliderClick}
+                    >
+                      {/* Active Range */}
+                      <div style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: '0%',
+                        right: '0%',
+                        height: '100%',
+                        backgroundColor: workReadinessForm.fatigueLevel ? 
+                          (parseInt(workReadinessForm.fatigueLevel) === 1 ? '#dcfce7' :
+                           parseInt(workReadinessForm.fatigueLevel) === 2 ? '#bbf7d0' :
+                           parseInt(workReadinessForm.fatigueLevel) === 3 ? '#fef3c7' :
+                           parseInt(workReadinessForm.fatigueLevel) === 4 ? '#fed7aa' : '#fecaca') : '#e2e8f0',
+                        borderRadius: '3px',
+                        width: workReadinessForm.fatigueLevel ? `${(parseInt(workReadinessForm.fatigueLevel) - 1) * 25}%` : '0%',
+                        transition: 'all 0.3s ease'
+                      }} />
+                      
+                      {/* Slider Handle */}
+                      <div
+                        style={{
+                          position: 'absolute',
+                          top: '50%',
+                          left: workReadinessForm.fatigueLevel ? `${(parseInt(workReadinessForm.fatigueLevel) - 1) * 25}%` : '0%',
+                          transform: 'translate(-50%, -50%)',
+                          width: '24px',
+                          height: '24px',
+                          backgroundColor: '#3b82f6',
+                          borderRadius: '50%',
+                          border: '3px solid white',
+                          boxShadow: '0 4px 12px rgba(59, 130, 246, 0.4)',
+                          cursor: isDragging ? 'grabbing' : 'grab',
+                          transition: isDragging ? 'none' : 'all 0.3s ease',
+                          zIndex: 10,
+                          userSelect: 'none'
+                        }}
+                        onMouseDown={handleSliderMouseDown}
+                        onTouchStart={handleSliderTouchStart}
+                        draggable={false}
+                      />
+                    </div>
+                    
+                    {/* Level Labels */}
+                    <div style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      marginBottom: '1rem'
+                    }}>
+                      {[1, 2, 3, 4, 5].map((level) => (
+                        <div
+                          key={level}
+                          onClick={() => setWorkReadinessForm({ ...workReadinessForm, fatigueLevel: level.toString() })}
+                          style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            cursor: 'pointer',
+                            padding: '0.5rem',
+                            borderRadius: '0.5rem',
+                            backgroundColor: workReadinessForm.fatigueLevel === level.toString() ? '#dbeafe' : 'transparent',
+                            transition: 'all 0.2s ease',
+                            minWidth: '60px'
+                          }}
+                        >
+                          <div style={{
+                            fontSize: '1.5rem',
+                            marginBottom: '0.25rem'
+                          }}>
+                            {level === 1 ? '😴' : level === 2 ? '😌' : level === 3 ? '😐' : level === 4 ? '😔' : '😫'}
+                          </div>
+                          <div style={{
+                            fontSize: '0.875rem',
+                            fontWeight: '600',
+                            color: workReadinessForm.fatigueLevel === level.toString() ? '#1e40af' : '#374151'
+                          }}>
+                            {level}
+                          </div>
+                          <div style={{
+                            fontSize: '0.75rem',
+                            color: '#6b7280',
+                            textAlign: 'center',
+                            lineHeight: 1.2
+                          }}>
+                            {level === 1 ? 'Very Low' : level === 2 ? 'Low' : level === 3 ? 'Moderate' : level === 4 ? 'High' : 'Very High'}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    
+                    {/* Current Selection Display */}
+                    {workReadinessForm.fatigueLevel && (
+                      <div style={{
+                        textAlign: 'center',
+                        padding: '0.75rem',
+                        backgroundColor: 'white',
+                        borderRadius: '0.5rem',
+                        border: '1px solid #e2e8f0',
+                        marginTop: '0.5rem'
+                      }}>
+                        <div style={{
+                          fontSize: '1.25rem',
+                          fontWeight: '600',
+                          color: '#1e293b',
+                          marginBottom: '0.25rem'
+                        }}>
+                          Level {workReadinessForm.fatigueLevel} - {
+                            workReadinessForm.fatigueLevel === '1' ? 'Very Low Fatigue' :
+                            workReadinessForm.fatigueLevel === '2' ? 'Low Fatigue' :
+                            workReadinessForm.fatigueLevel === '3' ? 'Moderate Fatigue' :
+                            workReadinessForm.fatigueLevel === '4' ? 'High Fatigue' : 'Very High Fatigue'
+                          }
+                        </div>
+                        <div style={{
+                          fontSize: '0.875rem',
+                          color: '#6b7280'
+                        }}>
+                          {workReadinessForm.fatigueLevel === '1' ? 'Feeling fresh and energetic' :
+                           workReadinessForm.fatigueLevel === '2' ? 'Slightly tired but manageable' :
+                           workReadinessForm.fatigueLevel === '3' ? 'Some fatigue, need rest soon' :
+                           workReadinessForm.fatigueLevel === '4' ? 'Quite tired, rest recommended' : 'Extremely tired, rest required'}
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* Drag Instruction */}
+                    <div style={{
+                      textAlign: 'center',
+                      marginTop: '0.75rem',
+                      fontSize: '0.75rem',
+                      color: '#6b7280',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '0.25rem'
+                    }}>
+                      <span>👆</span>
+                      <span>Click and drag the blue handle or click anywhere on the track</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Pain/Discomfort */}
+                <div style={{ marginBottom: window.innerWidth <= 768 ? '1.25rem' : '1.5rem' }}>
+                  <label style={{
+                    display: 'block',
+                    fontSize: window.innerWidth <= 768 ? '1rem' : '0.875rem',
+                    fontWeight: '600',
+                    color: '#374151',
+                    marginBottom: window.innerWidth <= 768 ? '0.75rem' : '0.5rem'
+                  }}>
+                    Pain/Discomfort *
+                  </label>
+                  <div style={{ 
+                    display: 'flex', 
+                    gap: window.innerWidth <= 768 ? '0.75rem' : '1rem',
+                    flexDirection: window.innerWidth <= 768 ? 'column' : 'row'
+                  }}>
+                    <button
+                      type="button"
+                      onClick={() => setWorkReadinessForm({ ...workReadinessForm, painDiscomfort: 'yes' })}
+                      style={{
+                        padding: window.innerWidth <= 768 ? '1rem' : '0.75rem 1.5rem',
+                        border: workReadinessForm.painDiscomfort === 'yes' ? '2px solid #ef4444' : '1px solid #d1d5db',
+                        borderRadius: '0.5rem',
+                        backgroundColor: workReadinessForm.painDiscomfort === 'yes' ? '#fef2f2' : 'white',
+                        color: workReadinessForm.painDiscomfort === 'yes' ? '#dc2626' : '#374151',
+                        fontSize: window.innerWidth <= 768 ? '1rem' : '1rem',
+                        fontWeight: '500',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s ease',
+                        flex: 1,
+                        minHeight: window.innerWidth <= 768 ? '48px' : 'auto'
+                      }}
+                    >
+                      {window.innerWidth <= 768 ? 'Yes, I have pain' : 'Yes, I have pain/discomfort'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setWorkReadinessForm({ ...workReadinessForm, painDiscomfort: 'no' })}
+                      style={{
+                        padding: window.innerWidth <= 768 ? '1rem' : '0.75rem 1.5rem',
+                        border: workReadinessForm.painDiscomfort === 'no' ? '2px solid #10b981' : '1px solid #d1d5db',
+                        borderRadius: '0.5rem',
+                        backgroundColor: workReadinessForm.painDiscomfort === 'no' ? '#f0fdf4' : 'white',
+                        color: workReadinessForm.painDiscomfort === 'no' ? '#059669' : '#374151',
+                        fontSize: window.innerWidth <= 768 ? '1rem' : '1rem',
+                        fontWeight: '500',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s ease',
+                        flex: 1,
+                        minHeight: window.innerWidth <= 768 ? '48px' : 'auto'
+                      }}
+                    >
+                      {window.innerWidth <= 768 ? 'No pain' : 'No pain/discomfort'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Pain Areas (if pain is yes) */}
+                {workReadinessForm.painDiscomfort === 'yes' && (
+                  <div style={{ marginBottom: window.innerWidth <= 768 ? '1.25rem' : '1.5rem' }}>
+                    <label style={{
+                      display: 'block',
+                      fontSize: window.innerWidth <= 768 ? '1rem' : '0.875rem',
+                      fontWeight: '600',
+                      color: '#374151',
+                      marginBottom: window.innerWidth <= 768 ? '0.75rem' : '0.5rem'
+                    }}>
+                      Pain Areas (Select all that apply)
+                    </label>
+                    <div style={{ 
+                      display: 'grid', 
+                      gridTemplateColumns: window.innerWidth <= 768 ? 'repeat(2, 1fr)' : 'repeat(auto-fit, minmax(120px, 1fr))', 
+                      gap: window.innerWidth <= 768 ? '0.75rem' : '0.5rem' 
+                    }}>
+                      {['Head', 'Neck', 'Shoulders', 'Arms', 'Back', 'Chest', 'Abdomen', 'Hips', 'Legs', 'Feet'].map((area) => (
+                        <button
+                          key={area}
+                          type="button"
+                          onClick={() => {
+                            const newAreas = workReadinessForm.painAreas.includes(area)
+                              ? workReadinessForm.painAreas.filter(a => a !== area)
+                              : [...workReadinessForm.painAreas, area];
+                            setWorkReadinessForm({ ...workReadinessForm, painAreas: newAreas });
+                          }}
+                          style={{
+                            padding: window.innerWidth <= 768 ? '0.75rem 0.5rem' : '0.5rem',
+                            border: workReadinessForm.painAreas.includes(area) ? '2px solid #ef4444' : '1px solid #d1d5db',
+                            borderRadius: '0.375rem',
+                            backgroundColor: workReadinessForm.painAreas.includes(area) ? '#fef2f2' : 'white',
+                            color: workReadinessForm.painAreas.includes(area) ? '#dc2626' : '#374151',
+                            fontSize: window.innerWidth <= 768 ? '0.875rem' : '0.875rem',
+                            fontWeight: '500',
+                            cursor: 'pointer',
+                            transition: 'all 0.2s ease',
+                            textAlign: 'center',
+                            minHeight: window.innerWidth <= 768 ? '44px' : 'auto'
+                          }}
+                        >
+                          {area}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Readiness Level */}
+                <div style={{ marginBottom: window.innerWidth <= 768 ? '1.25rem' : '1.5rem' }}>
+                  <label style={{
+                    display: 'block',
+                    fontSize: window.innerWidth <= 768 ? '1rem' : '0.875rem',
+                    fontWeight: '600',
+                    color: '#374151',
+                    marginBottom: window.innerWidth <= 768 ? '0.75rem' : '0.5rem'
+                  }}>
+                    Work Readiness *
+                  </label>
+                  <div style={{ 
+                    display: 'flex', 
+                    gap: window.innerWidth <= 768 ? '0.75rem' : '0.75rem', 
+                    flexWrap: 'wrap',
+                    flexDirection: window.innerWidth <= 768 ? 'column' : 'row'
+                  }}>
+                    {[
+                      { value: 'fit', label: 'Fit for Work', color: '#dcfce7', textColor: '#166534' },
+                      { value: 'minor', label: 'Minor Concerns', color: '#fef3c7', textColor: '#92400e' },
+                      { value: 'not_fit', label: 'Not Fit for Work', color: '#fecaca', textColor: '#dc2626' }
+                    ].map((level) => (
+                      <button
+                        key={level.value}
+                        type="button"
+                        onClick={() => setWorkReadinessForm({ ...workReadinessForm, readinessLevel: level.value })}
+                        style={{
+                          padding: window.innerWidth <= 768 ? '1rem' : '0.75rem 1.5rem',
+                          border: workReadinessForm.readinessLevel === level.value ? '2px solid #3b82f6' : '1px solid #d1d5db',
+                          borderRadius: '0.5rem',
+                          backgroundColor: workReadinessForm.readinessLevel === level.value ? '#dbeafe' : level.color,
+                          color: workReadinessForm.readinessLevel === level.value ? '#1e40af' : level.textColor,
+                          fontSize: window.innerWidth <= 768 ? '1rem' : '1rem',
+                          fontWeight: '600',
+                          cursor: 'pointer',
+                          transition: 'all 0.2s ease',
+                          flex: 1,
+                          minWidth: window.innerWidth <= 768 ? 'auto' : '150px',
+                          minHeight: window.innerWidth <= 768 ? '48px' : 'auto'
+                        }}
+                      >
+                        {level.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Mood */}
+                <div style={{ marginBottom: window.innerWidth <= 768 ? '1.25rem' : '1.5rem' }}>
+                  <label style={{
+                    display: 'block',
+                    fontSize: window.innerWidth <= 768 ? '1rem' : '0.875rem',
+                    fontWeight: '600',
+                    color: '#374151',
+                    marginBottom: window.innerWidth <= 768 ? '0.75rem' : '0.5rem',
+                    textAlign: 'center'
+                  }}>
+                    Current Mood *
+                  </label>
+                  
+                  {/* Mood Options Container */}
+                  <div style={{
+                    padding: '1.5rem 1rem',
+                    backgroundColor: '#f8fafc',
+                    borderRadius: '1rem',
+                    border: '1px solid #e2e8f0'
+                  }}>
+                    {/* Mood Options Grid */}
+                    <div style={{
+                      display: 'grid',
+                      gridTemplateColumns: window.innerWidth <= 768 ? 'repeat(2, 1fr)' : 'repeat(5, 1fr)',
+                      gap: window.innerWidth <= 768 ? '1rem' : '0.75rem',
+                      marginBottom: '1rem'
+                    }}>
+                      {[
+                        { value: 'excellent', label: 'Excellent', emoji: '😊', color: '#dcfce7', description: 'Feeling great!' },
+                        { value: 'good', label: 'Good', emoji: '😌', color: '#bbf7d0', description: 'Pretty good' },
+                        { value: 'okay', label: 'Okay', emoji: '😐', color: '#fef3c7', description: 'Not bad' },
+                        { value: 'poor', label: 'Poor', emoji: '😔', color: '#fed7aa', description: 'Not great' },
+                        { value: 'terrible', label: 'Terrible', emoji: '😢', color: '#fecaca', description: 'Really bad' }
+                      ].map((mood) => (
+                        <button
+                          key={mood.value}
+                          type="button"
+                          onClick={() => setWorkReadinessForm({ ...workReadinessForm, mood: mood.value })}
+                          style={{
+                            padding: window.innerWidth <= 768 ? '1rem 0.5rem' : '1rem 0.75rem',
+                            border: workReadinessForm.mood === mood.value ? '2px solid #3b82f6' : '1px solid #d1d5db',
+                            borderRadius: '0.75rem',
+                            backgroundColor: workReadinessForm.mood === mood.value ? '#dbeafe' : mood.color,
+                            color: '#374151',
+                            fontSize: window.innerWidth <= 768 ? '0.875rem' : '0.875rem',
+                            fontWeight: '500',
+                            cursor: 'pointer',
+                            transition: 'all 0.3s ease',
+                            textAlign: 'center',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '0.25rem',
+                            boxShadow: workReadinessForm.mood === mood.value ? '0 4px 12px rgba(59, 130, 246, 0.3)' : '0 2px 4px rgba(0, 0, 0, 0.1)',
+                            transform: workReadinessForm.mood === mood.value ? 'scale(1.05)' : 'scale(1)',
+                            minHeight: window.innerWidth <= 768 ? '80px' : '100px'
+                          }}
+                        >
+                          <div style={{ fontSize: '2rem', marginBottom: '0.25rem' }}>{mood.emoji}</div>
+                          <div style={{ fontSize: '0.875rem', fontWeight: '600', marginBottom: '0.125rem' }}>{mood.label}</div>
+                          <div style={{ fontSize: '0.75rem', opacity: 0.7, textAlign: 'center', lineHeight: 1.2 }}>{mood.description}</div>
+                        </button>
+                      ))}
+                    </div>
+                    
+                    {/* Current Selection Display */}
+                    {workReadinessForm.mood && (
+                      <div style={{
+                        textAlign: 'center',
+                        padding: '0.75rem',
+                        backgroundColor: 'white',
+                        borderRadius: '0.5rem',
+                        border: '1px solid #e2e8f0',
+                        marginTop: '0.5rem'
+                      }}>
+                        <div style={{
+                          fontSize: '1.25rem',
+                          fontWeight: '600',
+                          color: '#1e293b',
+                          marginBottom: '0.25rem',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '0.5rem'
+                        }}>
+                          <span style={{ fontSize: '1.5rem' }}>
+                            {workReadinessForm.mood === 'excellent' ? '😊' :
+                             workReadinessForm.mood === 'good' ? '😌' :
+                             workReadinessForm.mood === 'okay' ? '😐' :
+                             workReadinessForm.mood === 'poor' ? '😔' : '😢'}
+                          </span>
+                          <span>
+                            {workReadinessForm.mood === 'excellent' ? 'Excellent Mood' :
+                             workReadinessForm.mood === 'good' ? 'Good Mood' :
+                             workReadinessForm.mood === 'okay' ? 'Okay Mood' :
+                             workReadinessForm.mood === 'poor' ? 'Poor Mood' : 'Terrible Mood'}
+                          </span>
+                        </div>
+                        <div style={{
+                          fontSize: '0.875rem',
+                          color: '#6b7280'
+                        }}>
+                          {workReadinessForm.mood === 'excellent' ? 'You are feeling great and positive!' :
+                           workReadinessForm.mood === 'good' ? 'You are in a pretty good mood' :
+                           workReadinessForm.mood === 'okay' ? 'Your mood is neutral, not bad' :
+                           workReadinessForm.mood === 'poor' ? 'You are not feeling great today' : 'You are feeling really down today'}
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* Selection Instruction */}
+                    <div style={{
+                      textAlign: 'center',
+                      marginTop: '0.75rem',
+                      fontSize: '0.75rem',
+                      color: '#6b7280',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '0.25rem'
+                    }}>
+                      <span>👆</span>
+                      <span>Click any mood to select</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Notes */}
+                <div style={{ marginBottom: window.innerWidth <= 768 ? '1.5rem' : '2rem' }}>
+                  <label style={{
+                    display: 'block',
+                    fontSize: window.innerWidth <= 768 ? '1rem' : '0.875rem',
+                    fontWeight: '600',
+                    color: '#374151',
+                    marginBottom: window.innerWidth <= 768 ? '0.75rem' : '0.5rem'
+                  }}>
+                    Additional Notes (Optional)
+                  </label>
+                  <textarea
+                    value={workReadinessForm.notes}
+                    onChange={(e) => setWorkReadinessForm({ ...workReadinessForm, notes: e.target.value })}
+                    placeholder="Any additional comments about your work readiness..."
+                    style={{
+                      width: '100%',
+                      padding: window.innerWidth <= 768 ? '1rem' : '0.75rem',
+                      border: '1px solid #d1d5db',
+                      borderRadius: '0.5rem',
+                      fontSize: window.innerWidth <= 768 ? '1rem' : '0.875rem',
+                      resize: 'vertical',
+                      minHeight: window.innerWidth <= 768 ? '100px' : '80px',
+                      fontFamily: 'inherit'
+                    }}
+                  />
+                </div>
+
+                {/* Action Buttons */}
+                <div style={{ 
+                  display: 'flex', 
+                  gap: window.innerWidth <= 768 ? '0.75rem' : '1rem', 
+                  justifyContent: 'flex-end',
+                  marginTop: 'auto',
+                  paddingTop: window.innerWidth <= 768 ? '1rem' : '0',
+                  borderTop: window.innerWidth <= 768 ? '1px solid #e5e7eb' : 'none'
+                }}>
+                  <button
+                    type="button"
+                    onClick={() => setShowWorkReadinessModal(false)}
+                    style={{
+                      padding: window.innerWidth <= 768 ? '1rem 1.5rem' : '0.75rem 1.5rem',
+                      border: '1px solid #d1d5db',
+                      borderRadius: '0.5rem',
+                      backgroundColor: 'white',
+                      color: '#374151',
+                      fontSize: window.innerWidth <= 768 ? '1rem' : '1rem',
+                      fontWeight: '500',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease',
+                      flex: window.innerWidth <= 768 ? 1 : 'none',
+                      minHeight: window.innerWidth <= 768 ? '48px' : 'auto'
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={workReadinessLoading || !workReadinessForm.fatigueLevel || !workReadinessForm.painDiscomfort || !workReadinessForm.readinessLevel || !workReadinessForm.mood}
+                    style={{
+                      padding: window.innerWidth <= 768 ? '1rem 1.5rem' : '0.75rem 1.5rem',
+                      border: 'none',
+                      borderRadius: '0.5rem',
+                      backgroundColor: workReadinessLoading ? '#9ca3af' : '#3b82f6',
+                      color: 'white',
+                      fontSize: window.innerWidth <= 768 ? '1rem' : '1rem',
+                      fontWeight: '600',
+                      cursor: workReadinessLoading ? 'not-allowed' : 'pointer',
+                      transition: 'all 0.2s ease',
+                      opacity: workReadinessLoading ? 0.6 : 1,
+                      flex: window.innerWidth <= 768 ? 1 : 'none',
+                      minHeight: window.innerWidth <= 768 ? '48px' : 'auto'
+                    }}
+                  >
+                    {workReadinessLoading ? 'Submitting...' : 'Submit Assessment'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
         {/* SimpleCheckIn Modal */}
         {showSimpleCheckIn && (
           <SimpleCheckIn
@@ -627,7 +1431,7 @@ const WorkerDashboard: React.FC = memo(() => {
           />
         )}
       </Box>
-    </Layout>
+    </LayoutWithSidebar>
   );
 });
 

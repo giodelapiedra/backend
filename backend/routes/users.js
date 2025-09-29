@@ -2,10 +2,18 @@ const express = require('express');
 const { body, query } = require('express-validator');
 const fs = require('fs');
 const path = require('path');
+const mongoose = require('mongoose');
 const User = require('../models/User');
 const { authMiddleware } = require('../middleware/auth');
 const { sanitizeInput } = require('../middleware/sanitization');
 const { uploadSingleUserPhoto } = require('../middleware/upload');
+const { 
+  lazyPaginationMiddleware, 
+  getUsersWithLazyLoad, 
+  loadMoreUsers, 
+  searchUsersLazy,
+  getUserStats 
+} = require('../middleware/lazyPagination');
 const roleMiddleware = (...roles) => {
   return (req, res, next) => {
     console.log('=== ROLE MIDDLEWARE HIT ===');
@@ -53,12 +61,15 @@ router.post('/', [
     .withMessage('Password must be at least 12 characters')
     .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/)
     .withMessage('Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character (@$!%*?&)'),
-  body('role').isIn(['admin', 'worker', 'employer', 'site_supervisor', 'clinician', 'case_manager', 'gp_insurer'])
+  body('role').isIn(['admin', 'worker', 'employer', 'site_supervisor', 'clinician', 'case_manager', 'gp_insurer', 'team_leader'])
     .withMessage('Valid role is required'),
   body('phone').optional().isString(),
   body('employer').optional().isMongoId(),
   body('specialty').optional().isString(),
   body('licenseNumber').optional().isString(),
+  body('team').optional().isString(),
+  body('defaultTeam').optional().isString(),
+  body('managedTeams').optional().isString(),
   handleValidationErrors
 ], asyncHandler(async (req, res) => {
   const { 
@@ -73,7 +84,10 @@ router.post('/', [
     licenseNumber,
     address,
     emergencyContact,
-    medicalInfo
+    medicalInfo,
+    team,
+    defaultTeam,
+    managedTeams
   } = req.body;
 
   // Check if user already exists
@@ -100,6 +114,22 @@ router.post('/', [
 
   if (role === 'worker' && employer) {
     userData.employer = employer;
+  }
+
+  if (role === 'team_leader') {
+    // Parse managedTeams if it's a string (from FormData)
+    let parsedManagedTeams = managedTeams;
+    if (typeof managedTeams === 'string') {
+      try {
+        parsedManagedTeams = JSON.parse(managedTeams);
+      } catch (e) {
+        parsedManagedTeams = [managedTeams];
+      }
+    }
+    
+    userData.team = team || 'DEFAULT TEAM';
+    userData.defaultTeam = defaultTeam || team || 'DEFAULT TEAM';
+    userData.managedTeams = parsedManagedTeams || [team || 'DEFAULT TEAM'];
   }
 
   // Add optional fields
@@ -141,120 +171,102 @@ router.post('/', [
 
 
 // @route   GET /api/users
-// @desc    Get all users (with filtering and pagination)
-// @access  Private (Admin, Case Manager, Site Supervisor)
+// @desc    Get all users with lazy loading pagination - OPTIMIZED
+// @access  Private (Admin, Case Manager, Site Supervisor, Clinician)
 router.get('/', [
   authMiddleware,
-  roleMiddleware('admin', 'case_manager', 'site_supervisor'),
-  query('page').optional().isInt({ min: 1 }),
-  query('limit').optional().isInt({ min: 1, max: 100 }),
-  query('role').optional().isIn(['admin', 'worker', 'employer', 'site_supervisor', 'clinician', 'case_manager', 'gp_insurer']),
+  roleMiddleware('admin', 'case_manager', 'site_supervisor', 'clinician'),
+  lazyPaginationMiddleware,
+  query('role').optional().isIn(['admin', 'worker', 'employer', 'site_supervisor', 'clinician', 'case_manager', 'gp_insurer', 'team_leader']),
+  query('search').optional().isString(),
+  query('includeTotal').optional().isBoolean(),
+  handleValidationErrors
+], asyncHandler(getUsersWithLazyLoad));
+
+// @route   GET /api/users/load-more
+// @desc    Load more users for infinite scroll
+// @access  Private (Admin, Case Manager, Site Supervisor, Clinician)
+router.get('/load-more', [
+  authMiddleware,
+  roleMiddleware('admin', 'case_manager', 'site_supervisor', 'clinician'),
+  lazyPaginationMiddleware,
+  query('role').optional().isIn(['admin', 'worker', 'employer', 'site_supervisor', 'clinician', 'case_manager', 'gp_insurer', 'team_leader']),
   query('search').optional().isString(),
   handleValidationErrors
-], asyncHandler(async (req, res) => {
-  const page = parseInt(req.query.page) || 1;
-  const limit = parseInt(req.query.limit) || 10;
-  const skip = (page - 1) * limit;
-  
-  const filter = {};
-  
-  // Role-based filtering
-  if (req.user.role === 'site_supervisor') {
-    // Site supervisors can see all workers for incident reporting
-    // No employer filtering - they can report incidents for any worker
-  }
-  
-  if (req.query.role) {
-    filter.role = req.query.role;
-  }
-  
-  if (req.query.search) {
-    filter.$or = [
-      { firstName: { $regex: req.query.search, $options: 'i' } },
-      { lastName: { $regex: req.query.search, $options: 'i' } },
-      { email: { $regex: req.query.search, $options: 'i' } }
-    ];
-  }
+], asyncHandler(loadMoreUsers));
 
-  const users = await User.find(filter)
-    .select('-password')
-    .populate('employer', 'firstName lastName email')
-    .sort({ createdAt: -1 })
-    .skip(skip)
-    .limit(limit);
+// @route   GET /api/users/search
+// @desc    Search users with lazy loading
+// @access  Private (Admin, Case Manager, Site Supervisor, Clinician)
+router.get('/search', [
+  authMiddleware,
+  roleMiddleware('admin', 'case_manager', 'site_supervisor', 'clinician'),
+  query('q').notEmpty().withMessage('Search query is required'),
+  query('page').optional().isInt({ min: 1 }),
+  query('limit').optional().isInt({ min: 1, max: 50 }),
+  handleValidationErrors
+], asyncHandler(searchUsersLazy));
 
-  const total = await User.countDocuments(filter);
-
-  // Transform users to match frontend format
-  console.log('Raw users from database:', users.map(u => ({ id: u._id, createdAt: u.createdAt })));
-  
-  const transformedUsers = users.map(user => ({
-    id: user._id,
-    _id: user._id, // Include both id and _id for compatibility
-    firstName: user.firstName,
-    lastName: user.lastName,
-    email: user.email,
-    role: user.role,
-    phone: user.phone,
-    specialty: user.specialty,
-    licenseNumber: user.licenseNumber,
-    address: user.address,
-    emergencyContact: user.emergencyContact,
-    medicalInfo: user.medicalInfo,
-    employer: user.employer,
-    isActive: user.isActive,
-    isAvailable: user.isAvailable,
-    lastLogin: user.lastLogin,
-    profileImage: user.profileImage,
-    createdAt: user.createdAt // Include createdAt field
-  }));
-  
-  console.log('Transformed users:', transformedUsers.map(u => ({ id: u.id, createdAt: u.createdAt })));
-
-  res.json({
-    users: transformedUsers,
-    pagination: {
-      current: page,
-      pages: Math.ceil(total / limit),
-      total
-    }
-  });
-}));
+// @route   GET /api/users/stats
+// @desc    Get user statistics for dashboard
+// @access  Private (Admin, Case Manager, Site Supervisor, Clinician)
+router.get('/stats', [
+  authMiddleware,
+  roleMiddleware('admin', 'case_manager', 'site_supervisor', 'clinician'),
+  handleValidationErrors
+], asyncHandler(getUserStats));
 
 // @route   GET /api/users/:id
-// @desc    Get user by ID
+// @desc    Get user by ID - OPTIMIZED
 // @access  Private
 router.get('/:id', authMiddleware, asyncHandler(async (req, res) => {
-  const user = await User.findById(req.params.id)
-    .select('-password')
-    .populate('employer', 'firstName lastName email');
+  // Use aggregation for better performance and security
+  const pipeline = [
+    { $match: { _id: mongoose.Types.ObjectId(req.params.id) } },
+    {
+      $lookup: {
+        from: 'users',
+        localField: 'employer',
+        foreignField: '_id',
+        as: 'employerInfo',
+        pipeline: [
+          { $project: { firstName: 1, lastName: 1, email: 1 } }
+        ]
+      }
+    },
+    {
+      $addFields: {
+        employer: { $arrayElemAt: ['$employerInfo', 0] }
+      }
+    },
+    {
+      $project: {
+        password: 0,
+        employerInfo: 0,
+        loginAttempts: 0,
+        lockUntil: 0,
+        resetPasswordToken: 0,
+        resetPasswordExpires: 0,
+        emailVerificationToken: 0,
+        twoFactorSecret: 0
+      }
+    }
+  ];
 
-  if (!user) {
+  const users = await User.aggregate(pipeline);
+  
+  if (users.length === 0) {
     return res.status(404).json({ message: 'User not found' });
   }
+
+  const user = users[0];
 
   // Check if user can access this profile
   if (req.user.role !== 'admin' && req.user._id.toString() !== req.params.id) {
     return res.status(403).json({ message: 'Access denied' });
   }
 
-  res.json({ 
-    user: {
-      id: user._id,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      email: user.email,
-      role: user.role,
-      phone: user.phone,
-      address: user.address,
-      emergencyContact: user.emergencyContact,
-      medicalInfo: user.medicalInfo,
-      employer: user.employer,
-      isActive: user.isActive,
-      lastLogin: user.lastLogin,
-      profileImage: user.profileImage
-    }
-  });
+  res.json({ user });
 }));
 
 // @route   PUT /api/users/:id
@@ -273,23 +285,6 @@ router.put('/:id', [
   },
   // Note: Validation is handled manually in the route handler for form data
 ], asyncHandler(async (req, res) => {
-  console.log('=== PROFILE UPDATE REQUEST START ===');
-  console.log('Profile update request:', {
-    userId: req.user._id,
-    userIdString: req.user._id.toString(),
-    targetId: req.params.id,
-    userRole: req.user.role,
-    isAdmin: req.user.role === 'admin',
-    userIdType: typeof req.user._id,
-    targetIdType: typeof req.params.id,
-    contentType: req.headers['content-type'],
-    hasFile: !!req.file,
-    bodyKeys: Object.keys(req.body),
-    authHeader: req.headers.authorization ? 'present' : 'missing',
-    profileImageInBody: req.body.profileImage,
-    bodyProfileImage: req.body.profileImage
-  });
-
   // Manual validation for form data
   if (req.body.firstName && req.body.firstName.trim() === '') {
     return res.status(400).json({ message: 'First name cannot be empty' });
@@ -321,8 +316,8 @@ router.put('/:id', [
     return res.status(404).json({ message: 'User not found' });
   }
 
-  console.log('Found user:', {
-    userId: user._id,
+  // User found successfully
+  console.log('User details:', {
     userIdString: user._id.toString(),
     userEmail: user.email
   });
@@ -330,16 +325,8 @@ router.put('/:id', [
   // Check permissions - users can only edit their own profiles
   const userIdString = req.user._id.toString();
   const targetIdString = req.params.id;
-  
-  console.log('Permission check:', {
-    userIdString,
-    targetIdString,
-    exactMatch: userIdString === targetIdString,
-    isAdmin: req.user.role === 'admin'
-  });
 
   if (req.user.role !== 'admin' && userIdString !== targetIdString) {
-    console.log('Access denied - IDs do not match');
     return res.status(403).json({ 
       message: 'Access denied. You can only edit your own profile.' 
     });
@@ -372,8 +359,6 @@ router.put('/:id', [
   if (req.body.emergencyContact !== undefined) updateData.emergencyContact = req.body.emergencyContact;
   if (req.body.medicalInfo !== undefined) updateData.medicalInfo = req.body.medicalInfo;
   
-  console.log('Update data before processing:', updateData);
-  console.log('Current user profile image:', user.profileImage);
   
   // Handle profile image upload
   if (req.file) {
@@ -383,7 +368,6 @@ router.put('/:id', [
       try {
         if (fs.existsSync(oldImagePath)) {
           fs.unlinkSync(oldImagePath);
-          console.log('🗑️ Deleted old profile image:', oldImagePath);
         }
       } catch (error) {
         console.error('❌ Error deleting old profile image:', error);
@@ -392,23 +376,15 @@ router.put('/:id', [
     }
     
     updateData.profileImage = `/uploads/users/${req.file.filename}`;
-    console.log('📸 New profile image saved:', updateData.profileImage);
   } else {
     // No new file uploaded, preserve existing profile image
     if (user.profileImage) {
       updateData.profileImage = user.profileImage;
-      console.log('📸 Preserving existing profile image:', user.profileImage);
     } else if (req.body.profileImage) {
       // If no existing image but profileImage is provided in request, use it
       updateData.profileImage = req.body.profileImage;
-      console.log('📸 Using profileImage from request:', req.body.profileImage);
-    } else {
-      // No profile image at all
-      console.log('📸 No profile image to preserve');
     }
   }
-  
-  console.log('Update data after profile image processing:', updateData);
   
   // Handle nested objects properly - parse JSON strings from FormData
   if (req.body.address) {
@@ -447,7 +423,6 @@ router.put('/:id', [
     }
   }
 
-  console.log('Update data before save:', updateData);
 
   const updatedUser = await User.findByIdAndUpdate(
     req.params.id,
@@ -456,15 +431,10 @@ router.put('/:id', [
   ).select('-password');
 
   if (!updatedUser) {
-    console.error('Failed to update user - user not found after update');
     return res.status(404).json({ message: 'User not found after update' });
   }
 
-  console.log('User updated successfully:', {
-    userId: updatedUser._id,
-    profileImage: updatedUser.profileImage
-  });
-
+  // User updated successfully
   res.json({
     message: 'User updated successfully',
     user: {

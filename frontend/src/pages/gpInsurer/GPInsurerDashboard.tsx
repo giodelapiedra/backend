@@ -49,7 +49,7 @@ import {
   Person,
 } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext';
-import Layout from '../../components/Layout';
+import LayoutWithSidebar from '../../components/LayoutWithSidebar';
 import axios from 'axios';
 
 interface User {
@@ -245,28 +245,28 @@ const GPInsurerDashboard: React.FC = () => {
 
   if (!user) {
     return (
-      <Layout>
+      <LayoutWithSidebar>
         <Box display="flex" justifyContent="center" alignItems="center" minHeight="50vh">
           <Typography variant="h6" color="text.secondary">
             Please log in to access the dashboard
           </Typography>
         </Box>
-      </Layout>
+      </LayoutWithSidebar>
     );
   }
 
   if (loading) {
     return (
-      <Layout>
+      <LayoutWithSidebar>
         <Box display="flex" justifyContent="center" alignItems="center" minHeight="50vh">
           <CircularProgress />
         </Box>
-      </Layout>
+      </LayoutWithSidebar>
     );
   }
 
   return (
-    <Layout>
+    <LayoutWithSidebar>
       <Box>
         <Typography variant="h4" component="h1" gutterBottom>
           GP/Insurer Dashboard
@@ -905,8 +905,9 @@ const GPInsurerDashboard: React.FC = () => {
           </DialogActions>
         </Dialog>
       </Box>
-    </Layout>
+    </LayoutWithSidebar>
   );
 };
 
 export default GPInsurerDashboard;
+

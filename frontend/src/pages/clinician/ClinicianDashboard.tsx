@@ -54,10 +54,11 @@ import {
   Assignment,
   TrendingUp,
   PhotoCamera,
+  Close,
 } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import Layout from '../../components/Layout';
+import LayoutWithSidebar from '../../components/LayoutWithSidebar';
 import api from '../../utils/api';
 import { createImageProps } from '../../utils/imageUtils';
 
@@ -235,11 +236,14 @@ interface DashboardStats {
   exerciseCompletionRate: number;
   activeCases: number;
   upcomingAppointments: number;
+  activeCasesChange?: number;
+  rehabPlansChange?: number;
+  alertsChange?: number;
+  exerciseRateChange?: number;
 }
 
 const ClinicianDashboard: React.FC = () => {
   const { user } = useAuth();
-  const navigate = useNavigate();
   const [rehabPlans, setRehabPlans] = useState<RehabPlan[]>([]);
   const [cases, setCases] = useState<Case[]>([]);
   const [stats, setStats] = useState<DashboardStats | null>(null);
@@ -282,6 +286,10 @@ const ClinicianDashboard: React.FC = () => {
   const [lastProgressHash, setLastProgressHash] = useState<string>('');
   const [hasNewData, setHasNewData] = useState(false);
   
+  // Pagination states for active rehab plans
+  const [currentPage, setCurrentPage] = useState(1);
+  const [plansPerPage, setPlansPerPage] = useState(5);
+  
   // Case detail viewing
   const [selectedCase, setSelectedCase] = useState<Case | null>(null);
   const [caseDetailDialog, setCaseDetailDialog] = useState(false);
@@ -318,7 +326,7 @@ const ClinicianDashboard: React.FC = () => {
     try {
       setIsUpdatingCase(true);
       
-      const response = await api.put(`/cases/${caseId}/update-status`, {
+      const response = await api.put(`/cases/${caseId}/status`, {
         status: newStatus,
         notes: notes || `Status updated to ${newStatus} by clinician`
       });
@@ -454,6 +462,7 @@ const ClinicianDashboard: React.FC = () => {
     }, 60000);
     
     return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Empty dependency array - only run once on mount
 
   // Separate effect for pagination changes
@@ -461,6 +470,7 @@ const ClinicianDashboard: React.FC = () => {
     if (casesCurrentPage || casesPageSize) {
       fetchClinicianData();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [casesCurrentPage, casesPageSize]);
 
   const fetchProgressData = async (planId: string) => {
@@ -479,6 +489,55 @@ const ClinicianDashboard: React.FC = () => {
     setSelectedPlan(plan);
     setProgressDialog(true);
     fetchProgressData(plan._id);
+  };
+
+  const handleMarkAsRead = async (notificationId: string) => {
+    try {
+      await api.put(`/notifications/${notificationId}/read`);
+      
+      // Update local state to remove the notification from unread list
+      setNotifications(prev => 
+        prev.map(notification => 
+          notification._id === notificationId 
+            ? { ...notification, isRead: true, readAt: new Date().toISOString() }
+            : notification
+        )
+      );
+      
+      // Update unread count
+      setUnreadNotificationCount(prev => Math.max(0, prev - 1));
+      
+      setSuccessMessage('Notification marked as read');
+      
+    } catch (error) {
+      console.error('Error marking notification as read:', error);
+      setError('Failed to mark notification as read');
+    }
+  };
+
+  const handleMarkAllAsRead = async () => {
+    try {
+      const unreadNotifications = notifications.filter(n => !n.isRead);
+      await api.put('/notifications/read-all');
+      
+      // Update local state to mark all notifications as read
+      setNotifications(prev => 
+        prev.map(notification => ({ 
+          ...notification, 
+          isRead: true, 
+          readAt: new Date().toISOString() 
+        }))
+      );
+      
+      // Reset unread count
+      setUnreadNotificationCount(0);
+      
+      setSuccessMessage(`${unreadNotifications.length} notifications marked as read`);
+      
+    } catch (error) {
+      console.error('Error marking all notifications as read:', error);
+      setError('Failed to mark all notifications as read');
+    }
   };
 
   const fetchClinicianData = async () => {
@@ -703,9 +762,16 @@ const ClinicianDashboard: React.FC = () => {
     try {
       setIsBookingAppointment(true);
       
+      // Get worker ID from selected case
+      const selectedCase = cases.find(c => c._id === appointmentForm.case);
+      if (!selectedCase) {
+        setError('Please select a case');
+        return;
+      }
+      
       const appointmentData = {
         case: appointmentForm.case,
-        worker: appointmentForm.worker,
+        worker: selectedCase.worker._id, // Get worker ID from case
         appointmentType: appointmentForm.appointmentType,
         scheduledDate: appointmentForm.scheduledDate,
         duration: appointmentForm.duration,
@@ -809,226 +875,480 @@ const ClinicianDashboard: React.FC = () => {
 
   if (loading) {
     return (
-      <Layout>
+      <LayoutWithSidebar>
         <Box display="flex" justifyContent="center" alignItems="center" minHeight="50vh">
           <CircularProgress />
         </Box>
-      </Layout>
+      </LayoutWithSidebar>
     );
   }
 
   return (
-    <Layout>
+    <LayoutWithSidebar>
       <Box sx={{ 
         background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)',
         minHeight: '100vh',
         p: { xs: 0, sm: 1, md: 2 },
         pb: { xs: 2, sm: 3, md: 4 }
       }}>
-        {/* Mobile-First Header Section */}
-        <Box sx={{ 
-          mb: { xs: 2, sm: 3, md: 4 },
-          px: { xs: 2, sm: 3 },
-          pt: { xs: 2, sm: 3 }
-        }}>
-          <Box sx={{
-            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-            borderRadius: { xs: 3, sm: 4 },
-            p: { xs: 3, sm: 4 },
-            color: 'white',
-            boxShadow: '0 8px 32px rgba(102, 126, 234, 0.3)',
-            position: 'relative',
-            overflow: 'hidden',
-            '&::before': {
-              content: '""',
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              background: 'linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.05) 100%)',
-              borderRadius: 'inherit'
-            }
+        {/* Overview Section */}
+        <Box sx={{ mb: 4, px: { xs: 2, sm: 3 }, pt: { xs: 2, sm: 3 } }}>
+          <Typography variant="h3" component="h1" sx={{ 
+            fontWeight: 600,
+            color: '#1a1a1a',
+            mb: 3,
+            fontSize: '2rem'
           }}>
-            <Box sx={{ position: 'relative', zIndex: 1 }}>
-              <Typography variant="h4" component="h1" sx={{ 
-                fontWeight: 800, 
-                mb: 1,
-                fontSize: { xs: '1.75rem', sm: '2rem', md: '2.5rem' },
-                textShadow: '0 2px 4px rgba(0,0,0,0.1)'
-              }}>
-                Welcome back, Dr. {user?.lastName}
-              </Typography>
-              <Typography variant="subtitle1" sx={{ 
-                opacity: 0.9,
-                fontSize: { xs: '1rem', sm: '1.125rem', md: '1.25rem' },
-                fontWeight: 500
-              }}>
-                Here's your clinical overview for today
-              </Typography>
-              
-              {/* Mobile Stats Row */}
-              <Box sx={{ 
-                display: 'flex', 
-                justifyContent: 'space-between', 
-                mt: { xs: 2, sm: 3 },
-                gap: 2
-              }}>
-                <Box sx={{ textAlign: 'center', flex: 1 }}>
-                  <Typography variant="h5" sx={{ fontWeight: 800, fontSize: { xs: '1.5rem', sm: '1.75rem' } }}>
-                    {stats?.activeCases || myCases.length}
-                  </Typography>
-                  <Typography variant="caption" sx={{ opacity: 0.8, fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>
-                    Active Cases
-                  </Typography>
-                </Box>
-                <Box sx={{ textAlign: 'center', flex: 1 }}>
-                  <Typography variant="h5" sx={{ fontWeight: 800, fontSize: { xs: '1.5rem', sm: '1.75rem' } }}>
-                    {activeRehabPlans.length}
-                  </Typography>
-                  <Typography variant="caption" sx={{ opacity: 0.8, fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>
-                    Rehab Plans
-                  </Typography>
-                </Box>
-                <Box sx={{ textAlign: 'center', flex: 1 }}>
-                  <Typography variant="h5" sx={{ fontWeight: 800, fontSize: { xs: '1.5rem', sm: '1.75rem' } }}>
-                    {unreadNotificationCount}
-                  </Typography>
-                  <Typography variant="caption" sx={{ opacity: 0.8, fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>
-                    Alerts
-                  </Typography>
-                </Box>
-              </Box>
-            </Box>
-          </Box>
+            Overview
+          </Typography>
+          <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
+            Welcome, Dr. {user?.lastName} - Here's your clinical overview for today
+          </Typography>
+
+          {/* Error and Success Messages */}
+          {error && (
+            <Alert 
+              severity="error" 
+              sx={{ 
+                mt: 3,
+                mb: 0,
+                borderRadius: 3,
+                backgroundColor: '#fef2f2',
+                borderColor: '#fecaca',
+                color: '#dc2626',
+                boxShadow: '0 4px 12px rgba(220, 38, 38, 0.1)'
+              }}
+              onClose={() => setError('')}
+            >
+              {error}
+            </Alert>
+          )}
+          
+          {successMessage && (
+            <Alert 
+              severity="success" 
+              sx={{ 
+                mt: 3,
+                mb: 0,
+                borderRadius: 3,
+                backgroundColor: '#f0fdf4',
+                borderColor: '#bbf7d0',
+                color: '#166534',
+                boxShadow: '0 4px 12px rgba(34, 197, 94, 0.1)'
+              }}
+              onClose={() => setSuccessMessage('')}
+            >
+              {successMessage}
+            </Alert>
+          )}
         </Box>
 
-        {/* Error and Success Messages */}
-        {error && (
-          <Alert 
-            severity="error" 
-            sx={{ 
-              mb: 3,
-              borderRadius: 3,
-              backgroundColor: '#fef2f2',
-              borderColor: '#fecaca',
-              color: '#dc2626',
-              boxShadow: '0 4px 12px rgba(220, 38, 38, 0.1)'
-            }}
-            onClose={() => setError('')}
-          >
-            {error}
-          </Alert>
-        )}
-        
-        {successMessage && (
-          <Alert 
-            severity="success" 
-            sx={{ 
-              mb: 3,
-              borderRadius: 3,
-              backgroundColor: '#f0fdf4',
-              borderColor: '#bbf7d0',
-              color: '#166534',
-              boxShadow: '0 4px 12px rgba(34, 197, 94, 0.1)'
-            }}
-            onClose={() => setSuccessMessage('')}
-          >
-            {successMessage}
-          </Alert>
+        {/* Alerts Section */}
+        {notifications && notifications.filter(n => !n.isRead).length > 0 && (
+          <Box sx={{ mb: 4, px: { xs: 2, sm: 3 } }}>
+            <Box sx={{ 
+              display: 'flex', 
+              alignItems: 'center', 
+              justifyContent: 'space-between',
+              mb: 2
+            }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Warning sx={{ color: '#ef4444', fontSize: 24 }} />
+                <Typography variant="h6" sx={{ fontWeight: 600, color: '#ef4444' }}>
+                  Alerts ({notifications.filter(n => !n.isRead).length})
+                </Typography>
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <Typography variant="body2" color="text.secondary">
+                  Check-in alerts require your attention
+                </Typography>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={handleMarkAllAsRead}
+                  sx={{
+                    textTransform: 'none',
+                    borderColor: '#e2e8f0',
+                    color: '#64748b',
+                    fontSize: '0.75rem',
+                    '&:hover': {
+                      borderColor: '#cbd5e1',
+                      backgroundColor: '#f8fafc'
+                    }
+                  }}
+                >
+                  Mark All as Read
+                </Button>
+              </Box>
+            </Box>
+            
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {notifications
+                .filter(n => !n.isRead)
+                .slice(0, 3)
+                .map((notification, index) => (
+                <Card key={notification._id || index} sx={{ 
+                  p: 3,
+                  borderRadius: 3,
+                  backgroundColor: '#f8fafc',
+                  border: '1px solid #e2e8f0',
+                  boxShadow: 'none'
+                }}>
+                  <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 2 }}>
+                    <Avatar sx={{ 
+                      backgroundColor: '#3b82f6',
+                      width: 40,
+                      height: 40,
+                      fontSize: '0.875rem',
+                      fontWeight: 600
+                    }}>
+                      {notification.type === 'case_assignment' ? 'CA' : 
+                       notification.type === 'assessment_reminder' ? 'AR' : 'N'}
+                    </Avatar>
+                    
+                    <Box sx={{ flex: 1 }}>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1 }}>
+                        <Typography variant="subtitle1" sx={{ fontWeight: 600, color: '#1e293b' }}>
+                          {notification.title || 'New Case Assignment'}
+                        </Typography>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <Chip 
+                            label="MEDIUM" 
+                            size="small"
+                            sx={{ 
+                              backgroundColor: '#3b82f6',
+                              color: 'white',
+                              fontWeight: 600,
+                              fontSize: '0.75rem'
+                            }}
+                          />
+                          <IconButton
+                            size="small"
+                            onClick={() => handleMarkAsRead(notification._id)}
+                            sx={{ 
+                              color: '#64748b',
+                              '&:hover': { 
+                                backgroundColor: '#f1f5f9',
+                                color: '#475569'
+                              }
+                            }}
+                          >
+                            <Close fontSize="small" />
+                          </IconButton>
+                        </Box>
+                      </Box>
+                      
+                      <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                        From: System • {new Date(notification.createdAt).toLocaleDateString('en-US', {
+                          month: 'numeric',
+                          day: 'numeric',
+                          year: 'numeric',
+                          hour: 'numeric',
+                          minute: '2-digit',
+                          hour12: true
+                        })}
+                      </Typography>
+                      
+                      <Typography variant="body1" sx={{ mb: 2, color: '#374151' }}>
+                        {notification.message}
+                      </Typography>
+                      
+                      <Box sx={{ display: 'flex', gap: 1 }}>
+                        <Button 
+                          variant="contained"
+                          size="small"
+                          sx={{ 
+                            backgroundColor: '#3b82f6',
+                            borderRadius: 2,
+                            textTransform: 'none',
+                            fontWeight: 500,
+                            '&:hover': {
+                              backgroundColor: '#2563eb'
+                            }
+                          }}
+                          onClick={() => {
+                            if (notification.type === 'case_assignment' && notification.relatedCase) {
+                              handleViewCaseDetails(notification.relatedCase);
+                            }
+                          }}
+                        >
+                          View Case Details
+                        </Button>
+                        <Button 
+                          variant="outlined"
+                          size="small"
+                          onClick={() => handleMarkAsRead(notification._id)}
+                          sx={{ 
+                            borderColor: '#e2e8f0',
+                            color: '#64748b',
+                            borderRadius: 2,
+                            textTransform: 'none',
+                            fontWeight: 500,
+                            '&:hover': {
+                              borderColor: '#cbd5e1',
+                              backgroundColor: '#f8fafc'
+                            }
+                          }}
+                        >
+                          Mark as Read
+                        </Button>
+                      </Box>
+                    </Box>
+                  </Box>
+                </Card>
+              ))}
+            </Box>
+          </Box>
         )}
 
-        {/* Main Dashboard Content */}
-        <Box sx={{ 
-          display: 'flex', 
-          gap: { xs: 2, md: 3 }, 
-          mb: 4,
-          flexDirection: { xs: 'column', md: 'row' }
-        }}>
+        {/* Analytics Cards */}
+        {/* Dashboard Cards */}
+        <Box sx={{ display: 'flex', gap: 2, mb: 3, flexWrap: 'wrap', px: { xs: 2, sm: 3 } }}>
           {/* Active Cases Card */}
           <Card sx={{ 
-            borderRadius: { xs: 3, md: 4 },
-            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-            color: 'white',
-            boxShadow: '0 8px 32px rgba(102, 126, 234, 0.3)',
-            flex: 1,
-            minHeight: { xs: 120, md: 'auto' }
+            minWidth: 250, 
+            flex: 1, 
+            borderRadius: 2,
+            border: 'none',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+            overflow: 'hidden',
+            '&:hover': {
+              boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+            },
+            transition: 'box-shadow 0.2s ease'
           }}>
-            <CardContent sx={{ 
-              p: { xs: 2, md: 3 }, 
-              textAlign: 'center',
+            <Box sx={{ 
+              backgroundColor: '#7B68EE', 
+              color: 'white', 
+              p: 1.5,
               display: 'flex',
-              flexDirection: { xs: 'row', md: 'column' },
               alignItems: 'center',
-              justifyContent: { xs: 'space-between', md: 'center' }
+              justifyContent: 'center'
             }}>
-              <Box sx={{ 
-                width: { xs: 50, md: 60 }, 
-                height: { xs: 50, md: 60 }, 
-                borderRadius: '50%', 
-                background: 'rgba(255,255,255,0.2)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                mx: { xs: 0, md: 'auto' },
-                mb: { xs: 0, md: 2 }
-              }}>
-                <MedicalServices sx={{ fontSize: { xs: 24, md: 32 }, color: 'white' }} />
+              <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '14px' }}>
+                ACTIVE CASES
+              </Typography>
+            </Box>
+            <CardContent sx={{ p: 2.5 }}>
+              <Box display="flex" alignItems="center" justifyContent="space-between">
+                <Box sx={{ flex: 1 }}>
+                  {/* Mini bar chart */}
+                  <Box sx={{ mb: 1, display: 'flex', alignItems: 'end', gap: 0.5 }}>
+                    <Box sx={{ width: 4, height: 12, backgroundColor: '#7B68EE', borderRadius: 0.5 }} />
+                    <Box sx={{ width: 4, height: 18, backgroundColor: '#7B68EE', borderRadius: 0.5 }} />
+                    <Box sx={{ width: 4, height: 8, backgroundColor: '#7B68EE', borderRadius: 0.5 }} />
+                    <Box sx={{ width: 4, height: 15, backgroundColor: '#7B68EE', borderRadius: 0.5 }} />
+                    <Box sx={{ width: 4, height: 10, backgroundColor: '#7B68EE', borderRadius: 0.5 }} />
+                  </Box>
+                  <Typography variant="h4" sx={{ fontWeight: 600, color: '#1a1a1a', mb: 0.5 }}>
+                    {stats?.activeCases || myCases.length}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ fontSize: '13px' }}>
+                    Last 30 days
+                  </Typography>
+                </Box>
+                <Box sx={{ textAlign: 'right' }}>
+                  <Typography variant="body2" sx={{ color: '#059669', fontWeight: 600, fontSize: '12px' }}>
+                    {stats?.activeCasesChange ? `+${stats.activeCasesChange}%` : ''}
+                  </Typography>
+                </Box>
               </Box>
-              <Box sx={{ textAlign: { xs: 'right', md: 'center' } }}>
-                <Typography variant="h6" sx={{ fontWeight: 600, mb: 1, fontSize: { xs: '0.9rem', md: '1.25rem' } }}>
-                  Active Cases
-                </Typography>
-                <Typography variant="h3" sx={{ fontWeight: 700, mb: 1, fontSize: { xs: '1.8rem', md: '3rem' } }}>
-                  {stats?.activeCases || myCases.length}
-                </Typography>
-                <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.8)', fontSize: { xs: '0.75rem', md: '0.875rem' } }}>
-                  Under Treatment
-                </Typography>
+            </CardContent>
+          </Card>
+
+          {/* Rehab Plans Card */}
+          <Card sx={{ 
+            minWidth: 250, 
+            flex: 1, 
+            borderRadius: 2,
+            border: 'none',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+            overflow: 'hidden',
+            '&:hover': {
+              boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+            },
+            transition: 'box-shadow 0.2s ease'
+          }}>
+            <Box sx={{ 
+              backgroundColor: '#16a34a', 
+              color: 'white', 
+              p: 1.5,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}>
+              <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '14px' }}>
+                REHAB PLANS
+              </Typography>
+            </Box>
+            <CardContent sx={{ p: 2.5 }}>
+              <Box display="flex" alignItems="center" justifyContent="space-between">
+                <Box sx={{ flex: 1 }}>
+                  {/* Circular progress indicator */}
+                  <Box sx={{ 
+                    width: 40, 
+                    height: 40, 
+                    borderRadius: '50%',
+                    backgroundColor: '#f0fdf4',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    mb: 1,
+                    position: 'relative',
+                    border: '3px solid #e5e7eb'
+                  }}>
+                    <Box sx={{
+                      position: 'absolute',
+                      width: '100%',
+                      height: '100%',
+                      borderRadius: '50%',
+                      background: `conic-gradient(#16a34a 0deg ${(activeRehabPlans.length / 20) * 360}deg, transparent ${(activeRehabPlans.length / 20) * 360}deg)`,
+                      zIndex: 1
+                    }} />
+                    <Typography variant="caption" sx={{ 
+                      fontWeight: 600, 
+                      color: '#16a34a',
+                      zIndex: 2,
+                      fontSize: '10px'
+                    }}>
+                      {activeRehabPlans.length}/20
+                    </Typography>
+                  </Box>
+                  <Typography variant="h4" sx={{ fontWeight: 600, color: '#1a1a1a', mb: 0.5 }}>
+                    {activeRehabPlans.length}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ fontSize: '13px' }}>
+                    Last 30 days
+                  </Typography>
+                </Box>
+                <Box sx={{ textAlign: 'right' }}>
+                  <Typography variant="body2" sx={{ color: '#059669', fontWeight: 600, fontSize: '12px' }}>
+                    {stats?.rehabPlansChange ? `+${stats.rehabPlansChange}%` : ''}
+                  </Typography>
+                </Box>
+              </Box>
+            </CardContent>
+          </Card>
+
+          {/* Alerts Card */}
+          <Card sx={{ 
+            minWidth: 250, 
+            flex: 1, 
+            borderRadius: 2,
+            border: 'none',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+            overflow: 'hidden',
+            '&:hover': {
+              boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+            },
+            transition: 'box-shadow 0.2s ease'
+          }}>
+            <Box sx={{ 
+              backgroundColor: '#E74C3C', 
+              color: 'white', 
+              p: 1.5,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}>
+              <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '14px' }}>
+                ALERTS
+              </Typography>
+            </Box>
+            <CardContent sx={{ p: 2.5 }}>
+              <Box display="flex" alignItems="center" justifyContent="space-between">
+                <Box sx={{ flex: 1 }}>
+                  {/* Circular progress with warning icon */}
+                  <Box sx={{ 
+                    width: 40, 
+                    height: 40, 
+                    borderRadius: '50%',
+                    backgroundColor: '#fef2f2',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    mb: 1,
+                    position: 'relative',
+                    border: '3px solid #fecaca'
+                  }}>
+                    <Box sx={{
+                      position: 'absolute',
+                      width: '100%',
+                      height: '100%',
+                      borderRadius: '50%',
+                      background: `conic-gradient(#E74C3C 0deg ${(unreadNotificationCount / 10) * 360}deg, transparent ${(unreadNotificationCount / 10) * 360}deg)`,
+                      zIndex: 1
+                    }} />
+                    <Warning sx={{ 
+                      fontSize: 16, 
+                      color: '#E74C3C',
+                      zIndex: 2
+                    }} />
+                  </Box>
+                  <Typography variant="h4" sx={{ fontWeight: 600, color: '#1a1a1a', mb: 0.5 }}>
+                    {unreadNotificationCount}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ fontSize: '13px' }}>
+                    Last 30 days
+                  </Typography>
+                </Box>
+                <Box sx={{ textAlign: 'right' }}>
+                  <Typography variant="body2" sx={{ color: '#E74C3C', fontWeight: 600, fontSize: '12px' }}>
+                    {stats?.alertsChange ? `+${stats.alertsChange}%` : ''}
+                  </Typography>
+                </Box>
               </Box>
             </CardContent>
           </Card>
 
           {/* Exercise Completion Card */}
           <Card sx={{ 
-            borderRadius: { xs: 3, md: 4 },
-            background: 'linear-gradient(135deg, #ff6b6b 0%, #ff8e8e 100%)',
-            color: 'white',
-            boxShadow: '0 8px 32px rgba(255, 107, 107, 0.3)',
-            flex: 1,
-            minHeight: { xs: 120, md: 'auto' }
+            minWidth: 250, 
+            flex: 1, 
+            borderRadius: 2,
+            border: 'none',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+            overflow: 'hidden',
+            '&:hover': {
+              boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+            },
+            transition: 'box-shadow 0.2s ease'
           }}>
-            <CardContent sx={{ 
-              p: { xs: 2, md: 3 }, 
-              textAlign: 'center',
+            <Box sx={{ 
+              backgroundColor: (stats?.exerciseCompletionRate || 0) > 0 ? '#0073e6' : '#6B7280', 
+              color: 'white', 
+              p: 1.5,
               display: 'flex',
-              flexDirection: { xs: 'row', md: 'column' },
               alignItems: 'center',
-              justifyContent: { xs: 'space-between', md: 'center' }
+              justifyContent: 'center'
             }}>
-              <Box sx={{ 
-                width: { xs: 50, md: 60 }, 
-                height: { xs: 50, md: 60 }, 
-                borderRadius: '50%', 
-                background: 'rgba(255,255,255,0.2)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                mx: { xs: 0, md: 'auto' },
-                mb: { xs: 0, md: 2 }
-              }}>
-                <DirectionsRun sx={{ fontSize: { xs: 24, md: 32 }, color: 'white' }} />
-              </Box>
-              <Box sx={{ textAlign: { xs: 'right', md: 'center' } }}>
-                <Typography variant="h6" sx={{ fontWeight: 600, mb: 1, fontSize: { xs: '0.9rem', md: '1.25rem' } }}>
-                  Exercise Completion
-                </Typography>
-                <Typography variant="h3" sx={{ fontWeight: 700, mb: 1, fontSize: { xs: '1.8rem', md: '3rem' } }}>
-                  {stats?.exerciseCompletionRate || 0}%
-                </Typography>
-                <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.8)', fontSize: { xs: '0.75rem', md: '0.875rem' } }}>
-                  This Week
-                </Typography>
+              <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '14px' }}>
+                EXERCISE RATE
+              </Typography>
+            </Box>
+            <CardContent sx={{ p: 2.5 }}>
+              <Box display="flex" alignItems="center" justifyContent="space-between">
+                <Box sx={{ flex: 1 }}>
+                  {/* Mini bar chart */}
+                  <Box sx={{ mb: 1, display: 'flex', alignItems: 'end', gap: 0.5 }}>
+                    <Box sx={{ width: 4, height: 8, backgroundColor: '#0073e6', borderRadius: 0.5 }} />
+                    <Box sx={{ width: 4, height: 15, backgroundColor: '#0073e6', borderRadius: 0.5 }} />
+                    <Box sx={{ width: 4, height: 12, backgroundColor: '#0073e6', borderRadius: 0.5 }} />
+                    <Box sx={{ width: 4, height: 18, backgroundColor: '#0073e6', borderRadius: 0.5 }} />
+                    <Box sx={{ width: 4, height: 10, backgroundColor: '#0073e6', borderRadius: 0.5 }} />
+                  </Box>
+                  <Typography variant="h4" sx={{ fontWeight: 600, color: '#1a1a1a', mb: 0.5 }}>
+                    {stats?.exerciseCompletionRate || 0}%
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ fontSize: '13px' }}>
+                    Last 30 days
+                  </Typography>
+                </Box>
+                <Box sx={{ textAlign: 'right' }}>
+                  <Typography variant="body2" sx={{ color: '#059669', fontWeight: 600, fontSize: '12px' }}>
+                    {stats?.exerciseRateChange ? `+${stats.exerciseRateChange}%` : ''}
+                  </Typography>
+                </Box>
               </Box>
             </CardContent>
           </Card>
@@ -1075,7 +1395,9 @@ const ClinicianDashboard: React.FC = () => {
                     Rehabilitation Progress
                   </Typography>
                   <Typography variant="body2" sx={{ color: '#718096', fontSize: { xs: '0.75rem', md: '0.875rem' } }}>
-                    {stats?.completedGoals || 0} / {stats?.totalGoals || 0} goals completed
+                    {(stats?.completedGoals || 0) === 0 && (stats?.totalGoals || 0) === 0 
+                      ? 'No goals set yet' 
+                      : `${stats?.completedGoals || 0} / ${stats?.totalGoals || 0} goals completed`}
                   </Typography>
                 </Box>
               </Box>
@@ -1140,7 +1462,7 @@ const ClinicianDashboard: React.FC = () => {
                     borderRadius: 4,
                     backgroundColor: '#e2e8f0',
                     '& .MuiLinearProgress-bar': {
-                      background: 'linear-gradient(90deg, #ff6b6b 0%, #ff8e8e 100%)',
+                      background: 'linear-gradient(90deg, #dc2626 0%, #ef4444 100%)',
                       borderRadius: 4
                     }
                   }}
@@ -1205,145 +1527,6 @@ const ClinicianDashboard: React.FC = () => {
           </Card>
         </Box>
 
-        {/* Notifications Section */}
-        {unreadNotificationCount > 0 && (
-          <Card sx={{ 
-            borderRadius: 4,
-            background: 'white',
-            boxShadow: '0 8px 32px rgba(0,0,0,0.1)',
-            border: '1px solid rgba(0,0,0,0.05)',
-            mb: 4
-          }}>
-            <CardContent sx={{ p: 3 }}>
-              <Box display="flex" alignItems="center" justifyContent="space-between" sx={{ mb: 3 }}>
-                <Box display="flex" alignItems="center" gap={1}>
-                  <Warning color="warning" sx={{ fontSize: 28 }} />
-                  <Typography variant="h5" color="warning.main" sx={{ fontWeight: 700 }}>
-                    Alerts ({unreadNotificationCount})
-                  </Typography>
-                </Box>
-                <Typography variant="caption" color="text.secondary">
-                  Check-in alerts require your attention
-                </Typography>
-              </Box>
-              
-              {notifications.filter(n => !n.isRead).slice(0, 3).map((notification) => (
-                <Box key={notification._id} sx={{ 
-                  mb: 3, 
-                  p: 3, 
-                  bgcolor: notification.type === 'high_pain' ? '#fef2f2' : 
-                           notification.type === 'rtw_review' ? '#fef3c7' : 
-                           notification.type === 'case_closed' ? '#f0fdf4' :
-                           notification.type === 'return_to_work' ? '#fef3c7' : '#f0f9ff', 
-                  borderRadius: 2,
-                  border: notification.type === 'high_pain' ? '1px solid #fecaca' :
-                          notification.type === 'rtw_review' ? '1px solid #fde68a' :
-                          notification.type === 'case_closed' ? '1px solid #bbf7d0' :
-                          notification.type === 'return_to_work' ? '1px solid #fde68a' : '1px solid #bae6fd'
-                }}>
-                  <Box display="flex" alignItems="center" gap={2} sx={{ mb: 2 }}>
-                    <Box sx={{ 
-                      backgroundColor: notification.type === 'high_pain' ? '#ef4444' : 
-                                      notification.type === 'rtw_review' ? '#f59e0b' : 
-                                      notification.type === 'case_closed' ? '#22c55e' :
-                                      notification.type === 'return_to_work' ? '#f59e0b' : '#3b82f6',
-                      borderRadius: 2,
-                      p: 1,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center'
-                    }}>
-                      {notification.type === 'high_pain' ? <LocalHospital sx={{ fontSize: 20, color: 'white' }} /> :
-                       notification.type === 'rtw_review' ? <Work sx={{ fontSize: 20, color: 'white' }} /> :
-                       notification.type === 'case_closed' ? <CheckCircle sx={{ fontSize: 20, color: 'white' }} /> :
-                       notification.type === 'return_to_work' ? <Work sx={{ fontSize: 20, color: 'white' }} /> :
-                       <Assessment sx={{ fontSize: 20, color: 'white' }} />}
-                    </Box>
-                    <Box flex={1}>
-                      <Typography variant="h6" sx={{ fontWeight: 600, color: '#1e293b' }}>
-                        {notification.title}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        From: {notification.sender.firstName} {notification.sender.lastName} • {new Date(notification.createdAt).toLocaleString()}
-                      </Typography>
-                    </Box>
-                    <Chip
-                      label={notification.priority.toUpperCase()}
-                      color={notification.priority === 'urgent' ? 'error' : 
-                             notification.priority === 'high' ? 'warning' : 'info'}
-                      size="small"
-                      sx={{ fontWeight: 600 }}
-                    />
-                  </Box>
-                  
-                  <Typography variant="body1" sx={{ mb: 2, color: '#374151' }}>
-                    {notification.message}
-                  </Typography>
-                  
-                  {notification.actionUrl && (
-                    <Button
-                      variant="contained"
-                      color={notification.type === 'high_pain' ? 'error' : 
-                             notification.type === 'rtw_review' ? 'warning' : 
-                             notification.type === 'case_closed' ? 'success' :
-                             notification.type === 'return_to_work' ? 'warning' : 'primary'}
-                      size="small"
-                      onClick={async () => {
-                        try {
-                          // Mark notification as read
-                          await api.put(`/notifications/${notification._id}/read`);
-                          // Navigate to action URL using React Router
-                          navigate(notification.actionUrl || '/cases');
-                        } catch (error) {
-                          // Still navigate even if marking as read fails
-                          navigate(notification.actionUrl || '/cases');
-                        }
-                      }}
-                      sx={{
-                        borderRadius: 2,
-                        textTransform: 'none',
-                        fontWeight: 600,
-                        backgroundColor: notification.type === 'high_pain' ? '#ef4444' : 
-                                        notification.type === 'rtw_review' ? '#f59e0b' : 
-                                        notification.type === 'case_closed' ? '#22c55e' :
-                                        notification.type === 'return_to_work' ? '#f59e0b' : '#3b82f6',
-                        '&:hover': {
-                          backgroundColor: notification.type === 'high_pain' ? '#dc2626' : 
-                                          notification.type === 'rtw_review' ? '#d97706' : 
-                                          notification.type === 'case_closed' ? '#16a34a' :
-                                          notification.type === 'return_to_work' ? '#d97706' : '#2563eb'
-                        }
-                      }}
-                    >
-                      View Case Details
-                    </Button>
-                  )}
-                </Box>
-              ))}
-              
-              {notifications.filter(n => !n.isRead).length > 3 && (
-                <Button
-                  variant="outlined"
-                  color="warning"
-                  fullWidth
-                  sx={{
-                    borderRadius: 2,
-                    textTransform: 'none',
-                    fontWeight: 600,
-                    borderColor: '#f59e0b',
-                    color: '#92400e',
-                    '&:hover': {
-                      borderColor: '#d97706',
-                      backgroundColor: '#fef3c7'
-                    }
-                  }}
-                >
-                  View All Alerts ({notifications.filter(n => !n.isRead).length})
-                </Button>
-              )}
-            </CardContent>
-          </Card>
-        )}
 
         {/* Quick Actions Section */}
         <Box sx={{ 
@@ -1380,11 +1563,12 @@ const ClinicianDashboard: React.FC = () => {
                     fontWeight: 600,
                     fontSize: { xs: '0.875rem', md: '1rem' },
                     py: { xs: 1.5, md: 2 },
-                    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                    boxShadow: '0 4px 12px rgba(102, 126, 234, 0.3)',
+                    background: 'linear-gradient(135deg, #4c1d95 0%, #5b21b6 100%)',
+                    color: 'white',
+                    boxShadow: '0 4px 12px rgba(76, 29, 149, 0.3)',
                     '&:hover': {
-                      background: 'linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%)',
-                      boxShadow: '0 6px 16px rgba(102, 126, 234, 0.4)'
+                      background: 'linear-gradient(135deg, #3b0764 0%, #4c1d95 100%)',
+                      boxShadow: '0 6px 16px rgba(76, 29, 149, 0.4)'
                     }
                   }}
                 >
@@ -1418,11 +1602,12 @@ const ClinicianDashboard: React.FC = () => {
                     borderRadius: 3,
                     textTransform: 'none',
                     fontWeight: 600,
-                    background: 'linear-gradient(135deg, #4ecdc4 0%, #44a08d 100%)',
-                    boxShadow: '0 4px 12px rgba(78, 205, 196, 0.3)',
+                    background: 'linear-gradient(135deg, #065f46 0%, #047857 100%)',
+                    color: 'white',
+                    boxShadow: '0 4px 12px rgba(6, 95, 70, 0.3)',
                     '&:hover': {
-                      background: 'linear-gradient(135deg, #45b7aa 0%, #3d8b7a 100%)',
-                      boxShadow: '0 6px 16px rgba(78, 205, 196, 0.4)'
+                      background: 'linear-gradient(135deg, #064e3b 0%, #065f46 100%)',
+                      boxShadow: '0 6px 16px rgba(6, 95, 70, 0.4)'
                     }
                   }}
                 >
@@ -1481,14 +1666,14 @@ const ClinicianDashboard: React.FC = () => {
                     </ListItemIcon>
                     <ListItemText
                       primary={
-                        <Box sx={{ fontWeight: 600, color: '#2d3748', fontSize: '0.875rem' }}>
+                        <Typography component="span" sx={{ fontWeight: 600, color: '#2d3748', fontSize: '0.875rem' }}>
                           {plan.planName} updated
-                        </Box>
+                        </Typography>
                       }
                       secondary={
-                        <Box sx={{ color: '#718096', fontSize: '0.75rem' }}>
+                        <Typography component="span" sx={{ color: '#718096', fontSize: '0.75rem' }}>
                           Case {plan.case.caseNumber}
-                        </Box>
+                        </Typography>
                       }
                     />
                   </ListItem>
@@ -1497,9 +1682,9 @@ const ClinicianDashboard: React.FC = () => {
                   <ListItem sx={{ px: 0 }}>
                     <ListItemText
                       primary={
-                        <Box sx={{ color: '#718096', textAlign: 'center', fontSize: '0.875rem' }}>
+                        <Typography component="span" sx={{ color: '#718096', textAlign: 'center', fontSize: '0.875rem' }}>
                           No recent activity
-                        </Box>
+                        </Typography>
                       }
                     />
                   </ListItem>
@@ -1592,9 +1777,13 @@ const ClinicianDashboard: React.FC = () => {
               </Box>
             </Box>
             
+                {/* Pagination calculation */}
                 {activeRehabPlans.length > 0 ? (
+                  <>
                   <List>
-                    {activeRehabPlans.map((plan) => (
+                    {activeRehabPlans
+                      .slice((currentPage - 1) * plansPerPage, currentPage * plansPerPage)
+                      .map((plan) => (
                   <ListItem 
                     key={plan._id} 
                     sx={{ 
@@ -1619,10 +1808,10 @@ const ClinicianDashboard: React.FC = () => {
                     </ListItemIcon>
                     <ListItemText
                       primary={
-                        <Box display="flex" alignItems="center" gap={2} sx={{ mb: 1 }}>
-                          <Box sx={{ fontWeight: 600, color: '#2d3748', fontSize: '1rem' }}>
+                        <Box component="span" display="flex" alignItems="center" gap={2} sx={{ mb: 1 }}>
+                          <Typography component="span" sx={{ fontWeight: 600, color: '#2d3748', fontSize: '1rem' }}>
                             {plan.planName}
-                          </Box>
+                          </Typography>
                           <Chip
                             label={plan.status}
                             color={getStatusColor(plan.status)}
@@ -1632,64 +1821,67 @@ const ClinicianDashboard: React.FC = () => {
                         </Box>
                       }
                       secondary={
-                        <Box>
-                          <Box sx={{ color: '#4a5568', mb: 0.5, fontSize: '0.875rem' }}>
+                        <Box component="span">
+                          <Typography component="span" sx={{ color: '#4a5568', mb: 0.5, fontSize: '0.875rem', display: 'block' }}>
                             Case: {plan.case.caseNumber} - {plan.case.worker.firstName} {plan.case.worker.lastName}
-                          </Box>
-                          <Box sx={{ color: '#718096', mb: 1, display: 'block', fontSize: '0.75rem' }}>
+                          </Typography>
+                          <Typography component="span" sx={{ color: '#718096', mb: 1, display: 'block', fontSize: '0.75rem' }}>
                             Started: {formatDate(plan.startDate)} | 
                             {plan.endDate && ` Ends: ${formatDate(plan.endDate)}`}
-                          </Box>
+                          </Typography>
                           
                           {/* Progress Indicators */}
                           {plan.progressStats && (
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1 }}>
-                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                <Box sx={{
+                            <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1 }}>
+                              <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                <Box component="span" sx={{
                                   width: 8,
                                   height: 8,
                                   borderRadius: '50%',
-                                  backgroundColor: '#4caf50'
+                                  backgroundColor: '#4caf50',
+                                  display: 'inline-block'
                                 }} />
-                                <Box sx={{ color: '#4caf50', fontWeight: 600, fontSize: '0.75rem' }}>
+                                <Typography component="span" sx={{ color: '#4caf50', fontWeight: 600, fontSize: '0.75rem' }}>
                                   {plan.progressStats.completedDays} completed
-                                </Box>
+                                </Typography>
                               </Box>
-                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                <Box sx={{
+                              <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                <Box component="span" sx={{
                                   width: 8,
                                   height: 8,
                                   borderRadius: '50%',
-                                  backgroundColor: '#ff9800'
+                                  backgroundColor: '#ff9800',
+                                  display: 'inline-block'
                                 }} />
-                                <Box sx={{ color: '#ff9800', fontWeight: 600, fontSize: '0.75rem' }}>
+                                <Typography component="span" sx={{ color: '#ff9800', fontWeight: 600, fontSize: '0.75rem' }}>
                                   {plan.progressStats.skippedDays} skipped
-                                </Box>
+                                </Typography>
                               </Box>
-                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                <Box sx={{
+                              <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                <Box component="span" sx={{
                                   width: 8,
                                   height: 8,
                                   borderRadius: '50%',
-                                  backgroundColor: '#2196f3'
+                                  backgroundColor: '#2196f3',
+                                  display: 'inline-block'
                                 }} />
-                                <Box sx={{ color: '#2196f3', fontWeight: 600, fontSize: '0.75rem' }}>
+                                <Typography component="span" sx={{ color: '#2196f3', fontWeight: 600, fontSize: '0.75rem' }}>
                                   {plan.progressStats.consecutiveCompletedDays} streak
-                                </Box>
+                                </Typography>
                               </Box>
                             </Box>
                           )}
                           
                           {/* Overall Progress Bar */}
                           {plan.progressStats && plan.progressStats.totalDays > 0 && (
-                            <Box sx={{ width: '100%', mb: 1 }}>
-                              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                                <Box sx={{ color: '#718096', fontSize: '0.75rem' }}>
+                            <Box component="span" sx={{ width: '100%', mb: 1, display: 'block' }}>
+                              <Box component="span" sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                                <Typography component="span" sx={{ color: '#718096', fontSize: '0.75rem' }}>
                                   Overall Progress
-                                </Box>
-                                <Box sx={{ color: '#718096', fontWeight: 600, fontSize: '0.75rem' }}>
+                                </Typography>
+                                <Typography component="span" sx={{ color: '#718096', fontWeight: 600, fontSize: '0.75rem' }}>
                                   {Math.round((plan.progressStats.completedDays / plan.progressStats.totalDays) * 100)}%
-                                </Box>
+                                </Typography>
                               </Box>
                               <LinearProgress
                                 variant="determinate"
@@ -1751,9 +1943,60 @@ const ClinicianDashboard: React.FC = () => {
                       </Tooltip>
                     </Box>
                   </ListItem>
-                ))}
-              </List>
-            ) : (
+                    ))}
+                  </List>
+                  
+                  {/* Pagination Controls */}
+                  {activeRehabPlans.length > plansPerPage && (
+                    <Box sx={{ 
+                      display: 'flex', 
+                      justifyContent: 'space-between', 
+                      alignItems: 'center',
+                      mt: 2,
+                      pt: 2,
+                      borderTop: '1px solid',
+                      borderColor: 'divider'
+                    }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                        <Typography variant="body2" color="text.secondary">
+                          Showing {Math.min((currentPage - 1) * plansPerPage + 1, activeRehabPlans.length)} to{' '}
+                          {Math.min(currentPage * plansPerPage, activeRehabPlans.length)} of {activeRehabPlans.length} plans
+                        </Typography>
+                        <FormControl size="small" sx={{ minWidth: 80 }}>
+                          <Select
+                            value={plansPerPage}
+                            onChange={(e) => {
+                              setPlansPerPage(Number(e.target.value));
+                              setCurrentPage(1);
+                            }}
+                            variant="outlined"
+                          >
+                            <MenuItem value={5}>5</MenuItem>
+                            <MenuItem value={10}>10</MenuItem>
+                            <MenuItem value={25}>25</MenuItem>
+                            <MenuItem value={50}>50</MenuItem>
+                          </Select>
+                        </FormControl>
+                        <Typography variant="body2" color="text.secondary">
+                          per page
+                        </Typography>
+                      </Box>
+                      
+                      <Pagination
+                        count={Math.ceil(activeRehabPlans.length / plansPerPage)}
+                        page={currentPage}
+                        onChange={(e, page) => setCurrentPage(page)}
+                        color="primary"
+                        size="large"
+                        showFirstButton
+                        showLastButton
+                        siblingCount={1}
+                        boundaryCount={1}
+                      />
+                    </Box>
+                  )}
+                  </>
+                ) : (
               <Box textAlign="center" py={4}>
                 <Box sx={{ 
                   width: 80, 
@@ -2066,43 +2309,55 @@ const ClinicianDashboard: React.FC = () => {
                 <Typography variant="h6" gutterBottom>
                   Goals Progress
                 </Typography>
-                {selectedPlan.goals.map((goal, index) => (
-                  <Box key={index} sx={{ mb: 2 }}>
-                    <Box display="flex" justifyContent="space-between" sx={{ mb: 1 }}>
-                      <Typography variant="body2">{goal.description}</Typography>
-                      <Typography variant="caption">{goal.progress}%</Typography>
+                {selectedPlan.goals && selectedPlan.goals.length > 0 ? (
+                  selectedPlan.goals.map((goal, index) => (
+                    <Box key={index} sx={{ mb: 2 }}>
+                      <Box display="flex" justifyContent="space-between" sx={{ mb: 1 }}>
+                        <Typography variant="body2">{goal.description}</Typography>
+                        <Typography variant="caption">{goal.progress}%</Typography>
+                      </Box>
+                      <LinearProgress
+                        variant="determinate"
+                        value={goal.progress}
+                        color={goal.progress === 100 ? 'success' : 'primary'}
+                      />
+                      <Typography variant="caption" color="text.secondary">
+                        Target: {formatDate(goal.targetDate)} | Status: {goal.status}
+                      </Typography>
                     </Box>
-                    <LinearProgress
-                      variant="determinate"
-                      value={goal.progress}
-                      color={goal.progress === 100 ? 'success' : 'primary'}
-                    />
-                    <Typography variant="caption" color="text.secondary">
-                      Target: {formatDate(goal.targetDate)} | Status: {goal.status}
-                    </Typography>
-                  </Box>
-                ))}
+                  ))
+                ) : (
+                  <Typography variant="body2" color="text.secondary">
+                    No goals set for this plan.
+                  </Typography>
+                )}
 
                 <Typography variant="h6" gutterBottom sx={{ mt: 3 }}>
                   Exercises
                 </Typography>
-                {selectedPlan.exercises.map((exercise, index) => (
-                  <Box key={index} sx={{ mb: 2, p: 2, border: 1, borderColor: 'divider', borderRadius: 1 }}>
-                    <Typography variant="subtitle2">{exercise.name}</Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      {exercise.description}
-                    </Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      {exercise.frequency} | {exercise.duration} min | {exercise.difficulty}
-                    </Typography>
-                    <Chip
-                      label={exercise.status}
-                      color={getStatusColor(exercise.status)}
-                      size="small"
-                      sx={{ ml: 1 }}
-                    />
-                  </Box>
-                ))}
+                {selectedPlan.exercises && selectedPlan.exercises.length > 0 ? (
+                  selectedPlan.exercises.map((exercise, index) => (
+                    <Box key={index} sx={{ mb: 2, p: 2, border: 1, borderColor: 'divider', borderRadius: 1 }}>
+                      <Typography variant="subtitle2">{exercise.name}</Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        {exercise.description}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {exercise.frequency} | {exercise.duration} min | {exercise.difficulty}
+                      </Typography>
+                      <Chip
+                        label={exercise.status}
+                        color={getStatusColor(exercise.status)}
+                        size="small"
+                        sx={{ ml: 1 }}
+                      />
+                    </Box>
+                  ))
+                ) : (
+                  <Typography variant="body2" color="text.secondary">
+                    No exercises set for this plan.
+                  </Typography>
+                )}
 
                 {selectedPlan.notes && (
                   <Box sx={{ mt: 3 }}>
@@ -2323,6 +2578,9 @@ const ClinicianDashboard: React.FC = () => {
                 value={assessmentForm.scheduledDate}
                 onChange={(e) => setAssessmentForm({ ...assessmentForm, scheduledDate: e.target.value })}
                 InputLabelProps={{ shrink: true }}
+                inputProps={{
+                  min: new Date().toISOString().slice(0, 16)
+                }}
                 sx={{ mb: 2 }}
               />
 
@@ -2374,6 +2632,20 @@ const ClinicianDashboard: React.FC = () => {
                 </Select>
               </FormControl>
 
+              {/* Worker field - read-only display */}
+              <TextField
+                fullWidth
+                label="Worker"
+                value={appointmentForm.case ? (() => {
+                  const selectedCase = cases.find(c => c._id === appointmentForm.case);
+                  return selectedCase ? `${selectedCase.worker.firstName} ${selectedCase.worker.lastName}` : '';
+                })() : ''}
+                InputProps={{
+                  readOnly: true,
+                }}
+                sx={{ mb: 2 }}
+              />
+
               <FormControl fullWidth sx={{ mb: 2 }}>
                 <InputLabel>Appointment Type</InputLabel>
                 <Select
@@ -2395,6 +2667,9 @@ const ClinicianDashboard: React.FC = () => {
                 value={appointmentForm.scheduledDate}
                 onChange={(e) => setAppointmentForm({ ...appointmentForm, scheduledDate: e.target.value })}
                 InputLabelProps={{ shrink: true }}
+                inputProps={{
+                  min: new Date().toISOString().slice(0, 16)
+                }}
                 sx={{ mb: 2 }}
               />
 
@@ -3464,6 +3739,114 @@ const ClinicianDashboard: React.FC = () => {
           <DialogContent>
             {selectedCase && (
               <Box sx={{ mt: 2 }}>
+                {/* Case Progress Timeline */}
+                <Paper 
+                  elevation={0}
+                  sx={{ 
+                    mb: 4, 
+                    borderRadius: '12px',
+                    border: '1px solid #e5e7eb',
+                    overflow: 'hidden'
+                  }}
+                >
+                  <Box sx={{ 
+                    p: { xs: 2, sm: 3 }, 
+                    borderBottom: '1px solid #e5e7eb',
+                    bgcolor: '#f9fafb'
+                  }}>
+                    <Typography 
+                      variant="h6" 
+                      sx={{ 
+                        fontWeight: 600, 
+                        color: '#111827',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 1
+                      }}
+                    >
+                      <Timeline fontSize="small" /> Case Progress
+                    </Typography>
+                  </Box>
+                  
+                  <Box sx={{ p: { xs: 2, sm: 3 } }}>
+                    <Box sx={{ 
+                      display: 'flex', 
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      position: 'relative',
+                      pb: 1,
+                      px: { xs: 1, sm: 3 }
+                    }}>
+                      {/* Progress Bar */}
+                      <Box sx={{ 
+                        position: 'absolute',
+                        height: '4px',
+                        bgcolor: '#e5e7eb',
+                        left: '12%',
+                        right: '12%',
+                        top: '22px',
+                        zIndex: 0
+                      }} />
+                      
+                      {/* Status Steps */}
+                      {['new', 'triaged', 'assessed', 'in_rehab', 'return_to_work', 'closed'].map((status, index) => {
+                        const isActive = ['new', 'triaged', 'assessed', 'in_rehab', 'return_to_work', 'closed']
+                          .indexOf(selectedCase.status) >= index;
+                        const isCurrent = selectedCase.status === status;
+                        
+                        return (
+                          <Box 
+                            key={status}
+                            sx={{ 
+                              display: 'flex',
+                              flexDirection: 'column',
+                              alignItems: 'center',
+                              position: 'relative',
+                              zIndex: 1,
+                              width: { xs: '16.66%', sm: '16.66%' }
+                            }}
+                          >
+                            <Avatar 
+                              sx={{ 
+                                width: 44,
+                                height: 44,
+                                bgcolor: isActive ? 
+                                  (isCurrent ? '#3b82f6' : '#10b981') : 
+                                  '#e5e7eb',
+                                color: isActive ? 'white' : '#9ca3af',
+                                border: isCurrent ? '2px solid #60a5fa' : 'none',
+                                boxShadow: isCurrent ? '0 0 0 4px rgba(59, 130, 246, 0.2)' : 'none'
+                              }}
+                            >
+                              {status === 'new' && <Assignment />}
+                              {status === 'triaged' && <TrendingUp />}
+                              {status === 'assessed' && <LocalHospital />}
+                              {status === 'in_rehab' && <Work />}
+                              {status === 'return_to_work' && <CheckCircle />}
+                              {status === 'closed' && <Close />}
+                            </Avatar>
+                            <Typography 
+                              variant="caption" 
+                              sx={{ 
+                                mt: 1,
+                                fontWeight: isCurrent ? 700 : 500,
+                                color: isCurrent ? '#111827' : (isActive ? '#374151' : '#9ca3af'),
+                                textAlign: 'center',
+                                fontSize: '0.7rem',
+                                textTransform: 'uppercase',
+                                letterSpacing: '0.05em',
+                                display: { xs: 'none', sm: 'block' }
+                              }}
+                            >
+                              {status.replace('_', ' ')}
+                            </Typography>
+                          </Box>
+                        );
+                      })}
+                    </Box>
+                  </Box>
+                </Paper>
+                
                 <Grid container spacing={3}>
                   {/* Case Information */}
                   <Grid item xs={12} md={6}>
@@ -3631,7 +4014,7 @@ const ClinicianDashboard: React.FC = () => {
           </DialogActions>
         </Dialog>
       </Box>
-    </Layout>
+    </LayoutWithSidebar>
   );
 };
 

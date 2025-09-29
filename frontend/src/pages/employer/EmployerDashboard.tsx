@@ -43,7 +43,7 @@ import {
   CheckCircle,
   Refresh,
 } from '@mui/icons-material';
-import Layout from '../../components/Layout';
+import LayoutWithSidebar from '../../components/LayoutWithSidebar';
 import api from '../../utils/api';
 
 interface User {
@@ -339,16 +339,16 @@ const EmployerDashboard: React.FC = () => {
 
   if (loading) {
     return (
-      <Layout>
+      <LayoutWithSidebar>
         <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
           <CircularProgress />
         </Box>
-      </Layout>
+      </LayoutWithSidebar>
     );
   }
 
   return (
-    <Layout>
+    <LayoutWithSidebar>
       <Box sx={{ 
         minHeight: '100vh', 
         backgroundColor: '#f8fafc',
@@ -757,22 +757,7 @@ const EmployerDashboard: React.FC = () => {
                 overflow: 'auto',
                 border: { xs: 'none', sm: '1px solid #e2e8f0' },
                 maxWidth: '100%',
-                WebkitOverflowScrolling: 'touch',
-                '&::-webkit-scrollbar': {
-                  height: '6px',
-                  width: '6px',
-                },
-                '&::-webkit-scrollbar-track': {
-                  backgroundColor: '#f1f1f1',
-                  borderRadius: '3px',
-                },
-                '&::-webkit-scrollbar-thumb': {
-                  backgroundColor: '#c1c1c1',
-                  borderRadius: '3px',
-                  '&:hover': {
-                    backgroundColor: '#a8a8a8',
-                  },
-                },
+                WebkitOverflowScrolling: 'touch'
               }}>
                 <Table size="small">
                   <TableHead sx={{ backgroundColor: '#f8fafc' }}>
@@ -1014,22 +999,7 @@ const EmployerDashboard: React.FC = () => {
                   overflow: 'auto',
                   border: { xs: 'none', sm: '1px solid #e2e8f0' },
                   maxWidth: '100%',
-                  WebkitOverflowScrolling: 'touch',
-                  '&::-webkit-scrollbar': {
-                    height: '6px',
-                    width: '6px',
-                  },
-                  '&::-webkit-scrollbar-track': {
-                    backgroundColor: '#f1f1f1',
-                    borderRadius: '3px',
-                  },
-                  '&::-webkit-scrollbar-thumb': {
-                    backgroundColor: '#c1c1c1',
-                    borderRadius: '3px',
-                    '&:hover': {
-                      backgroundColor: '#a8a8a8',
-                    },
-                  },
+                  WebkitOverflowScrolling: 'touch'
                 }}>
                   <Table size="small">
                     <TableHead sx={{ backgroundColor: '#f8fafc' }}>
@@ -1480,22 +1450,7 @@ const EmployerDashboard: React.FC = () => {
                   <Box sx={{ 
                     p: { xs: 1, sm: 2 }, 
                     overflowX: 'auto',
-                    WebkitOverflowScrolling: 'touch',
-                    '&::-webkit-scrollbar': {
-                      height: '8px',
-                      width: '8px',
-                    },
-                    '&::-webkit-scrollbar-track': {
-                      backgroundColor: '#f1f1f1',
-                      borderRadius: '4px',
-                    },
-                    '&::-webkit-scrollbar-thumb': {
-                      backgroundColor: '#c1c1c1',
-                      borderRadius: '4px',
-                      '&:hover': {
-                        backgroundColor: '#a8a8a8',
-                      },
-                    },
+                    WebkitOverflowScrolling: 'touch'
                   }}>
                     <Table size="small">
                       <TableHead sx={{ backgroundColor: '#f8fafc' }}>
@@ -2129,7 +2084,7 @@ const EmployerDashboard: React.FC = () => {
           )}
         </Dialog>
       </Box>
-    </Layout>
+    </LayoutWithSidebar>
   );
 };
 

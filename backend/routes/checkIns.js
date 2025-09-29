@@ -6,7 +6,16 @@ const User = require('../models/User');
 const Notification = require('../models/Notification');
 const ActivityLog = require('../models/ActivityLog');
 const { authMiddleware, roleMiddleware } = require('../middleware/auth');
-const { handleValidationErrors, asyncHandler } = require('../middleware/errorHandler');
+const { asyncHandler } = require('../middleware/errorHandler');
+// Import centralized validators
+const { 
+  validateCheckIn,
+  handleValidationErrors,
+  isMongoId,
+  isMongoIdBody,
+  validatePagination,
+  validateDateRange 
+} = require('../middleware/validators');
 
 const router = express.Router();
 
