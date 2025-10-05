@@ -12,7 +12,8 @@
       "src": "backend/api/index.js",
       "use": "@vercel/node",
       "config": {
-        "includeFiles": ["backend/**"]
+        "includeFiles": ["backend/**"],
+        "maxDuration": 30
       }
     }
   ],
@@ -28,12 +29,5 @@
   ],
   "env": {
     "NODE_ENV": "production"
-  },
-  "functions": {
-    "backend/api/index.js": {
-      "maxDuration": 30
-    }
   }
 }
-
-
