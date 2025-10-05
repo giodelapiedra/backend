@@ -1,5 +1,5 @@
 // Vercel API entry point
-require('dotenv').config({ path: '../env.supabase' });
+require('dotenv').config({ path: './env.supabase' });
 
 // Import the main server app
 const app = require('../server');
