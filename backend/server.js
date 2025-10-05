@@ -241,6 +241,18 @@ app.get('/api', (req, res) => {
       cases: '/api/cases',
       assessments: '/api/assessments',
       appointments: '/api/appointments',
+      checkIns: '/api/check-ins',
+      rehabilitationPlans: '/api/rehabilitation-plans',
+      incidents: '/api/incidents',
+      clinicians: '/api/clinicians',
+      preventiveTasks: '/api/preventive-tasks',
+      notifications: '/api/notifications',
+      activityLogs: '/api/activity-logs',
+      admin: '/api/admin',
+      clinicianAnalytics: '/api/clinicians/analytics',
+      teamLeader: '/api/team-leader',
+      workReadiness: '/api/work-readiness',
+      goalKpi: '/api/goal-kpi',
       health: '/api/health'
     }
   });
