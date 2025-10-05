@@ -2,17 +2,17 @@
   "version": 2,
   "buildCommand": "cd frontend && npm install && npm run build",
   "outputDirectory": "frontend/build",
-  "installCommand": "cd frontend && npm install",
+  "installCommand": "cd frontend && npm install && cd ../backend && npm install",
   "builds": [
     {
-      "src": "backend/server.js",
+      "src": "backend/index.js",
       "use": "@vercel/node"
     }
   ],
   "routes": [
     {
       "src": "/api/(.*)",
-      "dest": "backend/server.js"
+      "dest": "backend/index.js"
     },
     {
       "src": "/(.*)",
