@@ -4,9 +4,11 @@
   "description": "Work Readiness System with Frontend and Backend",
   "scripts": {
     "build": "cd frontend && npm run build",
+    "build:netlify": "cd frontend && npm install && npm run build && cd ../netlify/functions && npm install",
     "start": "cd backend && npm start",
     "dev": "concurrently \"cd frontend && npm start\" \"cd backend && npm run dev\"",
-    "vercel-build": "cd frontend && npm run build"
+    "netlify:dev": "netlify dev",
+    "netlify:build": "npm run build:netlify"
   },
   "devDependencies": {
     "concurrently": "^7.6.0"

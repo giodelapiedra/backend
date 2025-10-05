@@ -9,18 +9,14 @@
       }
     },
     {
-      "src": "backend/api/index.js",
-      "use": "@vercel/node",
-      "config": {
-        "includeFiles": ["backend/**"],
-        "maxDuration": 30
-      }
+      "src": "backend/server.js",
+      "use": "@vercel/node"
     }
   ],
   "routes": [
     {
       "src": "/api/(.*)",
-      "dest": "backend/api/index.js"
+      "dest": "backend/server.js"
     },
     {
       "src": "/(.*)",
@@ -31,3 +27,5 @@
     "NODE_ENV": "production"
   }
 }
+
+

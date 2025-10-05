@@ -119,3 +119,7 @@ assign-*.js
 # Documentation that's not needed in production
 docs/
 examples/
+.vercel
+
+# Local Netlify folder
+.netlify
