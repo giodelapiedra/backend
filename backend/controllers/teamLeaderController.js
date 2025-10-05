@@ -7,6 +7,7 @@ const Case = require('../models/Case');
 const CheckIn = require('../models/CheckIn');
 const Incident = require('../models/Incident');
 const { validationResult } = require('express-validator');
+const { getTeamMemberLoginActivity } = require('../middleware/supabaseAuthLogger');
 
 // @desc    Get team leader dashboard data
 // @route   GET /api/team-leader/dashboard
@@ -617,52 +618,51 @@ const getTeamLoginActivity = async (req, res) => {
   try {
     const { days = 7 } = req.query;
     
-    // Get team members
-    const teamMembers = await User.find({ 
-      teamLeader: req.user._id,
-      isActive: true 
-    }).select('_id firstName lastName email role team lastLogin').lean();
-
-    const teamMemberIds = teamMembers.map(member => member._id);
-
-    // Calculate date range
+    console.log('📊 Fetching team login activity for team leader:', req.user._id);
+    
+    // Get login activity from Supabase
+    const loginActivity = await getTeamMemberLoginActivity(req.user._id, 100);
+    
+    // Filter by date range
     const endDate = new Date();
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - parseInt(days));
-
-    // Get login activity for team members
-    const loginActivity = await AuthenticationLog.find({
-      userId: { $in: teamMemberIds },
-      action: 'login',
-      success: true,
-      createdAt: { $gte: startDate, $lte: endDate }
-    })
-    .populate('userId', 'firstName lastName email role team')
-    .select('userId createdAt ipAddress deviceInfo')
-    .sort({ createdAt: -1 })
-    .lean();
+    
+    const filteredActivity = loginActivity.filter(activity => {
+      const activityDate = new Date(activity.created_at);
+      return activityDate >= startDate && activityDate <= endDate;
+    });
 
     // Group activity by user
     const activityByUser = {};
-    teamMembers.forEach(member => {
-      activityByUser[member._id.toString()] = {
-        user: member,
-        loginCount: 0,
-        lastLogin: member.lastLogin,
-        recentLogins: []
-      };
-    });
-
-    // Process login activity
-    loginActivity.forEach(log => {
-      const userId = log.userId._id.toString();
-      if (activityByUser[userId]) {
-        activityByUser[userId].loginCount++;
-        activityByUser[userId].recentLogins.push({
-          timestamp: log.createdAt,
-          ipAddress: log.ipAddress,
-          deviceInfo: log.deviceInfo
-        });
+    
+    // Process login activity from Supabase
+    filteredActivity.forEach(log => {
+      const userId = log.user_id;
+      if (!activityByUser[userId]) {
+        activityByUser[userId] = {
+          user: {
+            id: log.user_id,
+            name: log.user_name,
+            email: log.user_email,
+            role: log.user_role
+          },
+          loginCount: 0,
+          lastLogin: log.created_at,
+          recentLogins: []
+        };
+      }
+      
+      activityByUser[userId].loginCount++;
+      activityByUser[userId].recentLogins.push({
+        timestamp: log.created_at,
+        ipAddress: log.ip_address,
+        deviceInfo: log.device_info
+      });
+      
+      // Update last login if this is more recent
+      if (new Date(log.created_at) > new Date(activityByUser[userId].lastLogin)) {
+        activityByUser[userId].lastLogin = log.created_at;
       }
     });
 
@@ -670,14 +670,16 @@ const getTeamLoginActivity = async (req, res) => {
     const teamActivity = Object.values(activityByUser)
       .sort((a, b) => b.loginCount - a.loginCount);
 
+    console.log(`📊 Found ${teamActivity.length} active team members with login activity`);
+
     res.json({
       message: 'Team login activity retrieved successfully',
       data: {
         teamActivity,
         summary: {
-          totalMembers: teamMembers.length,
+          totalMembers: teamActivity.length,
           activeMembers: teamActivity.filter(member => member.loginCount > 0).length,
-          totalLogins: loginActivity.length,
+          totalLogins: filteredActivity.length,
           period: `${days} days`
         }
       }

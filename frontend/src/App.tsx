@@ -3,8 +3,13 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import { Box, CircularProgress, Typography } from '@mui/material';
-import { AuthProvider } from './contexts/AuthContext';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { AuthProvider } from './contexts/AuthContext.supabase';
 import { ProtectedRoute } from './components/ProtectedRoute';
+import ReduxProvider from './components/ReduxProvider';
+import { queryClient } from './lib/queryClient';
+import './styles/design-system.css';
+import './styles/modern-dashboard.css';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import AdminDashboard from './pages/admin/AdminDashboard';
@@ -13,14 +18,14 @@ import AuthenticationLogs from './pages/admin/AuthenticationLogs';
 import Users from './pages/admin/Users';
 import WorkerDashboard from './pages/worker/WorkerDashboard';
 import WorkerRehabilitationPlan from './pages/worker/WorkerRehabilitationPlan';
-import ClinicianDashboard from './pages/clinician/ClinicianDashboard';
+import ClinicianDashboardRedux from './pages/clinician/ClinicianDashboardRedux';
 import WorkerActivityMonitor from './pages/clinician/WorkerActivityMonitor';
 import AppointmentCalendar from './pages/clinician/AppointmentCalendar';
 import ClinicianAnalytics from './pages/clinician/ClinicianAnalytics';
 import EmployerDashboard from './pages/employer/EmployerDashboard';
 import Analytics from './pages/employer/Analytics';
-import CaseManagerDashboard from './pages/caseManager/CaseManagerDashboard';
-import SiteSupervisorDashboard from './pages/siteSupervisor/SiteSupervisorDashboard';
+import CaseManagerDashboardRedux from './pages/caseManager/CaseManagerDashboardRedux';
+import SiteSupervisorDashboardRedux from './pages/siteSupervisor/SiteSupervisorDashboardRedux';
 import TeamLeaderMonitoring from './pages/siteSupervisor/TeamLeaderMonitoring';
 import GPInsurerDashboard from './pages/gpInsurer/GPInsurerDashboard';
 import TeamLeaderDashboard from './pages/teamLeader/TeamLeaderDashboard';
@@ -186,12 +191,14 @@ const LoadingFallback = () => (
 
 function App() {
   return (
-    <ThemeProvider theme={theme}>
-      <CssBaseline />
-      <AuthProvider>
-        <Router>
-          <Suspense fallback={<LoadingFallback />}>
-            <Routes>
+    <QueryClientProvider client={queryClient}>
+      <ThemeProvider theme={theme}>
+        <CssBaseline />
+        <AuthProvider>
+          <ReduxProvider>
+            <Router>
+              <Suspense fallback={<LoadingFallback />}>
+                <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
             
@@ -247,13 +254,13 @@ function App() {
             
             <Route path="/clinician" element={
               <ProtectedRoute allowedRoles={['clinician']}>
-                <ClinicianDashboard />
+                <ClinicianDashboardRedux />
               </ProtectedRoute>
             } />
             
             <Route path="/clinician/dashboard" element={
               <ProtectedRoute allowedRoles={['clinician']}>
-                <ClinicianDashboard />
+                <ClinicianDashboardRedux />
               </ProtectedRoute>
             } />
             
@@ -297,19 +304,19 @@ function App() {
             
             <Route path="/case-manager" element={
               <ProtectedRoute allowedRoles={['case_manager']}>
-                <CaseManagerDashboard />
+                <CaseManagerDashboardRedux />
               </ProtectedRoute>
             } />
             
             <Route path="/case-manager/dashboard" element={
               <ProtectedRoute allowedRoles={['case_manager']}>
-                <CaseManagerDashboard />
+                <CaseManagerDashboardRedux />
               </ProtectedRoute>
             } />
             
             <Route path="/site-supervisor" element={
               <ProtectedRoute allowedRoles={['site_supervisor']}>
-                <SiteSupervisorDashboard />
+                <SiteSupervisorDashboardRedux />
               </ProtectedRoute>
             } />
             
@@ -399,11 +406,13 @@ function App() {
             } />
             
             <Route path="*" element={<NotFound />} />
-            </Routes>
-          </Suspense>
-        </Router>
+              </Routes>
+            </Suspense>
+          </Router>
+        </ReduxProvider>
       </AuthProvider>
     </ThemeProvider>
+    </QueryClientProvider>
   );
 }
 

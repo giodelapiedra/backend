@@ -1,9 +1,11 @@
-import React, { useState, useEffect } from 'react';
-import { useAuth } from '../../contexts/AuthContext';
-import api from '../../utils/api';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useAuth } from '../../contexts/AuthContext.supabase';
+import { SupabaseAPI } from '../../utils/supabaseApi';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import Toast from '../../components/Toast';
 import LayoutWithSidebar from '../../components/LayoutWithSidebar';
+import { Box, Card, CardContent, Typography, Button } from '@mui/material';
+import TrendChart from '../../components/TrendChart';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -53,6 +55,15 @@ const gradientPlugin = {
 
 // Register the plugin
 ChartJS.register(gradientPlugin);
+
+// Type alias for trend data items
+type TrendDataItem = {
+  date: string;
+  notFitForWork: number;
+  minorConcernsFitForWork: number;
+  fitForWork: number;
+  total: number;
+};
 
 interface AnalyticsData {
   teamLeader: {
@@ -104,26 +115,92 @@ interface AnalyticsData {
       recentAssessments: number;
       completedAssessments: number;
     }>;
-    readinessTrendData: Array<{
-      date: string;
-      notFitForWork: number;
-      minorConcernsFitForWork: number;
-    }>;
+    readinessTrendData: TrendDataItem[];
     complianceRate: number;
     activityRate: number;
   };
 }
 
+// Modern color palette for better visual design
+const COLORS = {
+  primary: {
+    main: '#6366f1', // Indigo - more modern than blue
+    light: '#818cf8',
+    dark: '#4f46e5',
+    bg: 'rgba(99, 102, 241, 0.08)',
+  },
+  success: {
+    main: '#10b981', // Emerald - fresher than green
+    light: '#34d399',
+    dark: '#059669',
+    bg: 'rgba(16, 185, 129, 0.08)',
+  },
+  warning: {
+    main: '#f59e0b', // Amber
+    light: '#fbbf24',
+    dark: '#d97706',
+    bg: 'rgba(245, 158, 11, 0.08)',
+  },
+  error: {
+    main: '#ef4444', // Red
+    light: '#f87171',
+    dark: '#dc2626',
+    bg: 'rgba(239, 68, 68, 0.08)',
+  },
+  purple: {
+    main: '#8b5cf6', // Violet
+    light: '#a78bfa',
+    dark: '#7c3aed',
+    bg: 'rgba(139, 92, 246, 0.08)',
+  },
+  neutral: {
+    white: '#ffffff',
+    50: '#fafafa',
+    100: '#f5f5f5',
+    200: '#e5e5e5',
+    300: '#d4d4d4',
+    400: '#a3a3a3',
+    500: '#737373',
+    600: '#525252',
+    700: '#404040',
+    800: '#262626',
+    900: '#171717',
+  },
+  gradient: {
+    primary: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+    success: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+    header: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
+  }
+};
+
 const TeamAnalytics: React.FC = () => {
   const { user } = useAuth();
   
-  // Add CSS for spinner animation
+  // Add CSS for animations
   React.useEffect(() => {
     const style = document.createElement('style');
     style.textContent = `
       @keyframes spin {
         0% { transform: rotate(0deg); }
         100% { transform: rotate(360deg); }
+      }
+      @keyframes slideUp {
+        from {
+          opacity: 0;
+          transform: translateY(20px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+      @keyframes pulse {
+        0%, 100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.7;
+        }
       }
     `;
     document.head.appendChild(style);
@@ -158,9 +235,90 @@ const TeamAnalytics: React.FC = () => {
   
   const [showChartModal, setShowChartModal] = useState(false);
   const [showLoginModal, setShowLoginModal] = useState(false);
+  const [lastFetchTime, setLastFetchTime] = useState<number>(0);
+  const [chartKey, setChartKey] = useState(0);
+
+  // Cache clearing functions
+  const clearAllBrowserCache = useCallback(async () => {
+    console.log('=== CLEARING ALL BROWSER CACHE ===');
+    try {
+      localStorage.clear();
+      console.log('✅ localStorage cleared');
+      sessionStorage.clear();
+      console.log('✅ sessionStorage cleared');
+      
+      // Clear IndexedDB
+      if ('indexedDB' in window) {
+        try {
+          const databases = await indexedDB.databases();
+          for (const db of databases) {
+            if (db.name) {
+              indexedDB.deleteDatabase(db.name);
+            }
+          }
+          console.log('✅ IndexedDB cleared');
+        } catch (error) {
+          console.log('❌ IndexedDB clear error:', error);
+        }
+      }
+      
+      // Clear Service Worker cache
+      if ('serviceWorker' in navigator) {
+        try {
+          const registrations = await navigator.serviceWorker.getRegistrations();
+          for (const registration of registrations) {
+            await registration.unregister();
+          }
+          console.log('✅ Service Worker cleared');
+        } catch (error) {
+          console.log('❌ Service Worker clear error:', error);
+        }
+      }
+      
+      // Clear Cache API
+      if ('caches' in window) {
+        try {
+          const cacheNames = await caches.keys();
+          await Promise.all(cacheNames.map(name => caches.delete(name)));
+          console.log('✅ Cache API cleared');
+        } catch (error) {
+          console.log('❌ Cache API clear error:', error);
+        }
+      }
+      
+      // Clear cookies (but preserve auth cookies)
+      try {
+        const cookiesToPreserve = ['supabase.auth.token', 'sb-', 'auth-token'];
+        document.cookie.split(";").forEach(function(cookie) { 
+          const cookieName = cookie.replace(/^ +/, "").split("=")[0];
+          const shouldPreserve = cookiesToPreserve.some(preserveName => 
+            cookieName.includes(preserveName)
+          );
+          if (!shouldPreserve) {
+            document.cookie = cookie.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/"); 
+          }
+        });
+        console.log('✅ Non-auth cookies cleared (login cookies preserved)');
+      } catch (error) {
+        console.log('❌ Cookie clear error:', error);
+      }
+      
+      console.log('=== BROWSER CACHE CLEARED ===');
+    } catch (error) {
+      console.error('Error clearing browser cache:', error);
+    }
+  }, []);
+
+  const clearDataCache = useCallback(() => {
+    console.log('=== CLEARING DATA CACHE ===');
+    setLastFetchTime(0);
+    setAnalyticsData(null);
+    console.log('✅ Data cache cleared');
+  }, []);
 
   useEffect(() => {
     fetchAnalyticsData(); // This will fetch general analytics data
+    fetchReadinessAnalyticsData(); // This will fetch work readiness trend data
   }, []);
 
   // Fetch data when work readiness date range changes
@@ -179,64 +337,240 @@ const TeamAnalytics: React.FC = () => {
     });
   }, [loginDateRange, loginStartDate, loginEndDate]);
 
-  // Fetch data when readiness chart date range changes
+  // Fetch data when readiness chart date range changes (same logic as TeamLeaderDashboard)
   useEffect(() => {
-    console.log('Readiness useEffect triggered with:', { readinessDateRange, readinessStartDate, readinessEndDate });
-    setReadinessChartLoading(true);
-    fetchAnalyticsData('readiness').finally(() => {
-      setReadinessChartLoading(false);
+    console.log('🔄 TeamAnalytics: Filter changed, fetching new analytics data...', {
+      dateRange: readinessDateRange,
+      startDate: readinessStartDate?.toISOString(),
+      endDate: readinessEndDate?.toISOString(),
+      userId: user?.id
     });
-  }, [readinessDateRange, readinessStartDate, readinessEndDate]);
+    fetchReadinessAnalyticsData();
+  }, [readinessDateRange, readinessStartDate, readinessEndDate, user?.id]);
 
-  const fetchAnalyticsData = async (chartType?: 'workReadiness' | 'login' | 'readiness') => {
+  // Same logic as TeamLeaderDashboard for work readiness analytics
+  const fetchReadinessAnalyticsData = useCallback(async () => {
     try {
-      console.log('fetchAnalyticsData called with chartType:', chartType);
+      setReadinessChartLoading(true);
+      console.log('🔄 TeamAnalytics: Fetching work readiness trend data from Supabase...');
+      console.log('📅 TeamAnalytics: Filter parameters:', {
+        dateRange: readinessDateRange,
+        startDate: readinessStartDate?.toISOString(),
+        endDate: readinessEndDate?.toISOString(),
+        userId: user?.id
+      });
+      
+      if (!user?.id) {
+        console.log('❌ TeamAnalytics: No user ID available for analytics fetch');
+        setAnalyticsData(null);
+        return;
+      }
+      
+      // Get work readiness trend data from Supabase
+      const trendData = await SupabaseAPI.getWorkReadinessTrendData(user.id, readinessDateRange, readinessStartDate, readinessEndDate);
+      
+      console.log('✅ TeamAnalytics: Work readiness trend data received:', trendData);
+      console.log('📊 TeamAnalytics: Data points:', trendData?.analytics?.readinessTrendData?.length || 0);
+      console.log('📊 TeamAnalytics: Chart data details:', trendData?.analytics?.readinessTrendData?.map((item: TrendDataItem) => ({
+        date: item.date,
+        notFitForWork: item.notFitForWork,
+        minorConcernsFitForWork: item.minorConcernsFitForWork,
+        fitForWork: item.fitForWork,
+        total: item.total
+      })));
+      
+      // Get the full analytics data first, then merge trend data
+      const fullAnalyticsData = await SupabaseAPI.getAnalyticsData(user.id);
+      
+      // Merge trend data into the full analytics data
+      if (trendData?.analytics?.readinessTrendData && fullAnalyticsData) {
+        (fullAnalyticsData.analytics as any).readinessTrendData = trendData.analytics.readinessTrendData;
+        console.log('✅ TeamAnalytics: Merged trend data into full analytics data');
+      }
+      
+      // Set the complete analytics data
+      setAnalyticsData(fullAnalyticsData);
+    } catch (error) {
+      console.error('❌ TeamAnalytics: Error fetching analytics data:', error);
+      setAnalyticsData(null);
+    } finally {
+      setReadinessChartLoading(false);
+    }
+  }, [readinessDateRange, readinessStartDate, readinessEndDate, user?.id]);
+
+  const fetchAnalyticsData = async (chartType?: 'workReadiness' | 'login' | 'readiness', forceRefresh = false) => {
+    try {
+      console.log('fetchAnalyticsData called with chartType:', chartType, 'forceRefresh:', forceRefresh);
       
       // Only set main loading for initial load, not for chart-specific updates
       if (!chartType) {
-      setLoading(true);
+        setLoading(true);
       }
       
-      let url = '/team-leader/analytics';
+      if (!user?.id) {
+        console.log('No user ID available for analytics fetch');
+        setAnalyticsData(null);
+        return;
+      }
       
-      // Add date range parameters based on which chart is being filtered
-      const params = new URLSearchParams();
+      // Clear cache if force refresh
+      if (forceRefresh) {
+        await clearAllBrowserCache();
+        clearDataCache();
+      }
       
+      // Fetch analytics data from Supabase
+      const result = await SupabaseAPI.getAnalyticsData(user.id);
+      
+      // Fetch filtered data based on chart type
       if (chartType === 'workReadiness') {
-        if (workReadinessDateRange === 'custom') {
-          params.append('startDate', workReadinessStartDate.toISOString());
-          params.append('endDate', workReadinessEndDate.toISOString());
-        } else {
-          params.append('range', workReadinessDateRange);
+        try {
+          console.log('📊 TeamAnalytics: Fetching filtered work readiness stats...');
+          console.log('📊 TeamAnalytics: Parameters:', {
+            userId: user.id,
+            dateRange: workReadinessDateRange,
+            startDate: workReadinessStartDate?.toISOString(),
+            endDate: workReadinessEndDate?.toISOString()
+          });
+          
+          const workReadinessData = await SupabaseAPI.getWorkReadinessStats(
+            user.id, 
+            workReadinessDateRange, 
+            workReadinessStartDate, 
+            workReadinessEndDate
+          );
+          
+          console.log('📊 TeamAnalytics: Work readiness stats received:', workReadinessData);
+          
+          // Merge filtered work readiness stats
+          if (workReadinessData?.analytics?.workReadinessStats) {
+            result.analytics.workReadinessStats = workReadinessData.analytics.workReadinessStats;
+            console.log('✅ TeamAnalytics: Work readiness stats updated with filtered data');
+          }
+        } catch (workReadinessError) {
+          console.error('❌ TeamAnalytics: Error fetching work readiness stats:', workReadinessError);
         }
-        console.log('WorkReadiness filter params:', params.toString());
       } else if (chartType === 'login') {
-        if (loginDateRange === 'custom') {
-          params.append('startDate', loginStartDate.toISOString());
-          params.append('endDate', loginEndDate.toISOString());
-        } else {
-          params.append('range', loginDateRange);
+        try {
+          console.log('📊 TeamAnalytics: Fetching filtered login stats...');
+          console.log('📊 TeamAnalytics: Parameters:', {
+            userId: user.id,
+            dateRange: loginDateRange,
+            startDate: loginStartDate?.toISOString(),
+            endDate: loginEndDate?.toISOString()
+          });
+          
+          const loginData = await SupabaseAPI.getLoginStats(
+            user.id, 
+            loginDateRange, 
+            loginStartDate, 
+            loginEndDate
+          );
+          
+          console.log('📊 TeamAnalytics: Login stats received:', loginData);
+          
+          // Merge filtered login stats
+          if (loginData?.analytics?.loginStats) {
+            result.analytics.loginStats = loginData.analytics.loginStats;
+            console.log('✅ TeamAnalytics: Login stats updated with filtered data');
+          }
+        } catch (loginError) {
+          console.error('❌ TeamAnalytics: Error fetching login stats:', loginError);
         }
-        console.log('Login filter params:', params.toString());
-      } else if (chartType === 'readiness') {
-        if (readinessDateRange === 'custom') {
-          params.append('startDate', readinessStartDate.toISOString());
-          params.append('endDate', readinessEndDate.toISOString());
-        } else {
-          params.append('range', readinessDateRange);
-        }
-        console.log('Readiness filter params:', params.toString());
       }
       
-      const response = await api.get(`${url}?${params.toString()}`);
-      setAnalyticsData(response.data);
+      // Fetch work readiness trend data for the readiness chart
+      if (chartType === 'readiness' || !chartType) {
+        try {
+          console.log('📊 TeamAnalytics: Fetching work readiness trend data...');
+          console.log('📊 TeamAnalytics: Parameters:', {
+            userId: user.id,
+            dateRange: readinessDateRange,
+            startDate: readinessStartDate?.toISOString(),
+            endDate: readinessEndDate?.toISOString()
+          });
+          
+          const trendData = await SupabaseAPI.getWorkReadinessTrendData(
+            user.id, 
+            readinessDateRange, 
+            readinessStartDate, 
+            readinessEndDate
+          );
+          
+          console.log('📊 TeamAnalytics: Trend data received:', trendData);
+          
+          // Merge trend data into analytics result
+          if (trendData?.analytics?.readinessTrendData) {
+            (result.analytics as any).readinessTrendData = trendData.analytics.readinessTrendData;
+            console.log('✅ TeamAnalytics: Work readiness trend data added:', trendData.analytics.readinessTrendData.length, 'points');
+            console.log('📊 TeamAnalytics: Chart data details:', trendData.analytics.readinessTrendData.map((item: TrendDataItem) => ({
+              date: item.date,
+              notFitForWork: item.notFitForWork,
+              minorConcernsFitForWork: item.minorConcernsFitForWork,
+              fitForWork: item.fitForWork,
+              total: item.total
+            })));
+          } else {
+            console.log('📊 TeamAnalytics: No trend data received');
+          }
+        } catch (trendError) {
+          console.error('❌ TeamAnalytics: Error fetching work readiness trend data:', trendError);
+          // Keep empty array if trend data fails
+          (result.analytics as any).readinessTrendData = [];
+        }
+      }
+      
+      setAnalyticsData(result);
+      setError(null);
+      setLastFetchTime(Date.now());
+      
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to fetch analytics data');
-      setToast({ message: 'Failed to load analytics data', type: 'error' });
+      console.log('No analytics data found:', err);
+      // Set empty analytics data instead of error
+      setAnalyticsData({
+        teamLeader: {
+          id: user?.id || '',
+          firstName: user?.firstName || '',
+          lastName: user?.lastName || '',
+          email: user?.email || '',
+          team: user?.team || '',
+          managedTeams: []
+        },
+        analytics: {
+          totalTeamMembers: 0,
+          activeTeamMembers: 0,
+          workReadinessStats: {
+            total: 0,
+            completed: 0,
+            pending: 0,
+            notStarted: 0,
+            completedPercentage: 0,
+            pendingPercentage: 0,
+            notStartedPercentage: 0,
+            byStatus: [],
+            monthlyAssessments: []
+          },
+          todayWorkReadinessStats: {
+            completed: 0,
+            total: 0
+          },
+          loginStats: {
+            todayLogins: 0,
+            weeklyLogins: 0,
+            monthlyLogins: 0,
+            dailyBreakdown: []
+          },
+          teamPerformance: [],
+          readinessTrendData: [],
+          complianceRate: 0,
+          activityRate: 0
+        }
+      });
+      setError(null);
     } finally {
       // Only set main loading false for initial load
       if (!chartType) {
-      setLoading(false);
+        setLoading(false);
       }
     }
   };
@@ -278,313 +612,602 @@ const TeamAnalytics: React.FC = () => {
           }
         `}
       </style>
-      <div style={{ 
+      <Box sx={{ 
         width: '100%',
-        padding: '1rem',
-        background: '#f8fafc',
+        p: { xs: 2, sm: 2.5, md: 3 },
+        background: COLORS.neutral[50],
         minHeight: '100vh',
-        position: 'relative'
+        position: 'relative',
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
       }}>
-        <div style={{ marginBottom: '2rem' }}>
-          <h1 style={{ 
-            fontSize: '2rem', 
-            fontWeight: 'bold', 
-            color: '#1a202c', 
-            marginBottom: '0.5rem',
-            textShadow: '0 2px 4px rgba(0,0,0,0.1)'
-          }}>
-            Team Analytics
-          </h1>
-          <p style={{ 
-            color: '#4a5568', 
-            marginBottom: '0.25rem',
-            textShadow: '0 1px 2px rgba(0,0,0,0.05)'
-          }}>
-            Comprehensive analytics and performance metrics for your team
-          </p>
-        </div>
+        {/* Modern Header with gradient */}
+        <Box sx={{ 
+          mb: { xs: 3, md: 4 },
+          position: 'relative',
+          zIndex: 1,
+          background: { 
+            xs: COLORS.gradient.header, 
+            md: COLORS.gradient.header 
+          },
+          padding: { xs: '24px 20px', md: '32px 24px' },
+          borderRadius: { xs: '16px', md: '20px' },
+          boxShadow: '0 10px 40px -10px rgba(99, 102, 241, 0.3)',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexDirection: { xs: 'column', md: 'row' },
+          gap: { xs: 2, md: 3 },
+          animation: 'slideUp 0.6s ease-out',
+        }}>
+          <Box sx={{ textAlign: { xs: 'center', md: 'left' }, flex: 1 }}>
+            <Typography variant="h4" sx={{ 
+              fontWeight: 700, 
+              color: COLORS.neutral.white,
+              mb: 0.5,
+              fontSize: { xs: '1.5rem', sm: '1.75rem', md: '2rem' },
+              letterSpacing: '-0.02em',
+            }}>
+              Team Analytics
+            </Typography>
+            <Typography variant="body1" sx={{ 
+              color: 'rgba(255,255,255,0.9)',
+              textAlign: { xs: 'center', md: 'left' },
+              fontSize: { xs: '0.875rem', md: '0.9375rem' },
+              fontWeight: 400,
+              maxWidth: '600px',
+            }}>
+              Monitor team performance and track key metrics in real-time
+            </Typography>
+          </Box>
+          
+          {/* Refresh Button - Modern glassmorphic style */}
+          <Button
+            onClick={() => fetchAnalyticsData(undefined, true)}
+            disabled={loading}
+            variant="contained"
+            sx={{
+              background: loading ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.2)',
+              backdropFilter: 'blur(10px)',
+              color: COLORS.neutral.white,
+              padding: { xs: '10px 20px', md: '12px 28px' },
+              borderRadius: '12px',
+              fontSize: { xs: '0.8125rem', md: '0.875rem' },
+              fontWeight: '600',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1.5,
+              border: '1px solid rgba(255,255,255,0.3)',
+              boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+              transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+              textTransform: 'none',
+              minWidth: { xs: '140px', md: '160px' },
+              '&:hover': {
+                background: loading ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.25)',
+                transform: 'translateY(-2px)',
+                boxShadow: '0 6px 20px rgba(0,0,0,0.15)',
+                border: '1px solid rgba(255,255,255,0.4)',
+              },
+              '&:active': {
+                transform: 'translateY(0)',
+              },
+              '&:disabled': {
+                background: 'rgba(255,255,255,0.15)',
+                color: 'rgba(255,255,255,0.7)',
+                border: '1px solid rgba(255,255,255,0.2)',
+              }
+            }}
+          >
+            <svg 
+              width="18" 
+              height="18" 
+              viewBox="0 0 24 24" 
+              fill="none" 
+              stroke="currentColor" 
+              strokeWidth="2.5" 
+              strokeLinecap="round" 
+              strokeLinejoin="round"
+              style={{
+                animation: loading ? 'spin 1s linear infinite' : 'none'
+              }}
+            >
+              <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>
+              <path d="M21 3v5h-5"/>
+              <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/>
+              <path d="M3 21v-5h5"/>
+            </svg>
+            {loading ? 'Refreshing...' : 'Refresh'}
+          </Button>
+        </Box>
 
         {analyticsData && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-            {/* Overview Cards */}
-            <div style={{ 
-              display: 'grid', 
-              gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', 
-              gap: '1.5rem',
-              marginBottom: '2rem'
+          <Box sx={{ 
+            display: 'flex', 
+            flexDirection: 'column', 
+            gap: { xs: 3, md: 3 },
+            position: 'relative',
+            zIndex: 1,
+          }}>
+            {/* Overview Cards - Modern clean design */}
+            <Box sx={{ 
+              display: 'grid',
+              gridTemplateColumns: { 
+                xs: '1fr', 
+                sm: 'repeat(2, 1fr)', 
+                md: 'repeat(4, 1fr)' 
+              },
+              gap: { xs: 2, md: 2.5 },
+              mb: { xs: 2, md: 2 }
             }}>
-              <div style={{
-                background: 'rgba(255, 255, 255, 0.25)',
-                backdropFilter: 'blur(20px)',
-                borderRadius: '1rem',
-                padding: '1.5rem',
-                boxShadow: '0 8px 32px 0 rgba(31, 38, 135, 0.37)',
-                border: '1px solid rgba(255, 255, 255, 0.18)',
-                transition: 'all 0.3s ease',
+              {/* Total Team Members Card */}
+              <Box sx={{
+                background: COLORS.neutral.white,
+                borderRadius: '16px',
+                padding: { xs: '20px', md: '24px' },
+                boxShadow: '0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.02)',
+                border: `1px solid ${COLORS.neutral[200]}`,
+                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
                 position: 'relative',
-                overflow: 'hidden'
+                overflow: 'hidden',
+                animation: 'slideUp 0.6s ease-out 0.1s both',
+                '&:hover': {
+                  transform: 'translateY(-4px)',
+                  boxShadow: `0 12px 24px -8px ${COLORS.primary.main}40`,
+                  borderColor: COLORS.primary.light,
+                },
+                '&::before': {
+                  content: '""',
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  height: '4px',
+                  background: `linear-gradient(90deg, ${COLORS.primary.main}, ${COLORS.primary.light})`,
+                  borderRadius: '16px 16px 0 0',
+                }
               }}>
-                <div style={{ display: 'flex', alignItems: 'center' }}>
-                  <div style={{ 
-                    width: '3rem', 
-                    height: '3rem', 
-                    backgroundColor: 'rgba(59, 130, 246, 0.15)', 
-                    backdropFilter: 'blur(10px)',
-                    border: '1px solid rgba(59, 130, 246, 0.2)',
-                    boxShadow: '0 4px 16px 0 rgba(59, 130, 246, 0.2)', 
-                    borderRadius: '0.75rem', 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    justifyContent: 'center',
-                    marginRight: '1rem'
-                  }}>
-                    <svg width="24" height="24" fill="none" stroke="#3b82f6" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-                      </svg>
-                    </div>
-                  <div>
-                    <p style={{ fontSize: '0.875rem', fontWeight: '500', color: '#6b7280', margin: '0 0 0.25rem 0' }}>
-                      Total Team Members
-                    </p>
-                    <p style={{ fontSize: '1.875rem', fontWeight: '600', color: '#1f2937', margin: '0' }}>
+                <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+                  <Box>
+                    <Typography sx={{ 
+                      fontSize: '0.8125rem', 
+                      fontWeight: '600', 
+                      color: COLORS.neutral[500], 
+                      mb: 1,
+                      letterSpacing: '0.02em',
+                      textTransform: 'uppercase',
+                    }}>
+                      Total Members
+                    </Typography>
+                    <Typography sx={{ 
+                      fontSize: { xs: '2rem', md: '2.25rem' }, 
+                      fontWeight: '700', 
+                      color: COLORS.neutral[900],
+                      lineHeight: 1,
+                      letterSpacing: '-0.02em',
+                    }}>
                       {analyticsData.analytics.totalTeamMembers}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              <div style={{
-                background: 'rgba(255, 255, 255, 0.25)',
-                backdropFilter: 'blur(20px)',
-                borderRadius: '1rem',
-                padding: '1.5rem',
-                boxShadow: '0 8px 32px 0 rgba(31, 38, 135, 0.37)',
-                border: '1px solid rgba(255, 255, 255, 0.18)',
-                transition: 'all 0.3s ease',
-                position: 'relative',
-                overflow: 'hidden'
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center' }}>
-                  <div style={{ 
-                    width: '3rem', 
-                    height: '3rem', 
-                    backgroundColor: 'rgba(34, 197, 94, 0.15)', 
-                    backdropFilter: 'blur(10px)',
-                    border: '1px solid rgba(34, 197, 94, 0.2)',
-                    boxShadow: '0 4px 16px 0 rgba(34, 197, 94, 0.2)', 
-                    borderRadius: '0.75rem', 
+                    </Typography>
+                  </Box>
+                  <Box sx={{ 
+                    width: { xs: '48px', md: '56px' }, 
+                    height: { xs: '48px', md: '56px' }, 
+                    background: COLORS.primary.bg,
+                    borderRadius: '14px', 
                     display: 'flex', 
                     alignItems: 'center', 
                     justifyContent: 'center',
-                    marginRight: '1rem'
                   }}>
-                    <svg width="24" height="24" fill="none" stroke="#22c55e" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                      </svg>
-                    </div>
-                  <div>
-                    <p style={{ fontSize: '0.875rem', fontWeight: '500', color: '#6b7280', margin: '0 0 0.25rem 0' }}>
+                    <svg width="28" height="28" fill="none" stroke={COLORS.primary.main} strokeWidth="2" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                    </svg>
+                  </Box>
+                </Box>
+              </Box>
+
+              {/* Active Members Card */}
+              <Box sx={{
+                background: COLORS.neutral.white,
+                borderRadius: '16px',
+                padding: { xs: '20px', md: '24px' },
+                boxShadow: '0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.02)',
+                border: `1px solid ${COLORS.neutral[200]}`,
+                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                position: 'relative',
+                overflow: 'hidden',
+                animation: 'slideUp 0.6s ease-out 0.2s both',
+                '&:hover': {
+                  transform: 'translateY(-4px)',
+                  boxShadow: `0 12px 24px -8px ${COLORS.success.main}40`,
+                  borderColor: COLORS.success.light,
+                },
+                '&::before': {
+                  content: '""',
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  height: '4px',
+                  background: `linear-gradient(90deg, ${COLORS.success.main}, ${COLORS.success.light})`,
+                  borderRadius: '16px 16px 0 0',
+                }
+              }}>
+                <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+                  <Box>
+                    <Typography sx={{ 
+                      fontSize: '0.8125rem', 
+                      fontWeight: '600', 
+                      color: COLORS.neutral[500], 
+                      mb: 1,
+                      letterSpacing: '0.02em',
+                      textTransform: 'uppercase',
+                    }}>
                       Active Members
-                    </p>
-                    <p style={{ fontSize: '1.875rem', fontWeight: '600', color: '#1f2937', margin: '0' }}>
+                    </Typography>
+                    <Typography sx={{ 
+                      fontSize: { xs: '2rem', md: '2.25rem' }, 
+                      fontWeight: '700', 
+                      color: COLORS.neutral[900],
+                      lineHeight: 1,
+                      letterSpacing: '-0.02em',
+                    }}>
                       {analyticsData.analytics.activeTeamMembers}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              <div style={{
-                background: 'rgba(255, 255, 255, 0.25)',
-                backdropFilter: 'blur(20px)',
-                borderRadius: '1rem',
-                padding: '1.5rem',
-                boxShadow: '0 8px 32px 0 rgba(31, 38, 135, 0.37)',
-                border: '1px solid rgba(255, 255, 255, 0.18)',
-                transition: 'all 0.3s ease',
-                position: 'relative',
-                overflow: 'hidden'
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center' }}>
-                  <div style={{ 
-                    width: '3rem', 
-                    height: '3rem', 
-                    backgroundColor: 'rgba(147, 51, 234, 0.15)', 
-                    backdropFilter: 'blur(10px)',
-                    border: '1px solid rgba(147, 51, 234, 0.2)',
-                    boxShadow: '0 4px 16px 0 rgba(147, 51, 234, 0.2)', 
-                    borderRadius: '0.75rem', 
+                    </Typography>
+                  </Box>
+                  <Box sx={{ 
+                    width: { xs: '48px', md: '56px' }, 
+                    height: { xs: '48px', md: '56px' }, 
+                    background: COLORS.success.bg,
+                    borderRadius: '14px', 
                     display: 'flex', 
                     alignItems: 'center', 
                     justifyContent: 'center',
-                    marginRight: '1rem'
                   }}>
-                    <svg width="24" height="24" fill="none" stroke="#9333ea" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                    </div>
-                  <div>
-                    <p style={{ fontSize: '0.875rem', fontWeight: '500', color: '#6b7280', margin: '0 0 0.25rem 0' }}>
-                      Work Readiness Completed
-                    </p>
-                    <p style={{ fontSize: '1.875rem', fontWeight: '600', color: '#1f2937', margin: '0' }}>
+                    <svg width="28" height="28" fill="none" stroke={COLORS.success.main} strokeWidth="2" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    </svg>
+                  </Box>
+                </Box>
+              </Box>
+
+              {/* Work Readiness Completed Card */}
+              <Box sx={{
+                background: COLORS.neutral.white,
+                borderRadius: '16px',
+                padding: { xs: '20px', md: '24px' },
+                boxShadow: '0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.02)',
+                border: `1px solid ${COLORS.neutral[200]}`,
+                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                position: 'relative',
+                overflow: 'hidden',
+                animation: 'slideUp 0.6s ease-out 0.3s both',
+                '&:hover': {
+                  transform: 'translateY(-4px)',
+                  boxShadow: `0 12px 24px -8px ${COLORS.purple.main}40`,
+                  borderColor: COLORS.purple.light,
+                },
+                '&::before': {
+                  content: '""',
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  height: '4px',
+                  background: `linear-gradient(90deg, ${COLORS.purple.main}, ${COLORS.purple.light})`,
+                  borderRadius: '16px 16px 0 0',
+                }
+              }}>
+                <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+                  <Box>
+                    <Typography sx={{ 
+                      fontSize: '0.8125rem', 
+                      fontWeight: '600', 
+                      color: COLORS.neutral[500], 
+                      mb: 1,
+                      letterSpacing: '0.02em',
+                      textTransform: 'uppercase',
+                    }}>
+                      Completed
+                    </Typography>
+                    <Typography sx={{ 
+                      fontSize: { xs: '2rem', md: '2.25rem' }, 
+                      fontWeight: '700', 
+                      color: COLORS.neutral[900],
+                      lineHeight: 1,
+                      letterSpacing: '-0.02em',
+                    }}>
                       {analyticsData.analytics.workReadinessStats.completed}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              <div style={{
-                background: 'rgba(255, 255, 255, 0.25)',
-                backdropFilter: 'blur(20px)',
-                borderRadius: '1rem',
-                padding: '1.5rem',
-                boxShadow: '0 8px 32px 0 rgba(31, 38, 135, 0.37)',
-                border: '1px solid rgba(255, 255, 255, 0.18)',
-                transition: 'all 0.3s ease',
-                position: 'relative',
-                overflow: 'hidden'
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center' }}>
-                  <div style={{ 
-                    width: '3rem', 
-                    height: '3rem', 
-                    backgroundColor: 'rgba(249, 115, 22, 0.15)', 
-                    backdropFilter: 'blur(10px)',
-                    border: '1px solid rgba(249, 115, 22, 0.2)',
-                    boxShadow: '0 4px 16px 0 rgba(249, 115, 22, 0.2)', 
-                    borderRadius: '0.75rem', 
+                    </Typography>
+                  </Box>
+                  <Box sx={{ 
+                    width: { xs: '48px', md: '56px' }, 
+                    height: { xs: '48px', md: '56px' }, 
+                    background: COLORS.purple.bg,
+                    borderRadius: '14px', 
                     display: 'flex', 
                     alignItems: 'center', 
                     justifyContent: 'center',
-                    marginRight: '1rem'
                   }}>
-                    <svg width="24" height="24" fill="none" stroke="#f97316" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                  </div>
-                  <div>
-                    <p style={{ fontSize: '0.875rem', fontWeight: '500', color: '#6b7280', margin: '0 0 0.25rem 0' }}>
-                      Compliance Rate
-                    </p>
-                    <p style={{ fontSize: '1.875rem', fontWeight: '600', color: '#1f2937', margin: '0' }}>
-                      {analyticsData.analytics.complianceRate}%
-                    </p>
-                  </div>
-                  </div>
-                </div>
-              </div>
+                    <svg width="28" height="28" fill="none" stroke={COLORS.purple.main} strokeWidth="2" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  </Box>
+                </Box>
+              </Box>
 
-            {/* Date Filter Controls */}
-            <div style={{
-              backgroundColor: 'rgba(255, 255, 255, 0.9)',
-              backdropFilter: 'blur(10px)',
-              borderRadius: '1rem',
-              padding: '1.5rem',
-              boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
-              border: '1px solid rgba(255, 255, 255, 0.2)',
-              marginBottom: '1.5rem'
+              {/* Compliance Rate Card */}
+              <Box sx={{
+                background: COLORS.neutral.white,
+                borderRadius: '16px',
+                padding: { xs: '20px', md: '24px' },
+                boxShadow: '0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.02)',
+                border: `1px solid ${COLORS.neutral[200]}`,
+                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                position: 'relative',
+                overflow: 'hidden',
+                animation: 'slideUp 0.6s ease-out 0.4s both',
+                '&:hover': {
+                  transform: 'translateY(-4px)',
+                  boxShadow: `0 12px 24px -8px ${COLORS.warning.main}40`,
+                  borderColor: COLORS.warning.light,
+                },
+                '&::before': {
+                  content: '""',
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  height: '4px',
+                  background: `linear-gradient(90deg, ${COLORS.warning.main}, ${COLORS.warning.light})`,
+                  borderRadius: '16px 16px 0 0',
+                }
+              }}>
+                <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+                  <Box>
+                    <Typography sx={{ 
+                      fontSize: '0.8125rem', 
+                      fontWeight: '600', 
+                      color: COLORS.neutral[500], 
+                      mb: 1,
+                      letterSpacing: '0.02em',
+                      textTransform: 'uppercase',
+                    }}>
+                      Compliance Rate
+                    </Typography>
+                    <Typography sx={{ 
+                      fontSize: { xs: '2rem', md: '2.25rem' }, 
+                      fontWeight: '700', 
+                      color: COLORS.neutral[900],
+                      lineHeight: 1,
+                      letterSpacing: '-0.02em',
+                    }}>
+                      {analyticsData.analytics.complianceRate}%
+                    </Typography>
+                  </Box>
+                  <Box sx={{ 
+                    width: { xs: '48px', md: '56px' }, 
+                    height: { xs: '48px', md: '56px' }, 
+                    background: COLORS.warning.bg,
+                    borderRadius: '14px', 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    justifyContent: 'center',
+                  }}>
+                    <svg width="28" height="28" fill="none" stroke={COLORS.warning.main} strokeWidth="2" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                    </svg>
+                  </Box>
+                </Box>
+              </Box>
+            </Box>
+
+            {/* Date Filter Controls - Modern Design */}
+            <Box sx={{
+              backgroundColor: COLORS.neutral.white,
+              borderRadius: '16px',
+              padding: { xs: '16px', md: '20px' },
+              boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+              border: `1px solid ${COLORS.neutral[200]}`,
+              mb: 2,
             }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                  {['week', 'month', 'year', 'custom'].map((range) => (
-                    <button
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
+                <Typography sx={{ 
+                  fontSize: '0.875rem', 
+                  fontWeight: '600', 
+                  color: COLORS.neutral[600],
+                  minWidth: '80px'
+                }}>
+                  Time Period:
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                  {(['week', 'month', 'year', 'custom'] as const).map((range) => (
+                    <Button
                       key={range}
-                      onClick={() => setWorkReadinessDateRange(range as any)}
-                      style={{
-                        padding: '0.5rem 1rem',
-                        borderRadius: '0.5rem',
-                        border: '1px solid rgba(0, 0, 0, 0.1)',
-                        backgroundColor: workReadinessDateRange === range ? 'rgba(59, 130, 246, 0.1)' : 'transparent',
-                        color: workReadinessDateRange === range ? '#3b82f6' : '#6b7280',
-                        fontWeight: workReadinessDateRange === range ? 600 : 500,
-                        cursor: 'pointer',
-                        transition: 'all 0.2s ease'
+                      onClick={(e) => {
+                        e.preventDefault();
+                        setWorkReadinessDateRange(range);
+                      }}
+                      variant={workReadinessDateRange === range ? 'contained' : 'outlined'}
+                      sx={{
+                        padding: '8px 20px',
+                        borderRadius: '10px',
+                        border: workReadinessDateRange === range ? 'none' : `1.5px solid ${COLORS.neutral[300]}`,
+                        backgroundColor: workReadinessDateRange === range ? COLORS.primary.main : 'transparent',
+                        color: workReadinessDateRange === range ? COLORS.neutral.white : COLORS.neutral[600],
+                        fontSize: '0.8125rem',
+                        fontWeight: '600',
+                        textTransform: 'capitalize',
+                        minWidth: '80px',
+                        transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                        '&:hover': {
+                          backgroundColor: workReadinessDateRange === range ? COLORS.primary.dark : COLORS.neutral[100],
+                          borderColor: workReadinessDateRange === range ? COLORS.primary.dark : COLORS.neutral[400],
+                          transform: 'translateY(-2px)',
+                          boxShadow: '0 4px 8px rgba(0,0,0,0.1)',
+                        },
                       }}
                     >
-                      {range.charAt(0).toUpperCase() + range.slice(1)}
-                    </button>
+                      {range}
+                    </Button>
                   ))}
-                </div>
+                </Box>
                 {workReadinessDateRange === 'custom' && (
-                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                  <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', flexWrap: 'wrap', mt: { xs: 1, md: 0 } }}>
                     <input
                       type="date"
                       value={workReadinessStartDate.toISOString().split('T')[0]}
-                      onChange={(e) => setWorkReadinessStartDate(new Date(e.target.value))}
+                      onChange={(e) => {
+                        e.preventDefault();
+                        setWorkReadinessStartDate(new Date(e.target.value));
+                      }}
                       style={{
-                        padding: '0.5rem',
-                        borderRadius: '0.5rem',
-                        border: '1px solid rgba(0, 0, 0, 0.1)',
-                        backgroundColor: 'transparent'
+                        padding: '10px 14px',
+                        borderRadius: '10px',
+                        border: `1.5px solid ${COLORS.neutral[300]}`,
+                        backgroundColor: COLORS.neutral.white,
+                        fontSize: '0.875rem',
+                        fontWeight: '500',
+                        color: COLORS.neutral[700],
+                        fontFamily: 'inherit',
                       }}
                     />
-                    <span style={{ color: '#6b7280' }}>to</span>
+                    <Typography sx={{ color: COLORS.neutral[400], fontWeight: '600' }}>→</Typography>
                     <input
                       type="date"
                       value={workReadinessEndDate.toISOString().split('T')[0]}
-                      onChange={(e) => setWorkReadinessEndDate(new Date(e.target.value))}
+                      onChange={(e) => {
+                        e.preventDefault();
+                        setWorkReadinessEndDate(new Date(e.target.value));
+                      }}
                       style={{
-                        padding: '0.5rem',
-                        borderRadius: '0.5rem',
-                        border: '1px solid rgba(0, 0, 0, 0.1)',
-                        backgroundColor: 'transparent'
+                        padding: '10px 14px',
+                        borderRadius: '10px',
+                        border: `1.5px solid ${COLORS.neutral[300]}`,
+                        backgroundColor: COLORS.neutral.white,
+                        fontSize: '0.875rem',
+                        fontWeight: '500',
+                        color: COLORS.neutral[700],
+                        fontFamily: 'inherit',
                       }}
                     />
-                  </div>
+                  </Box>
                 )}
-              </div>
-            </div>
+              </Box>
+            </Box>
 
-            {/* Charts Section */}
-            <div style={{ 
+            {/* Charts Section - Improved Grid Layout */}
+            <Box sx={{ 
               display: 'grid',
-              gridTemplateColumns: '1fr 1fr',
-              gap: '1.5rem',
-              marginBottom: '2rem'
+              gridTemplateColumns: { 
+                xs: '1fr', 
+                md: 'repeat(2, 1fr)' 
+              },
+              gap: { xs: 2.5, md: 3 },
+              mb: 3,
             }}>
               {/* Work Readiness Distribution Pie Chart */}
-              <div 
-                style={{
-                  backgroundColor: 'rgba(255, 255, 255, 0.9)',
-                  backdropFilter: 'blur(10px)',
-                  borderRadius: '1rem',
-                  padding: '2rem',
-                  boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
-                  border: '1px solid rgba(255, 255, 255, 0.2)',
+              <Box 
+                sx={{
+                  backgroundColor: COLORS.neutral.white,
+                  borderRadius: '16px',
+                  padding: { xs: '20px', md: '24px' },
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+                  border: `1px solid ${COLORS.neutral[200]}`,
                   cursor: 'pointer',
-                  transition: 'transform 0.2s ease, box-shadow 0.2s ease'
+                  transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                  '&:hover': {
+                    transform: 'translateY(-4px)',
+                    boxShadow: '0 12px 24px -8px rgba(0,0,0,0.15)',
+                    borderColor: COLORS.primary.light,
+                  }
                 }}
                 onClick={() => setShowChartModal(true)}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.transform = 'scale(1.02)';
-                  e.currentTarget.style.boxShadow = '0 8px 12px -1px rgba(0, 0, 0, 0.15), 0 4px 6px -1px rgba(0, 0, 0, 0.1)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.transform = 'scale(1)';
-                  e.currentTarget.style.boxShadow = '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)';
-                }}
               >
-                <h3 style={{ 
-                  fontSize: '1.25rem', 
-                  fontWeight: '600', 
-                  color: '#1f2937',
-                  marginBottom: '1rem',
-                  textAlign: 'center'
+                <Box sx={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  mb: 2,
                 }}>
-                  Work Readiness Distribution
-                </h3>
-                <div style={{ 
-                  fontSize: '0.875rem', 
-                  color: '#6b7280',
-                  textAlign: 'center',
-                  marginBottom: '1rem'
+                  <Typography sx={{ 
+                    fontSize: { xs: '1.0625rem', md: '1.125rem' }, 
+                    fontWeight: '700', 
+                    color: COLORS.neutral[900],
+                    letterSpacing: '-0.01em',
+                  }}>
+                    Work Readiness Distribution
+                  </Typography>
+                  <Button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowChartModal(true);
+                    }}
+                    sx={{
+                      padding: '8px 14px',
+                      backgroundColor: COLORS.neutral[100],
+                      border: `1px solid ${COLORS.neutral[200]}`,
+                      borderRadius: '10px',
+                      color: COLORS.neutral[600],
+                      fontSize: '0.8125rem',
+                      fontWeight: '600',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 0.75,
+                      transition: 'all 0.2s ease',
+                      textTransform: 'none',
+                      minWidth: 'auto',
+                      '&:hover': {
+                        backgroundColor: COLORS.neutral[200],
+                        borderColor: COLORS.neutral[300],
+                        color: COLORS.neutral[800],
+                      },
+                    }}
+                  >
+                    <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                    </svg>
+                    <span>Expand</span>
+                  </Button>
+                </Box>
+                <Box sx={{ 
+                  display: 'flex',
+                  gap: 2,
+                  justifyContent: 'center',
+                  mb: 2,
+                  flexWrap: 'wrap',
                 }}>
-                  Total: {analyticsData.analytics.workReadinessStats.total || 0} | 
-                  Completed: {analyticsData.analytics.workReadinessStats.completed || 0} | 
-                  Pending: {analyticsData.analytics.workReadinessStats.pending || 0} | 
-                  Not Started: {analyticsData.analytics.workReadinessStats.notStarted || ((analyticsData.analytics.workReadinessStats.total || 0) - ((analyticsData.analytics.workReadinessStats.completed || 0) + (analyticsData.analytics.workReadinessStats.pending || 0)))}
-                </div>
-                  <div style={{ height: '300px', position: 'relative' }}>
+                  <Box sx={{ textAlign: 'center' }}>
+                    <Typography sx={{ fontSize: '0.75rem', fontWeight: '600', color: COLORS.neutral[500], mb: 0.25 }}>
+                      Total
+                    </Typography>
+                    <Typography sx={{ fontSize: '1.25rem', fontWeight: '700', color: COLORS.neutral[900] }}>
+                      {analyticsData.analytics.workReadinessStats.total || 0}
+                    </Typography>
+                  </Box>
+                  <Box sx={{ textAlign: 'center' }}>
+                    <Typography sx={{ fontSize: '0.75rem', fontWeight: '600', color: COLORS.success.main, mb: 0.25 }}>
+                      Completed
+                    </Typography>
+                    <Typography sx={{ fontSize: '1.25rem', fontWeight: '700', color: COLORS.success.main }}>
+                      {analyticsData.analytics.workReadinessStats.completed || 0}
+                    </Typography>
+                  </Box>
+                  <Box sx={{ textAlign: 'center' }}>
+                    <Typography sx={{ fontSize: '0.75rem', fontWeight: '600', color: COLORS.warning.main, mb: 0.25 }}>
+                      Pending
+                    </Typography>
+                    <Typography sx={{ fontSize: '1.25rem', fontWeight: '700', color: COLORS.warning.main }}>
+                      {analyticsData.analytics.workReadinessStats.pending || 0}
+                    </Typography>
+                  </Box>
+                  <Box sx={{ textAlign: 'center' }}>
+                    <Typography sx={{ fontSize: '0.75rem', fontWeight: '600', color: COLORS.error.main, mb: 0.25 }}>
+                      Not Started
+                    </Typography>
+                    <Typography sx={{ fontSize: '1.25rem', fontWeight: '700', color: COLORS.error.main }}>
+                      {analyticsData.analytics.workReadinessStats.notStarted || ((analyticsData.analytics.workReadinessStats.total || 0) - ((analyticsData.analytics.workReadinessStats.completed || 0) + (analyticsData.analytics.workReadinessStats.pending || 0)))}
+                    </Typography>
+                  </Box>
+                </Box>
+                <Box sx={{ height: { xs: '240px', md: '300px' }, position: 'relative' }}>
                     {(() => {
                       const completed = analyticsData.analytics.workReadinessStats.completed || 0;
                       const pending = analyticsData.analytics.workReadinessStats.pending || 0;
@@ -598,32 +1221,32 @@ const TeamAnalytics: React.FC = () => {
                       // If no data, show empty state
                       if (total === 0) {
                         return (
-                          <div style={{
+                          <Box sx={{
                             height: '100%',
                             display: 'flex',
                             flexDirection: 'column',
                             alignItems: 'center',
                             justifyContent: 'center',
-                            color: '#6b7280'
+                            color: COLORS.neutral[500]
                           }}>
-                            <div style={{
-                              width: '120px',
-                              height: '120px',
+                            <Box sx={{
+                              width: '100px',
+                              height: '100px',
                               borderRadius: '50%',
-                              backgroundColor: 'rgba(107, 114, 128, 0.1)',
+                              backgroundColor: COLORS.neutral[100],
                               display: 'flex',
                               alignItems: 'center',
                               justifyContent: 'center',
-                              marginBottom: '0.5rem'
+                              mb: 2,
                             }}>
-                              <svg width="40" height="40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                              <svg width="48" height="48" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
                               </svg>
-                            </div>
-                            <p style={{ fontSize: '0.875rem', textAlign: 'center', margin: 0 }}>
+                            </Box>
+                            <Typography sx={{ fontSize: '0.875rem', fontWeight: '600', textAlign: 'center' }}>
                               No data for selected period
-                            </p>
-                          </div>
+                            </Typography>
+                          </Box>
                         );
                       }
                       
@@ -634,17 +1257,17 @@ const TeamAnalytics: React.FC = () => {
                             datasets: [{
                               data: [completed, pending, notStarted],
                               backgroundColor: [
-                                'rgba(34, 197, 94, 0.8)', // Green for completed
-                                'rgba(245, 158, 11, 0.8)', // Orange for pending
-                                'rgba(239, 68, 68, 0.8)' // Red for not started
+                                COLORS.success.main,
+                                COLORS.warning.main,
+                                COLORS.error.main
                               ],
                               borderColor: [
-                                'rgba(34, 197, 94, 1)',
-                                'rgba(245, 158, 11, 1)',
-                                'rgba(239, 68, 68, 1)' // Red border for not started
+                                COLORS.success.dark,
+                                COLORS.warning.dark,
+                                COLORS.error.dark
                               ],
-                              borderWidth: 1,
-                              hoverOffset: 4
+                              borderWidth: 2,
+                              hoverOffset: 8
                             }]
                           }}
                       options={{
@@ -683,20 +1306,22 @@ const TeamAnalytics: React.FC = () => {
                     />
                   );
                 })()}
-                  </div>
-                </div>
+                </Box>
+              </Box>
 
               {/* Login Activity Line Chart */}
               <div 
                 style={{
                   backgroundColor: 'rgba(255, 255, 255, 0.9)',
                   backdropFilter: 'blur(10px)',
-                  borderRadius: '1rem',
-                  padding: '2rem',
+                  borderRadius: window.innerWidth <= 768 ? '1rem' : '1rem',
+                  padding: window.innerWidth <= 768 ? '1.5rem' : '2rem',
                   boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
                   border: '1px solid rgba(255, 255, 255, 0.2)',
                   cursor: 'pointer',
-                  transition: 'transform 0.2s ease, box-shadow 0.2s ease'
+                  transition: 'transform 0.2s ease, box-shadow 0.2s ease',
+                  width: window.innerWidth <= 768 ? '100%' : 'auto',
+                  flex: window.innerWidth <= 768 ? 'none' : '1'
                 }}
                 onClick={() => setShowLoginModal(true)}
                 onMouseEnter={(e) => {
@@ -708,16 +1333,58 @@ const TeamAnalytics: React.FC = () => {
                   e.currentTarget.style.boxShadow = '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)';
                 }}
               >
-                <h3 style={{ 
-                  fontSize: '1.25rem', 
-                  fontWeight: '600', 
-                  color: '#1f2937',
-                  marginBottom: '1.5rem',
-                  textAlign: 'center'
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  marginBottom: window.innerWidth <= 768 ? '0.75rem' : '1.5rem'
                 }}>
-                  Login Activity Trends
-                </h3>
-                <div style={{ height: '300px', position: 'relative' }}>
+                  <h3 style={{ 
+                    fontSize: window.innerWidth <= 768 ? '1rem' : '1.25rem', 
+                    fontWeight: '600', 
+                    color: '#1f2937',
+                    margin: 0
+                  }}>
+                    Login Activity Trends
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => setShowLoginModal(true)}
+                    style={{
+                      padding: '0.5rem 1rem',
+                      backgroundColor: '#f3f4f6',
+                      border: '1px solid #d1d5db',
+                      borderRadius: '0.375rem',
+                      color: '#6b7280',
+                      fontSize: '0.875rem',
+                      fontWeight: '500',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                      transition: 'all 0.2s ease',
+                      boxShadow: '0 1px 2px rgba(0, 0, 0, 0.05)',
+                      position: 'relative',
+                      zIndex: 10
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = '#e5e7eb';
+                      e.currentTarget.style.borderColor = '#9ca3af';
+                      e.currentTarget.style.color = '#374151';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = '#f3f4f6';
+                      e.currentTarget.style.borderColor = '#d1d5db';
+                      e.currentTarget.style.color = '#6b7280';
+                    }}
+                  >
+                    <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                    </svg>
+                    <span>Expand</span>
+                  </button>
+                </div>
+                <div style={{ height: window.innerWidth <= 768 ? '200px' : '300px', position: 'relative' }}>
                   {(() => {
                     const todayLogins = analyticsData.analytics.loginStats.todayLogins || 0;
                     const weeklyLogins = analyticsData.analytics.loginStats.weeklyLogins || 0;
@@ -789,6 +1456,10 @@ const TeamAnalytics: React.FC = () => {
                         options={{
                           responsive: true,
                           maintainAspectRatio: false,
+                          animation: {
+                            duration: 1000,
+                            easing: 'easeInOutQuart'
+                          },
                           plugins: {
                             legend: {
                               position: 'top',
@@ -805,8 +1476,20 @@ const TeamAnalytics: React.FC = () => {
                               beginAtZero: true,
                               ticks: {
                                 stepSize: 1
+                              },
+                              grid: {
+                                color: 'rgba(0, 0, 0, 0.1)'
+                              }
+                            },
+                            x: {
+                              grid: {
+                                color: 'rgba(0, 0, 0, 0.1)'
                               }
                             }
+                          },
+                          interaction: {
+                            intersect: false,
+                            mode: 'index'
                           }
                         }}
                       />
@@ -814,28 +1497,28 @@ const TeamAnalytics: React.FC = () => {
                   })()}
                 </div>
               </div>
-            </div>
+            </Box>
 
             {/* Team Performance Bar Chart */}
             <div style={{
               backgroundColor: 'rgba(255, 255, 255, 0.9)',
               backdropFilter: 'blur(10px)',
-              borderRadius: '1rem',
-              padding: '2rem',
+              borderRadius: window.innerWidth <= 768 ? '0.5rem' : '1rem',
+              padding: window.innerWidth <= 768 ? '0.75rem' : '2rem',
               boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
               border: '1px solid rgba(255, 255, 255, 0.2)',
-              marginBottom: '2rem'
+              marginBottom: window.innerWidth <= 768 ? '0.75rem' : '2rem'
             }}>
               <h3 style={{ 
-                fontSize: '1.25rem', 
+                fontSize: window.innerWidth <= 768 ? '1rem' : '1.25rem', 
                 fontWeight: '600', 
                 color: '#1f2937',
-                marginBottom: '1.5rem',
+                marginBottom: window.innerWidth <= 768 ? '0.75rem' : '1.5rem',
                 textAlign: 'center'
               }}>
                 Team Performance Overview
               </h3>
-              <div style={{ height: '300px', position: 'relative' }}>
+              <div style={{ height: window.innerWidth <= 768 ? '200px' : '300px', position: 'relative' }}>
                 <Bar
                   data={{
                     labels: analyticsData.analytics.teamPerformance.map((member: any) => 
@@ -877,21 +1560,21 @@ const TeamAnalytics: React.FC = () => {
             <div style={{
               backgroundColor: 'rgba(255, 255, 255, 0.9)',
               backdropFilter: 'blur(10px)',
-              borderRadius: '1rem',
+              borderRadius: window.innerWidth <= 768 ? '1rem' : '1rem',
               padding: '1.5rem',
               boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
               border: '1px solid rgba(255, 255, 255, 0.2)',
-              marginBottom: '2rem'
+              marginBottom: window.innerWidth <= 768 ? '2rem' : '2rem'
             }}>
          <div style={{ 
            display: 'flex', 
            justifyContent: 'space-between', 
            alignItems: 'center',
-           marginBottom: '1.5rem'
+                  marginBottom: window.innerWidth <= 768 ? '1.5rem' : '1.5rem'
          }}>
            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
              <h3 style={{ 
-               fontSize: '1.25rem', 
+               fontSize: window.innerWidth <= 768 ? '1rem' : '1.25rem', 
                fontWeight: '600', 
                color: '#1f2937',
                margin: '0'
@@ -931,30 +1614,50 @@ const TeamAnalytics: React.FC = () => {
                Expand
              </button>
            </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                <div style={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '1rem',
+                  flexDirection: window.innerWidth <= 768 ? 'column' : 'row',
+                  alignSelf: window.innerWidth <= 768 ? 'flex-start' : 'center',
+                  width: '100%'
+                }}>
                   {/* Legend */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <div style={{
-                      width: '12px',
-                      height: '12px',
-                      borderRadius: '50%',
-                      backgroundColor: '#9333ea'
-                    }}></div>
-                    <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>Not Fit for Work</span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <div style={{
-                      width: '12px',
-                      height: '12px',
-                      borderRadius: '50%',
-                      backgroundColor: '#3b82f6'
-                    }}></div>
-                    <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>Minor Concerns Fit for Work</span>
+                  <div style={{ 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    gap: window.innerWidth <= 768 ? '1rem' : '0.5rem',
+                    flexWrap: window.innerWidth <= 768 ? 'wrap' : 'nowrap',
+                    width: window.innerWidth <= 768 ? '100%' : 'auto',
+                    justifyContent: window.innerWidth <= 768 ? 'space-between' : 'flex-start'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: window.innerWidth <= 768 ? '45%' : 'auto' }}>
+                      <div style={{
+                        width: '12px',
+                        height: '12px',
+                        borderRadius: '50%',
+                        backgroundColor: '#9333ea',
+                        flexShrink: 0
+                      }}></div>
+                      <span style={{ fontSize: '0.875rem', color: '#6b7280', whiteSpace: 'nowrap' }}>Not Fit for Work</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: window.innerWidth <= 768 ? '45%' : 'auto' }}>
+                      <div style={{
+                        width: '12px',
+                        height: '12px',
+                        borderRadius: '50%',
+                        backgroundColor: '#3b82f6',
+                        flexShrink: 0
+                      }}></div>
+                      <span style={{ fontSize: '0.875rem', color: '#6b7280', whiteSpace: 'nowrap' }}>Minor Concerns</span>
+                    </div>
                   </div>
                   {/* Time Filter Dropdown */}
-                  <select 
+                  <div style={{ marginTop: window.innerWidth <= 768 ? '1rem' : '0', width: window.innerWidth <= 768 ? '100%' : 'auto' }}>
+                    <select 
                     value={readinessDateRange}
                     onChange={(e) => {
+                      e.preventDefault();
                       console.log('Readiness filter changed to:', e.target.value);
                       setReadinessDateRange(e.target.value as 'week' | 'month' | 'year' | 'custom');
                     }}
@@ -967,7 +1670,8 @@ const TeamAnalytics: React.FC = () => {
                       fontSize: '0.875rem',
                       color: readinessChartLoading ? '#9ca3af' : '#374151',
                       cursor: readinessChartLoading ? 'not-allowed' : 'pointer',
-                      opacity: readinessChartLoading ? 0.7 : 1
+                      opacity: readinessChartLoading ? 0.7 : 1,
+                      width: window.innerWidth <= 768 ? '100%' : 'auto'
                     }}
                   >
                     <option value="week">This Week</option>
@@ -975,6 +1679,7 @@ const TeamAnalytics: React.FC = () => {
                     <option value="year">This Year</option>
                     <option value="custom">Custom Range</option>
                   </select>
+                  </div>
                   
                   {/* Custom Date Range Inputs */}
                   {readinessDateRange === 'custom' && (
@@ -982,7 +1687,10 @@ const TeamAnalytics: React.FC = () => {
                       <input
                         type="date"
                         value={readinessStartDate.toISOString().split('T')[0]}
-                        onChange={(e) => setReadinessStartDate(new Date(e.target.value))}
+                        onChange={(e) => {
+                          e.preventDefault();
+                          setReadinessStartDate(new Date(e.target.value));
+                        }}
                         style={{
                           padding: '0.5rem',
                           borderRadius: '0.375rem',
@@ -995,7 +1703,10 @@ const TeamAnalytics: React.FC = () => {
                       <input
                         type="date"
                         value={readinessEndDate.toISOString().split('T')[0]}
-                        onChange={(e) => setReadinessEndDate(new Date(e.target.value))}
+                        onChange={(e) => {
+                          e.preventDefault();
+                          setReadinessEndDate(new Date(e.target.value));
+                        }}
                         style={{
                           padding: '0.5rem',
                           borderRadius: '0.375rem',
@@ -1009,7 +1720,7 @@ const TeamAnalytics: React.FC = () => {
                 </div>
               </div>
               
-              <div style={{ height: '300px', position: 'relative' }}>
+              <div style={{ height: window.innerWidth <= 768 ? '200px' : '300px', position: 'relative' }}>
                 {readinessChartLoading ? (
                   <div style={{
                     display: 'flex',
@@ -1052,13 +1763,13 @@ const TeamAnalytics: React.FC = () => {
                   return hasData ? (
                   <Line
                     data={{
-                      labels: analyticsData.analytics.readinessTrendData.map(item => 
+                      labels: analyticsData.analytics.readinessTrendData.map((item: TrendDataItem) => 
                         new Date(item.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
                       ),
                       datasets: [
                         {
                           label: 'Not Fit for Work',
-                          data: analyticsData.analytics.readinessTrendData.map(item => item.notFitForWork),
+                          data: analyticsData.analytics.readinessTrendData.map((item: TrendDataItem) => item.notFitForWork),
                           borderColor: 'rgba(147, 51, 234, 1)',
                           backgroundColor: 'rgba(147, 51, 234, 0.1)',
                           fill: true,
@@ -1074,7 +1785,7 @@ const TeamAnalytics: React.FC = () => {
                         },
                         {
                           label: 'Minor Concerns Fit for Work',
-                          data: analyticsData.analytics.readinessTrendData.map(item => item.minorConcernsFitForWork),
+                          data: analyticsData.analytics.readinessTrendData.map((item: TrendDataItem) => item.minorConcernsFitForWork),
                           borderColor: 'rgba(59, 130, 246, 1)',
                           backgroundColor: 'rgba(59, 130, 246, 0.1)',
                           fill: true,
@@ -1195,16 +1906,19 @@ const TeamAnalytics: React.FC = () => {
 
             {/* Additional Analytics Cards */}
             <div style={{ 
-              display: 'grid', 
-              gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', 
-              gap: '1.5rem',
-              marginBottom: '2rem'
+              display: 'flex',
+              flexDirection: window.innerWidth <= 768 ? 'column' : 'row',
+              flexWrap: window.innerWidth <= 768 ? 'nowrap' : 'wrap',
+              gap: window.innerWidth <= 768 ? '2rem' : '1.5rem',
+              marginBottom: window.innerWidth <= 768 ? '2rem' : '2rem'
             }}>
               <div style={{
                 background: 'rgba(255, 255, 255, 0.25)',
                 backdropFilter: 'blur(20px)',
-                borderRadius: '1rem',
-                padding: '1.5rem',
+                borderRadius: window.innerWidth <= 768 ? '1rem' : '1rem',
+                padding: window.innerWidth <= 768 ? '1.5rem' : '1.5rem',
+                width: window.innerWidth <= 768 ? '100%' : 'auto',
+                flex: window.innerWidth <= 768 ? 'none' : '1',
                 boxShadow: '0 8px 32px 0 rgba(31, 38, 135, 0.37)',
                 border: '1px solid rgba(255, 255, 255, 0.18)',
                 transition: 'all 0.3s ease',
@@ -1213,8 +1927,8 @@ const TeamAnalytics: React.FC = () => {
               }}>
                 <div style={{ display: 'flex', alignItems: 'center' }}>
                   <div style={{ 
-                    width: '3rem', 
-                    height: '3rem', 
+                    width: window.innerWidth <= 768 ? '2rem' : '3rem', 
+                    height: window.innerWidth <= 768 ? '2rem' : '3rem', 
                     backgroundColor: 'rgba(59, 130, 246, 0.15)', 
                     backdropFilter: 'blur(10px)',
                     border: '1px solid rgba(59, 130, 246, 0.2)',
@@ -1243,8 +1957,10 @@ const TeamAnalytics: React.FC = () => {
               <div style={{
                 background: 'rgba(255, 255, 255, 0.25)',
                 backdropFilter: 'blur(20px)',
-                borderRadius: '1rem',
-                padding: '1.5rem',
+                borderRadius: window.innerWidth <= 768 ? '1rem' : '1rem',
+                padding: window.innerWidth <= 768 ? '1.5rem' : '1.5rem',
+                width: window.innerWidth <= 768 ? '100%' : 'auto',
+                flex: window.innerWidth <= 768 ? 'none' : '1',
                 boxShadow: '0 8px 32px 0 rgba(31, 38, 135, 0.37)',
                 border: '1px solid rgba(255, 255, 255, 0.18)',
                 transition: 'all 0.3s ease',
@@ -1253,8 +1969,8 @@ const TeamAnalytics: React.FC = () => {
               }}>
                 <div style={{ display: 'flex', alignItems: 'center' }}>
                   <div style={{ 
-                    width: '3rem', 
-                    height: '3rem', 
+                    width: window.innerWidth <= 768 ? '2rem' : '3rem', 
+                    height: window.innerWidth <= 768 ? '2rem' : '3rem', 
                     backgroundColor: 'rgba(34, 197, 94, 0.15)', 
                     backdropFilter: 'blur(10px)',
                     border: '1px solid rgba(34, 197, 94, 0.2)',
@@ -1283,8 +1999,10 @@ const TeamAnalytics: React.FC = () => {
               <div style={{
                 background: 'rgba(255, 255, 255, 0.25)',
                 backdropFilter: 'blur(20px)',
-                borderRadius: '1rem',
-                padding: '1.5rem',
+                borderRadius: window.innerWidth <= 768 ? '1rem' : '1rem',
+                padding: window.innerWidth <= 768 ? '1.5rem' : '1.5rem',
+                width: window.innerWidth <= 768 ? '100%' : 'auto',
+                flex: window.innerWidth <= 768 ? 'none' : '1',
                 boxShadow: '0 8px 32px 0 rgba(31, 38, 135, 0.37)',
                 border: '1px solid rgba(255, 255, 255, 0.18)',
                 transition: 'all 0.3s ease',
@@ -1293,8 +2011,8 @@ const TeamAnalytics: React.FC = () => {
               }}>
                 <div style={{ display: 'flex', alignItems: 'center' }}>
                   <div style={{ 
-                    width: '3rem', 
-                    height: '3rem', 
+                    width: window.innerWidth <= 768 ? '2rem' : '3rem', 
+                    height: window.innerWidth <= 768 ? '2rem' : '3rem', 
                     backgroundColor: 'rgba(147, 51, 234, 0.15)', 
                     backdropFilter: 'blur(10px)',
                     border: '1px solid rgba(147, 51, 234, 0.2)',
@@ -1324,28 +2042,90 @@ const TeamAnalytics: React.FC = () => {
               </div>
             </div>
 
+            {/* Emissions Trend Chart - Work Readiness Analytics */}
+            <div style={{
+              backgroundColor: 'rgba(255, 255, 255, 0.9)',
+              backdropFilter: 'blur(10px)',
+              borderRadius: window.innerWidth <= 768 ? '1rem' : '1rem',
+              padding: '1.5rem',
+              boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
+              border: '1px solid rgba(255, 255, 255, 0.2)',
+              marginBottom: window.innerWidth <= 768 ? '2rem' : '2rem'
+            }}>
+              <TrendChart
+                title={`Emissions Trend - Work Readiness Analytics ${analyticsData?.analytics?.readinessTrendData?.length > 0 ? `(${analyticsData.analytics.readinessTrendData.length} data points)` : '(No data yet)'}`}
+                data={analyticsData?.analytics?.readinessTrendData?.length > 0 ? analyticsData.analytics.readinessTrendData.map((item: TrendDataItem) => ({
+                  date: item.date,
+                  fitForWork: item.fitForWork,
+                  minorConcernsFitForWork: item.minorConcernsFitForWork,
+                  notFitForWork: item.notFitForWork,
+                  total: item.total
+                })) : []}
+                isLoading={readinessChartLoading}
+                height={400}
+                externalTimePeriod={readinessDateRange === 'custom' ? 'week' : readinessDateRange as 'week' | 'month' | 'year'}
+                onTimePeriodChange={(period) => {
+                  console.log('🔄 TeamAnalytics: Time period changed to:', period);
+                  // Update the date range state
+                  if (period === 'week') {
+                    setReadinessDateRange('week');
+                    setReadinessStartDate(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
+                    setReadinessEndDate(new Date());
+                  } else if (period === 'month') {
+                    setReadinessDateRange('month');
+                    setReadinessStartDate(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000));
+                    setReadinessEndDate(new Date());
+                  } else if (period === 'year') {
+                    setReadinessDateRange('year');
+                    setReadinessStartDate(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000));
+                    setReadinessEndDate(new Date());
+                  }
+                  // The useEffect will automatically trigger and fetch new data
+                }}
+              />
+              
+              {/* Database Connection Status */}
+              <div style={{ 
+                marginTop: '1rem', 
+                padding: '1rem', 
+                backgroundColor: '#f8fafc', 
+                borderRadius: '0.5rem',
+                border: '1px solid #e2e8f0'
+              }}>
+                <Typography variant="caption" sx={{ color: '#64748b', fontSize: '0.75rem' }}>
+                  📊 Connected to live database • Data from: <code>{analyticsData?.teamLeader?.team || 'Team'}</code> work readiness assessments
+                </Typography>
+                {analyticsData?.analytics?.readinessTrendData?.length > 0 && (
+                  <Typography variant="caption" sx={{ color: '#10b981', fontSize: '0.75rem', ml: 1 }}>
+                    ✅ {analyticsData.analytics.readinessTrendData.length} data points loaded
+                  </Typography>
+                )}
+              </div>
+            </div>
+
             {/* Charts Section - Full Width */}
             <div style={{ 
-              display: 'grid', 
+              display: window.innerWidth <= 768 ? 'flex' : 'grid', 
+              flexDirection: window.innerWidth <= 768 ? 'column' : 'row',
               gridTemplateColumns: '2fr 1fr', 
-              gap: '1.5rem',
-              marginBottom: '2rem'
+              gap: window.innerWidth <= 768 ? '3rem' : '1.5rem',
+              marginBottom: window.innerWidth <= 768 ? '3rem' : '2rem'
             }}>
               {/* Team Performance Table - Takes 2/3 of space */}
               <div style={{
                 backgroundColor: 'rgba(255, 255, 255, 0.9)',
                 backdropFilter: 'blur(10px)',
-                borderRadius: '1rem',
+                borderRadius: window.innerWidth <= 768 ? '1rem' : '1rem',
                 boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
                 border: '1px solid rgba(255, 255, 255, 0.2)',
                 overflow: 'hidden'
               }}>
                 <div style={{ 
-                  padding: '1.5rem', 
+                  padding: window.innerWidth <= 768 ? '1.5rem' : '1.5rem', 
                   borderBottom: '1px solid rgba(229, 231, 235, 0.5)' 
                 }}>
                   <h3 style={{ 
-                    fontSize: '1.25rem', 
+                    fontSize: window.innerWidth <= 768 ? '1rem' : '1.25rem', 
                     fontWeight: '600', 
                     color: '#1f2937',
                     margin: '0'
@@ -1512,14 +2292,14 @@ const TeamAnalytics: React.FC = () => {
               <div style={{
                 backgroundColor: 'rgba(255, 255, 255, 0.9)',
                 backdropFilter: 'blur(10px)',
-                borderRadius: '1rem',
-                padding: '1.5rem',
+                borderRadius: window.innerWidth <= 768 ? '1rem' : '1rem',
+                padding: window.innerWidth <= 768 ? '1.5rem' : '1.5rem',
                 boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
                 border: '1px solid rgba(255, 255, 255, 0.2)',
                 height: 'fit-content'
               }}>
                 <h3 style={{ 
-                  fontSize: '1.25rem', 
+                  fontSize: window.innerWidth <= 768 ? '1rem' : '1.25rem', 
                   fontWeight: '600', 
                   color: '#1f2937',
                   margin: '0 0 1.5rem 0'
@@ -1633,13 +2413,13 @@ const TeamAnalytics: React.FC = () => {
             <div style={{
               backgroundColor: 'rgba(255, 255, 255, 0.9)',
               backdropFilter: 'blur(10px)',
-              borderRadius: '1rem',
-              padding: '2rem',
+              borderRadius: window.innerWidth <= 768 ? '1rem' : '1rem',
+              padding: window.innerWidth <= 768 ? '1.5rem' : '2rem',
               boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
               border: '1px solid rgba(255, 255, 255, 0.2)'
             }}>
               <h3 style={{ 
-                fontSize: '1.5rem', 
+                fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem', 
                 fontWeight: '600', 
                 color: '#1f2937',
                 margin: '0 0 2rem 0'
@@ -1648,16 +2428,19 @@ const TeamAnalytics: React.FC = () => {
               </h3>
               
               <div style={{ 
-                display: 'grid', 
-                gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', 
-                gap: '1.5rem' 
+                display: 'flex',
+                flexDirection: window.innerWidth <= 768 ? 'column' : 'row',
+                flexWrap: window.innerWidth <= 768 ? 'nowrap' : 'wrap',
+                gap: window.innerWidth <= 768 ? '2rem' : '1.5rem'
               }}>
                 <div style={{
                   backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                  borderRadius: '1rem',
-                  padding: '2rem',
+                  borderRadius: window.innerWidth <= 768 ? '1rem' : '1rem',
+                  padding: window.innerWidth <= 768 ? '1.5rem' : '2rem',
                   textAlign: 'center',
-                  border: '2px solid rgba(59, 130, 246, 0.2)'
+                  border: '2px solid rgba(59, 130, 246, 0.2)',
+                  width: window.innerWidth <= 768 ? '100%' : 'auto',
+                  flex: window.innerWidth <= 768 ? 'none' : '1'
                 }}>
                   <div style={{ fontSize: '3rem', fontWeight: '700', color: '#3b82f6', marginBottom: '1rem' }}>
                     {analyticsData.analytics.loginStats.todayLogins}
@@ -1669,10 +2452,12 @@ const TeamAnalytics: React.FC = () => {
 
                 <div style={{
                   backgroundColor: 'rgba(34, 197, 94, 0.1)',
-                  borderRadius: '1rem',
-                  padding: '2rem',
+                  borderRadius: window.innerWidth <= 768 ? '1rem' : '1rem',
+                  padding: window.innerWidth <= 768 ? '1.5rem' : '2rem',
                   textAlign: 'center',
-                  border: '2px solid rgba(34, 197, 94, 0.2)'
+                  border: '2px solid rgba(34, 197, 94, 0.2)',
+                  width: window.innerWidth <= 768 ? '100%' : 'auto',
+                  flex: window.innerWidth <= 768 ? 'none' : '1'
                 }}>
                   <div style={{ fontSize: '3rem', fontWeight: '700', color: '#22c55e', marginBottom: '1rem' }}>
                     {analyticsData.analytics.loginStats.weeklyLogins}
@@ -1684,8 +2469,8 @@ const TeamAnalytics: React.FC = () => {
 
                 <div style={{
                   backgroundColor: 'rgba(147, 51, 234, 0.1)',
-                  borderRadius: '1rem',
-                  padding: '2rem',
+                  borderRadius: window.innerWidth <= 768 ? '1rem' : '1rem',
+                  padding: window.innerWidth <= 768 ? '1.5rem' : '2rem',
                   textAlign: 'center',
                   border: '2px solid rgba(147, 51, 234, 0.2)'
                 }}>
@@ -1698,7 +2483,7 @@ const TeamAnalytics: React.FC = () => {
                 </div>
               </div>
             </div>
-          </div>
+          </Box>
         )}
 
         {toast && (
@@ -1709,7 +2494,6 @@ const TeamAnalytics: React.FC = () => {
             onClose={handleCloseToast}
           />
         )}
-      </div>
 
         {/* Chart Modal */}
         {showChartModal && analyticsData && (
@@ -1723,18 +2507,19 @@ const TeamAnalytics: React.FC = () => {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            zIndex: 1000,
-            padding: '2rem'
+            zIndex: 99999,
+            padding: window.innerWidth <= 768 ? '0' : '2rem'
           }}>
             <div style={{
               backgroundColor: 'white',
-              borderRadius: '1rem',
-              padding: '2rem',
-              maxWidth: '800px',
+              borderRadius: window.innerWidth <= 768 ? '0' : '1rem',
+              padding: window.innerWidth <= 768 ? '0.75rem' : '2rem',
+              maxWidth: '100vw',
               width: '100%',
-              maxHeight: '90vh',
+              maxHeight: '100vh',
               overflow: 'auto',
-              position: 'relative'
+              position: 'relative',
+              boxShadow: window.innerWidth <= 768 ? 'none' : '0 25px 50px -12px rgba(0, 0, 0, 0.25)'
             }}>
               <button
                 onClick={() => setShowChartModal(false)}
@@ -1748,17 +2533,17 @@ const TeamAnalytics: React.FC = () => {
                   padding: '0.5rem',
                   borderRadius: '0.5rem',
                   color: '#6b7280',
-                  fontSize: '1.5rem'
+                  fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem'
                 }}
               >
                 ×
               </button>
               
               <h2 style={{
-                fontSize: '1.5rem',
+                fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem',
                 fontWeight: '600',
                 color: '#1f2937',
-                marginBottom: '1rem',
+                marginBottom: window.innerWidth <= 768 ? '0.75rem' : '1rem',
                 textAlign: 'center'
               }}>
                 Work Readiness Distribution - Detailed View
@@ -1768,8 +2553,8 @@ const TeamAnalytics: React.FC = () => {
               <div style={{
                 display: 'flex',
                 justifyContent: 'center',
-                gap: '0.5rem',
-                marginBottom: '1.5rem',
+                gap: window.innerWidth <= 768 ? '0.125rem' : '0.5rem',
+                marginBottom: window.innerWidth <= 768 ? '0.75rem' : '1.5rem',
                 flexWrap: 'wrap'
               }}>
                 {['week', 'month', 'year', 'custom'].map((range) => (
@@ -1777,13 +2562,13 @@ const TeamAnalytics: React.FC = () => {
                     key={range}
                     onClick={() => setWorkReadinessDateRange(range as any)}
                     style={{
-                      padding: '0.5rem 1rem',
+                      padding: window.innerWidth <= 768 ? '0.25rem 0.5rem' : '0.5rem 1rem',
                       borderRadius: '0.5rem',
                       border: '1px solid rgba(0, 0, 0, 0.1)',
                       backgroundColor: workReadinessDateRange === range ? 'rgba(59, 130, 246, 0.1)' : 'transparent',
                       color: workReadinessDateRange === range ? '#3b82f6' : '#6b7280',
                       fontWeight: workReadinessDateRange === range ? 600 : 500,
-                      fontSize: '0.875rem',
+                      fontSize: window.innerWidth <= 768 ? '0.625rem' : '0.875rem',
                       cursor: 'pointer',
                       transition: 'all 0.2s ease'
                     }}
@@ -1836,7 +2621,7 @@ const TeamAnalytics: React.FC = () => {
                   display: 'flex',
                   justifyContent: 'center',
                   gap: '1rem',
-                  marginBottom: '1.5rem',
+                  marginBottom: window.innerWidth <= 768 ? '0.75rem' : '1.5rem',
                   flexWrap: 'wrap'
                 }}>
                   <div>
@@ -1846,7 +2631,10 @@ const TeamAnalytics: React.FC = () => {
                     <input
                       type="date"
                       value={workReadinessStartDate.toISOString().split('T')[0]}
-                      onChange={(e) => setWorkReadinessStartDate(new Date(e.target.value))}
+                      onChange={(e) => {
+                        e.preventDefault();
+                        setWorkReadinessStartDate(new Date(e.target.value));
+                      }}
                       style={{
                         padding: '0.5rem',
                         borderRadius: '0.375rem',
@@ -1862,7 +2650,10 @@ const TeamAnalytics: React.FC = () => {
                     <input
                       type="date"
                       value={workReadinessEndDate.toISOString().split('T')[0]}
-                      onChange={(e) => setWorkReadinessEndDate(new Date(e.target.value))}
+                      onChange={(e) => {
+                        e.preventDefault();
+                        setWorkReadinessEndDate(new Date(e.target.value));
+                      }}
                       style={{
                         padding: '0.5rem',
                         borderRadius: '0.375rem',
@@ -1989,8 +2780,9 @@ const TeamAnalytics: React.FC = () => {
               
               <div style={{
                 marginTop: '2rem',
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                display: 'flex',
+                flexDirection: window.innerWidth <= 768 ? 'column' : 'row',
+                flexWrap: window.innerWidth <= 768 ? 'nowrap' : 'wrap',
                 gap: '1rem'
               }}>
                 <div style={{
@@ -2000,7 +2792,7 @@ const TeamAnalytics: React.FC = () => {
                   border: '1px solid #bbf7d0'
                 }}>
                   <div style={{ fontSize: '0.875rem', color: '#166534', fontWeight: '600' }}>Completed</div>
-                  <div style={{ fontSize: '1.5rem', color: '#166534', fontWeight: '700' }}>
+                  <div style={{ fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem', color: '#166534', fontWeight: '700' }}>
                     {analyticsData.analytics.workReadinessStats.completed || 0}
                   </div>
                 </div>
@@ -2011,7 +2803,7 @@ const TeamAnalytics: React.FC = () => {
                   border: '1px solid #fed7aa'
                 }}>
                   <div style={{ fontSize: '0.875rem', color: '#92400e', fontWeight: '600' }}>Pending</div>
-                  <div style={{ fontSize: '1.5rem', color: '#92400e', fontWeight: '700' }}>
+                  <div style={{ fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem', color: '#92400e', fontWeight: '700' }}>
                     {analyticsData.analytics.workReadinessStats.pending || 0}
                   </div>
                   <div style={{ fontSize: '0.75rem', color: '#92400e', fontWeight: '500' }}>
@@ -2025,7 +2817,7 @@ const TeamAnalytics: React.FC = () => {
                   border: '1px solid #fecaca'
                 }}>
                   <div style={{ fontSize: '0.875rem', color: '#991b1b', fontWeight: '600' }}>Not Started</div>
-                  <div style={{ fontSize: '1.5rem', color: '#991b1b', fontWeight: '700' }}>
+                  <div style={{ fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem', color: '#991b1b', fontWeight: '700' }}>
                     {analyticsData.analytics.workReadinessStats.notStarted || 
                      ((analyticsData.analytics.workReadinessStats.total || 0) - 
                       ((analyticsData.analytics.workReadinessStats.completed || 0) + 
@@ -2064,12 +2856,12 @@ const TeamAnalytics: React.FC = () => {
             alignItems: 'center',
             justifyContent: 'center',
             zIndex: 1000,
-            padding: '2rem'
+            padding: window.innerWidth <= 768 ? '0.75rem' : '2rem'
           }}>
             <div style={{
               backgroundColor: 'white',
-              borderRadius: '1rem',
-              padding: '2rem',
+              borderRadius: window.innerWidth <= 768 ? '0.5rem' : '1rem',
+              padding: window.innerWidth <= 768 ? '0.75rem' : '2rem',
               maxWidth: '900px',
               width: '100%',
               maxHeight: '90vh',
@@ -2088,34 +2880,79 @@ const TeamAnalytics: React.FC = () => {
                   padding: '0.5rem',
                   borderRadius: '0.5rem',
                   color: '#6b7280',
-                  fontSize: '1.5rem'
+                  fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem'
                 }}
               >
                 ×
               </button>
               
-              <h2 style={{
-                fontSize: '1.5rem',
-                fontWeight: '600',
-                color: '#1f2937',
-                marginBottom: '1rem',
-                textAlign: 'center'
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: '1rem'
               }}>
-                Login Activity Trends - Detailed View
-              </h2>
+                <h2 style={{
+                  fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem',
+                  fontWeight: '600',
+                  color: '#1f2937',
+                  margin: 0
+                }}>
+                  Login Activity Trends - Detailed View
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => setShowLoginModal(true)}
+                  style={{
+                    padding: '0.5rem 1rem',
+                    backgroundColor: '#f3f4f6',
+                    border: '1px solid #d1d5db',
+                    borderRadius: '0.375rem',
+                    color: '#6b7280',
+                    fontSize: '0.875rem',
+                    fontWeight: '500',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.5rem',
+                    transition: 'all 0.2s ease',
+                    boxShadow: '0 1px 2px rgba(0, 0, 0, 0.05)',
+                    position: 'relative',
+                    zIndex: 10
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = '#e5e7eb';
+                    e.currentTarget.style.borderColor = '#9ca3af';
+                    e.currentTarget.style.color = '#374151';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = '#f3f4f6';
+                    e.currentTarget.style.borderColor = '#d1d5db';
+                    e.currentTarget.style.color = '#6b7280';
+                  }}
+                >
+                  <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                  </svg>
+                  <span>Expand</span>
+                </button>
+              </div>
               
               {/* Date Filter Controls */}
               <div style={{
                 display: 'flex',
                 justifyContent: 'center',
                 gap: '0.5rem',
-                marginBottom: '1.5rem',
+                marginBottom: window.innerWidth <= 768 ? '0.75rem' : '1.5rem',
                 flexWrap: 'wrap'
               }}>
                 {['week', 'month', 'year', 'custom'].map((range) => (
                   <button
                     key={range}
-                    onClick={() => setLoginDateRange(range as any)}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      setLoginDateRange(range as any);
+                    }}
                     style={{
                       padding: '0.5rem 1rem',
                       borderRadius: '0.5rem',
@@ -2171,12 +3008,12 @@ const TeamAnalytics: React.FC = () => {
               </div>
               
               {/* Custom Date Range */}
-              {workReadinessDateRange === 'custom' && (
+              {loginDateRange === 'custom' && (
                 <div style={{
                   display: 'flex',
                   justifyContent: 'center',
                   gap: '1rem',
-                  marginBottom: '1.5rem',
+                  marginBottom: window.innerWidth <= 768 ? '0.75rem' : '1.5rem',
                   flexWrap: 'wrap'
                 }}>
                   <div>
@@ -2185,8 +3022,11 @@ const TeamAnalytics: React.FC = () => {
                     </label>
                     <input
                       type="date"
-                      value={workReadinessStartDate.toISOString().split('T')[0]}
-                      onChange={(e) => setWorkReadinessStartDate(new Date(e.target.value))}
+                      value={loginStartDate.toISOString().split('T')[0]}
+                      onChange={(e) => {
+                        e.preventDefault();
+                        setLoginStartDate(new Date(e.target.value));
+                      }}
                       style={{
                         padding: '0.5rem',
                         borderRadius: '0.375rem',
@@ -2201,8 +3041,11 @@ const TeamAnalytics: React.FC = () => {
                     </label>
                     <input
                       type="date"
-                      value={workReadinessEndDate.toISOString().split('T')[0]}
-                      onChange={(e) => setWorkReadinessEndDate(new Date(e.target.value))}
+                      value={loginEndDate.toISOString().split('T')[0]}
+                      onChange={(e) => {
+                        e.preventDefault();
+                        setLoginEndDate(new Date(e.target.value));
+                      }}
                       style={{
                         padding: '0.5rem',
                         borderRadius: '0.375rem',
@@ -2359,8 +3202,9 @@ const TeamAnalytics: React.FC = () => {
               
               <div style={{
                 marginTop: '2rem',
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                display: 'flex',
+                flexDirection: window.innerWidth <= 768 ? 'column' : 'row',
+                flexWrap: window.innerWidth <= 768 ? 'nowrap' : 'wrap',
                 gap: '1rem'
               }}>
                 <div style={{
@@ -2370,7 +3214,7 @@ const TeamAnalytics: React.FC = () => {
                   border: '1px solid #bae6fd'
                 }}>
                   <div style={{ fontSize: '0.875rem', color: '#0369a1', fontWeight: '600' }}>Today's Logins</div>
-                  <div style={{ fontSize: '1.5rem', color: '#0369a1', fontWeight: '700' }}>
+                  <div style={{ fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem', color: '#0369a1', fontWeight: '700' }}>
                     {analyticsData.analytics.loginStats.todayLogins || 0}
                   </div>
                 </div>
@@ -2381,7 +3225,7 @@ const TeamAnalytics: React.FC = () => {
                   border: '1px solid #bbf7d0'
                 }}>
                   <div style={{ fontSize: '0.875rem', color: '#166534', fontWeight: '600' }}>Weekly Logins</div>
-                  <div style={{ fontSize: '1.5rem', color: '#166534', fontWeight: '700' }}>
+                  <div style={{ fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem', color: '#166534', fontWeight: '700' }}>
                     {analyticsData.analytics.loginStats.weeklyLogins || 0}
                   </div>
                 </div>
@@ -2392,7 +3236,7 @@ const TeamAnalytics: React.FC = () => {
                   border: '1px solid #fde68a'
                 }}>
                   <div style={{ fontSize: '0.875rem', color: '#92400e', fontWeight: '600' }}>Monthly Logins</div>
-                  <div style={{ fontSize: '1.5rem', color: '#92400e', fontWeight: '700' }}>
+                  <div style={{ fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem', color: '#92400e', fontWeight: '700' }}>
                     {analyticsData.analytics.loginStats.monthlyLogins || 0}
                   </div>
                 </div>
@@ -2415,12 +3259,12 @@ const TeamAnalytics: React.FC = () => {
             alignItems: 'center',
             justifyContent: 'center',
             zIndex: 1000,
-            padding: '2rem'
+            padding: window.innerWidth <= 768 ? '0.75rem' : '2rem'
           }}>
             <div style={{
               backgroundColor: 'white',
-              borderRadius: '1rem',
-              padding: '2rem',
+              borderRadius: window.innerWidth <= 768 ? '0.5rem' : '1rem',
+              padding: window.innerWidth <= 768 ? '0.75rem' : '2rem',
               maxWidth: '90vw',
               maxHeight: '90vh',
               width: '1000px',
@@ -2446,7 +3290,7 @@ const TeamAnalytics: React.FC = () => {
                   justifyContent: 'center',
                   width: '2rem',
                   height: '2rem',
-                  fontSize: '1.25rem',
+                  fontSize: window.innerWidth <= 768 ? '1rem' : '1.25rem',
                   transition: 'all 0.2s ease'
                 }}
                 onMouseEnter={(e) => {
@@ -2464,7 +3308,7 @@ const TeamAnalytics: React.FC = () => {
               {/* Modal Header */}
               <div style={{ marginBottom: '2rem' }}>
                 <h2 style={{
-                  fontSize: '1.5rem',
+                  fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem',
                   fontWeight: '600',
                   color: '#1f2937',
                   margin: '0 0 0.5rem 0'
@@ -2485,7 +3329,7 @@ const TeamAnalytics: React.FC = () => {
                 display: 'flex', 
                 justifyContent: 'space-between', 
                 alignItems: 'center',
-                marginBottom: '2rem',
+                marginBottom: window.innerWidth <= 768 ? '0.75rem' : '2rem',
                 padding: '1rem',
                 backgroundColor: '#f9fafb',
                 borderRadius: '0.75rem',
@@ -2518,6 +3362,7 @@ const TeamAnalytics: React.FC = () => {
                   <select 
                     value={readinessDateRange}
                     onChange={(e) => {
+                      e.preventDefault();
                       console.log('Modal readiness filter changed to:', e.target.value);
                       setReadinessDateRange(e.target.value as 'week' | 'month' | 'year' | 'custom');
                     }}
@@ -2546,7 +3391,10 @@ const TeamAnalytics: React.FC = () => {
                       <input
                         type="date"
                         value={readinessStartDate.toISOString().split('T')[0]}
-                        onChange={(e) => setReadinessStartDate(new Date(e.target.value))}
+                        onChange={(e) => {
+                          e.preventDefault();
+                          setReadinessStartDate(new Date(e.target.value));
+                        }}
                         style={{
                           padding: '0.75rem',
                           borderRadius: '0.375rem',
@@ -2559,7 +3407,10 @@ const TeamAnalytics: React.FC = () => {
                       <input
                         type="date"
                         value={readinessEndDate.toISOString().split('T')[0]}
-                        onChange={(e) => setReadinessEndDate(new Date(e.target.value))}
+                        onChange={(e) => {
+                          e.preventDefault();
+                          setReadinessEndDate(new Date(e.target.value));
+                        }}
                         style={{
                           padding: '0.75rem',
                           borderRadius: '0.375rem',
@@ -2602,13 +3453,13 @@ const TeamAnalytics: React.FC = () => {
                    analyticsData.analytics.readinessTrendData.length > 0 ? (
                   <Line
                     data={{
-                      labels: analyticsData.analytics.readinessTrendData.map(item => 
+                      labels: analyticsData.analytics.readinessTrendData.map((item: TrendDataItem) => 
                         new Date(item.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
                       ),
                       datasets: [
                         {
                           label: 'Not Fit for Work',
-                          data: analyticsData.analytics.readinessTrendData.map(item => item.notFitForWork),
+                          data: analyticsData.analytics.readinessTrendData.map((item: TrendDataItem) => item.notFitForWork),
                           borderColor: 'rgba(147, 51, 234, 1)',
                           backgroundColor: 'rgba(147, 51, 234, 0.1)',
                           fill: true,
@@ -2624,7 +3475,7 @@ const TeamAnalytics: React.FC = () => {
                         },
                         {
                           label: 'Minor Concerns Fit for Work',
-                          data: analyticsData.analytics.readinessTrendData.map(item => item.minorConcernsFitForWork),
+                          data: analyticsData.analytics.readinessTrendData.map((item: TrendDataItem) => item.minorConcernsFitForWork),
                           borderColor: 'rgba(59, 130, 246, 1)',
                           backgroundColor: 'rgba(59, 130, 246, 0.1)',
                           fill: true,
@@ -2743,6 +3594,421 @@ const TeamAnalytics: React.FC = () => {
             </div>
           </div>
         )}
+
+        {/* Login Activity Trends Modal */}
+        {showLoginModal && (
+          <div style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 99999,
+            padding: window.innerWidth <= 768 ? '0' : '0.5rem'
+          }}>
+            <div style={{
+              backgroundColor: 'white',
+              borderRadius: window.innerWidth <= 768 ? '0' : '0.75rem',
+              padding: window.innerWidth <= 768 ? '0.75rem' : '2rem',
+              maxWidth: '100vw',
+              maxHeight: '100vh',
+              width: '100%',
+              height: '100%',
+              overflow: 'auto',
+              position: 'relative',
+              animation: 'modalSlideIn 0.3s ease-out',
+              boxShadow: window.innerWidth <= 768 ? 'none' : '0 25px 50px -12px rgba(0, 0, 0, 0.25)'
+            }}>
+              {/* Modal Header */}
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: window.innerWidth <= 768 ? '0.75rem' : '2rem',
+                paddingBottom: '1rem',
+                borderBottom: '1px solid #e5e7eb'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                  <div style={{
+                    width: '2rem',
+                    height: '2rem',
+                    backgroundColor: '#3b82f6',
+                    borderRadius: '0.5rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}>
+                    <svg width="16" height="16" fill="white" viewBox="0 0 24 24">
+                      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+                    </svg>
+                  </div>
+                  <h2 style={{
+                    fontSize: window.innerWidth <= 768 ? '1rem' : '1.5rem',
+                    fontWeight: '600',
+                    color: '#1f2937',
+                    margin: 0
+                  }}>
+                    Login Activity Trends - Detailed View
+                  </h2>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowLoginModal(false)}
+                  style={{
+                    padding: '0.5rem',
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    borderRadius: '0.375rem',
+                    color: '#6b7280',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    transition: 'all 0.2s ease'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = '#f3f4f6';
+                    e.currentTarget.style.color = '#374151';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = 'transparent';
+                    e.currentTarget.style.color = '#6b7280';
+                  }}
+                >
+                  <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              {/* Date Filter Controls */}
+              <div style={{
+                display: 'flex',
+                justifyContent: 'center',
+                alignItems: 'center',
+                gap: window.innerWidth <= 768 ? '0.25rem' : '1rem',
+                marginBottom: window.innerWidth <= 768 ? '0.75rem' : '2rem',
+                flexWrap: 'wrap'
+              }}>
+                {/* Date Range Buttons */}
+                {['week', 'month', 'year', 'custom'].map((range) => (
+                  <button
+                    key={range}
+                    type="button"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      setLoginDateRange(range as 'week' | 'month' | 'year' | 'custom');
+                    }}
+                    style={{
+                      padding: '0.5rem 1rem',
+                      borderRadius: '0.5rem',
+                      border: '1px solid rgba(0, 0, 0, 0.1)',
+                      backgroundColor: loginDateRange === range ? 'rgba(59, 130, 246, 0.1)' : 'transparent',
+                      color: loginDateRange === range ? '#3b82f6' : '#6b7280',
+                      fontWeight: loginDateRange === range ? 600 : 500,
+                      fontSize: '0.875rem',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease'
+                    }}
+                  >
+                    {range.charAt(0).toUpperCase() + range.slice(1)}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => {
+                    // Validate date range
+                    if (loginDateRange === 'custom' && loginStartDate > loginEndDate) {
+                      setToast({ message: 'Start date cannot be after end date', type: 'error' });
+                      return;
+                    }
+                    fetchAnalyticsData('login');
+                  }}
+                  disabled={loading}
+                  style={{
+                    padding: '0.5rem 1rem',
+                    borderRadius: '0.5rem',
+                    border: '1px solid rgba(34, 197, 94, 0.3)',
+                    backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                    color: '#22c55e',
+                    fontWeight: 600,
+                    fontSize: '0.875rem',
+                    cursor: loading ? 'not-allowed' : 'pointer',
+                    transition: 'all 0.2s ease',
+                    opacity: loading ? 0.5 : 1
+                  }}
+                >
+                  {loading ? 'Loading...' : 'Refresh'}
+                </button>
+              </div>
+              
+              {/* Custom Date Range */}
+              {loginDateRange === 'custom' && (
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'center',
+                  gap: '1rem',
+                  marginBottom: window.innerWidth <= 768 ? '0.75rem' : '2rem',
+                  flexWrap: 'wrap'
+                }}>
+                  <div>
+                    <label style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.25rem', display: 'block' }}>
+                      Start Date
+                    </label>
+                    <input
+                      type="date"
+                      value={loginStartDate.toISOString().split('T')[0]}
+                      onChange={(e) => {
+                        e.preventDefault();
+                        setLoginStartDate(new Date(e.target.value));
+                      }}
+                      style={{
+                        padding: '0.5rem',
+                        borderRadius: '0.375rem',
+                        border: '1px solid #d1d5db',
+                        fontSize: '0.875rem'
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.25rem', display: 'block' }}>
+                      End Date
+                    </label>
+                    <input
+                      type="date"
+                      value={loginEndDate.toISOString().split('T')[0]}
+                      onChange={(e) => {
+                        e.preventDefault();
+                        setLoginEndDate(new Date(e.target.value));
+                      }}
+                      style={{
+                        padding: '0.5rem',
+                        borderRadius: '0.375rem',
+                        border: '1px solid #d1d5db',
+                        fontSize: '0.875rem'
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Chart Container */}
+              <div style={{ height: window.innerWidth <= 768 ? '300px' : '600px', position: 'relative' }}>
+                {(() => {
+                  if (!analyticsData) {
+                    return (
+                      <div style={{
+                        height: '100%',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: '#6b7280'
+                      }}>
+                        <div style={{
+                          width: '40px',
+                          height: '40px',
+                          border: '3px solid #e5e7eb',
+                          borderTop: '3px solid #3b82f6',
+                          borderRadius: '50%',
+                          animation: 'spin 1s linear infinite',
+                          marginBottom: '1rem'
+                        }}></div>
+                        <p style={{ fontSize: '0.875rem', margin: '0' }}>
+                          Loading chart data...
+                        </p>
+                      </div>
+                    );
+                  }
+
+                  const todayLogins = analyticsData.analytics.loginStats.todayLogins || 0;
+                  const weeklyLogins = analyticsData.analytics.loginStats.weeklyLogins || 0;
+                  const monthlyLogins = analyticsData.analytics.loginStats.monthlyLogins || 0;
+                  const dailyBreakdown = analyticsData.analytics.loginStats.dailyBreakdown || [];
+                  
+                  const total = todayLogins + weeklyLogins + monthlyLogins;
+                  
+                  // If no data, show empty state
+                  if (total === 0) {
+                    return (
+                      <div style={{
+                        height: '100%',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: '#6b7280'
+                      }}>
+                        <div style={{
+                          width: '200px',
+                          height: '200px',
+                          borderRadius: '50%',
+                          backgroundColor: 'rgba(107, 114, 128, 0.1)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          marginBottom: '1rem'
+                        }}>
+                          <svg width="80" height="80" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                          </svg>
+                        </div>
+                        <h3 style={{ fontSize: '1.25rem', fontWeight: '600', margin: '0 0 0.5rem 0' }}>
+                          No Login Data Available
+                        </h3>
+                        <p style={{ fontSize: '0.875rem', margin: 0, textAlign: 'center' }}>
+                          Login activity will appear here once users start logging in
+                        </p>
+                      </div>
+                    );
+                  }
+
+                  // Prepare chart data
+                  const chartData = {
+                    labels: dailyBreakdown.map((item: any) => {
+                      const date = new Date(item.date);
+                      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                    }),
+                    datasets: [
+                      {
+                        label: 'Daily Logins',
+                        data: dailyBreakdown.map((item: any) => item.count),
+                        borderColor: '#3b82f6',
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        borderWidth: 3,
+                        fill: true,
+                        tension: 0.4,
+                        pointBackgroundColor: '#3b82f6',
+                        pointBorderColor: '#ffffff',
+                        pointBorderWidth: 2,
+                        pointRadius: 6,
+                        pointHoverRadius: 8
+                      }
+                    ]
+                  };
+
+                  return (
+                    <Line
+                      data={chartData}
+                      options={{
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                          legend: {
+                            display: true,
+                            position: 'top',
+                            labels: {
+                              usePointStyle: true,
+                              pointStyle: 'line',
+                              font: {
+                                size: 14,
+                                weight: 600
+                              }
+                            }
+                          },
+                          tooltip: {
+                            callbacks: {
+                              label: function(context) {
+                                const label = context.dataset.label || '';
+                                const value = context.raw || 0;
+                                return `${label}: ${Math.round(value as number)} users`;
+                              }
+                            },
+                            titleFont: {
+                              size: 16,
+                              weight: 600
+                            },
+                            bodyFont: {
+                              size: 14,
+                              weight: 500
+                            }
+                          }
+                        },
+                        scales: {
+                          y: {
+                            beginAtZero: true,
+                            grid: {
+                              color: 'rgba(0, 0, 0, 0.1)'
+                            },
+                            ticks: {
+                              font: {
+                                size: 12,
+                                weight: 500
+                              }
+                            }
+                          },
+                          x: {
+                            grid: {
+                              color: 'rgba(0, 0, 0, 0.1)'
+                            },
+                            ticks: {
+                              font: {
+                                size: 12,
+                                weight: 500
+                              }
+                            }
+                          }
+                        },
+                        animation: {
+                          duration: 1000,
+                          easing: 'easeInOutQuart'
+                        }
+                      }}
+                    />
+                  );
+                })()}
+              </div>
+
+              {/* Summary Cards */}
+              <div style={{
+                marginTop: window.innerWidth <= 768 ? '1rem' : '2rem',
+                display: 'flex',
+                flexDirection: window.innerWidth <= 768 ? 'column' : 'row',
+                flexWrap: window.innerWidth <= 768 ? 'nowrap' : 'wrap',
+                gap: window.innerWidth <= 768 ? '0.25rem' : '1rem'
+              }}>
+                <div style={{
+                  backgroundColor: '#f0f9ff',
+                  padding: window.innerWidth <= 768 ? '0.5rem' : '1rem',
+                  borderRadius: '0.5rem',
+                  border: '1px solid #bae6fd'
+                }}>
+                  <div style={{ fontSize: window.innerWidth <= 768 ? '0.75rem' : '0.875rem', color: '#0369a1', fontWeight: '600' }}>Today's Logins</div>
+                  <div style={{ fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem', color: '#0369a1', fontWeight: '700' }}>
+                    {analyticsData?.analytics?.loginStats?.todayLogins || 0}
+                  </div>
+                </div>
+                <div style={{
+                  backgroundColor: '#f0fdf4',
+                  padding: window.innerWidth <= 768 ? '0.5rem' : '1rem',
+                  borderRadius: '0.5rem',
+                  border: '1px solid #bbf7d0'
+                }}>
+                  <div style={{ fontSize: window.innerWidth <= 768 ? '0.75rem' : '0.875rem', color: '#166534', fontWeight: '600' }}>Weekly Logins</div>
+                  <div style={{ fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem', color: '#166534', fontWeight: '700' }}>
+                    {analyticsData?.analytics?.loginStats?.weeklyLogins || 0}
+                  </div>
+                </div>
+                <div style={{
+                  backgroundColor: '#fef3c7',
+                  padding: window.innerWidth <= 768 ? '0.5rem' : '1rem',
+                  borderRadius: '0.5rem',
+                  border: '1px solid #fde68a'
+                }}>
+                  <div style={{ fontSize: window.innerWidth <= 768 ? '0.75rem' : '0.875rem', color: '#92400e', fontWeight: '600' }}>Monthly Logins</div>
+                  <div style={{ fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem', color: '#92400e', fontWeight: '700' }}>
+                    {analyticsData?.analytics?.loginStats?.monthlyLogins || 0}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </Box>
     </LayoutWithSidebar>
   );
 };

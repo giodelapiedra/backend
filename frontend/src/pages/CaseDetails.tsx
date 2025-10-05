@@ -35,7 +35,7 @@ import {
   Tooltip,
   IconButton,
 } from '@mui/material';
-import { getCurrentUser } from '../utils/api';
+import { useAuth } from '../contexts/AuthContext.supabase';
 import {
   ArrowBack,
   Assignment,
@@ -57,8 +57,7 @@ import {
   Print,
 } from '@mui/icons-material';
 import LayoutWithSidebar from '../components/LayoutWithSidebar';
-import api from '../utils/api';
-import { useAuth } from '../contexts/AuthContext';
+import { SupabaseAPI } from '../utils/supabaseApi';
 import { createImageProps } from '../utils/imageUtils';
 
 interface Case {
@@ -206,35 +205,34 @@ const CaseDetails: React.FC = () => {
       }
 
       // Log the current user and request details
-      const currentUser = getCurrentUser();
       console.log('Fetching case details:', {
         caseId: id,
-        userRole: currentUser?.role,
-        userId: currentUser?._id
+        userRole: user?.role,
+        userId: user?.id
       });
 
-      const response = await api.get(`/cases/${id}`);
+      const response = await SupabaseAPI.getCaseById(id);
       
-      if (!response.data) {
+      if (!response) {
         console.error('Empty response received');
         setError('No response received from server');
         return;
       }
       
-      if (!response.data.case) {
-        console.error('Invalid response format:', response.data);
+      if (!response.case) {
+        console.error('Invalid response format:', response);
         setError('Invalid response format from server');
         return;
       }
       
       // Log successful case fetch
       console.log('Case details fetched successfully:', {
-        caseNumber: response.data.case.caseNumber,
-        status: response.data.case.status,
-        hasClinicianAssigned: !!response.data.case.clinician
+        caseNumber: response.case.caseNumber,
+        status: response.case.status,
+        hasClinicianAssigned: !!response.case.clinician
       });
       
-      setCaseData(response.data.case);
+      setCaseData(response.case);
     } catch (err: any) {
       console.error('Error fetching case details:', {
         error: err,
@@ -270,7 +268,7 @@ const CaseDetails: React.FC = () => {
           // Log additional debugging information
           console.error('Server error details:', {
             endpoint: `/cases/${id}`,
-            user: getCurrentUser(),
+            user: user,
             timestamp: new Date().toISOString(),
             responseData: err.response?.data
           });
@@ -339,7 +337,9 @@ const CaseDetails: React.FC = () => {
 
   const handleUpdateCase = async () => {
     try {
-      await api.put(`/cases/${id}`, editForm);
+      // TODO: Migrate to Supabase
+      console.log('Case update feature is being migrated to Supabase');
+      throw new Error('Case update feature is temporarily unavailable during migration to Supabase');
       setSuccessMessage('Case updated successfully');
       setEditDialog(false);
       fetchCaseDetails(); // Refresh data
@@ -350,7 +350,9 @@ const CaseDetails: React.FC = () => {
 
   const handleUpdateStatus = async (newStatus: string) => {
     try {
-      await api.put(`/cases/${id}/status`, { status: newStatus });
+      // TODO: Migrate to Supabase
+      console.log('Case status update feature is being migrated to Supabase');
+      throw new Error('Case status update feature is temporarily unavailable during migration to Supabase');
       setSuccessMessage(`Case status updated to ${newStatus}`);
       setStatusDialog(false);
       fetchCaseDetails(); // Refresh data
@@ -362,7 +364,9 @@ const CaseDetails: React.FC = () => {
 
   const handleAssignClinician = async () => {
     try {
-      await api.post(`/cases/${id}/assign`, assignmentForm);
+      // TODO: Migrate to Supabase
+      console.log('Case assignment feature is being migrated to Supabase');
+      throw new Error('Case assignment feature is temporarily unavailable during migration to Supabase');
       setSuccessMessage('Clinician assigned successfully');
       setAssignDialog(false);
       fetchCaseDetails(); // Refresh data
@@ -373,7 +377,9 @@ const CaseDetails: React.FC = () => {
 
   const handleCloseCase = async () => {
     try {
-      await api.put(`/cases/${id}/status`, { status: 'closed' });
+      // TODO: Migrate to Supabase
+      console.log('Case close feature is being migrated to Supabase');
+      throw new Error('Case close feature is temporarily unavailable during migration to Supabase');
       setSuccessMessage('Case closed successfully');
       setCloseDialog(false);
       fetchCaseDetails(); // Refresh data
@@ -385,7 +391,9 @@ const CaseDetails: React.FC = () => {
 
   const handleReturnToWork = async () => {
     try {
-      await api.put(`/cases/${id}/status`, { status: 'return_to_work' });
+      // TODO: Migrate to Supabase
+      console.log('Return to work feature is being migrated to Supabase');
+      throw new Error('Return to work feature is temporarily unavailable during migration to Supabase');
       setSuccessMessage('Worker returned to work successfully');
       setReturnToWorkDialog(false);
       fetchCaseDetails(); // Refresh data
@@ -733,8 +741,10 @@ const CaseDetails: React.FC = () => {
   const fetchClinicians = async () => {
     try {
       setLoadingClinicians(true);
-      const response = await api.get('/users/clinicians');
-      setClinicians(response.data.clinicians || []);
+      // TODO: Migrate to Supabase
+      console.log('Clinician fetch feature is being migrated to Supabase');
+      throw new Error('Clinician fetch feature is temporarily unavailable during migration to Supabase');
+      setClinicians([]);
     } catch (err: any) {
       console.error('Error fetching clinicians:', err);
     } finally {

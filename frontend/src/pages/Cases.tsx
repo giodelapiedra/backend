@@ -48,55 +48,40 @@ import {
   Refresh
 } from '@mui/icons-material';
 import LayoutWithSidebar from '../components/LayoutWithSidebar';
-import api from '../utils/api';
-import { useAuth } from '../contexts/AuthContext';
+import { dataClient } from '../lib/supabase';
+import { useAuth } from '../contexts/AuthContext.supabase';
+import { CaseAssignmentService } from '../utils/caseAssignmentService';
 
 interface Case {
-  _id: string;
-  caseNumber: string;
+  id: string;
+  case_number: string;
   status: string;
-  priority: string;
-  injuryDetails: {
-    bodyPart: string;
-    injuryType: string;
-    severity: string;
-    description: string;
+  priority?: string; // Optional since column doesn't exist yet
+  created_at: string;
+  worker?: {
+    id: string;
+    first_name: string;
+    last_name: string;
+    email: string;
   };
-  workRestrictions: {
-    lifting: {
-      maxWeight: number;
-    };
-    standing: {
-      maxDuration: number;
-    };
-    other: string;
-  };
-  createdAt: string;
-  incident: {
-    incidentNumber: string;
-    incidentDate: string;
-    description: string;
-    severity: string;
-    incidentType: string;
-  };
-  caseManager: {
-    firstName: string;
-    lastName: string;
+  case_manager?: {
+    id: string;
+    first_name: string;
+    last_name: string;
+    email: string;
   };
   clinician?: {
-    firstName: string;
-    lastName: string;
+    id: string;
+    first_name: string;
+    last_name: string;
+    email: string;
   };
-  notes?: Array<{
-    author: {
-      _id: string;
-      firstName: string;
-      lastName: string;
-    };
-    content: string;
-    timestamp: string;
-    type?: string;
-  }>;
+  incident?: {
+    id: string;
+    incident_type: string;
+    severity: string;
+    description: string;
+  };
   lastCheckIn?: {
     _id: string;
     checkInDate: string;
@@ -135,19 +120,106 @@ const Cases: React.FC = () => {
       console.log('Fetching cases for user:', user);
       console.log('User role:', user?.role);
       console.log('User ID:', user?.id);
-      console.log('Auth token:', localStorage.getItem('token'));
       
-      const response = await api.get('/cases');
-      console.log('Cases API response:', response.data);
-      console.log('Cases count:', response.data.cases?.length || 0);
-      console.log('Response status:', response.status);
+      if (!user?.id) {
+        setError('User not authenticated');
+        return;
+      }
+
+      let casesQuery = dataClient
+        .from('cases')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      // Filter cases based on user role
+      if (user.role === 'clinician') {
+        // Get cases assigned to this clinician from database
+        casesQuery = casesQuery.eq('clinician_id', user.id);
+        console.log('Filtering cases for clinician:', user.id);
+      } else if (user.role === 'case_manager') {
+        // Case managers see cases they manage
+        casesQuery = casesQuery.eq('case_manager_id', user.id);
+        console.log('Filtering cases for case manager:', user.id);
+      } else if (user.role === 'worker') {
+        // Workers see their own cases
+        casesQuery = casesQuery.eq('worker_id', user.id);
+        console.log('Filtering cases for worker:', user.id);
+      } else if (user.role === 'employer') {
+        // Employers see cases for their workers
+        casesQuery = casesQuery.eq('employer_id', user.id);
+        console.log('Filtering cases for employer:', user.id);
+      } else if (user.role === 'admin' || user.role === 'site_supervisor') {
+        // Admins and site supervisors see all cases
+        console.log('Showing all cases for admin/site supervisor');
+      } else {
+        // Unknown role - show no cases
+        console.log('Unknown user role, showing no cases');
+        setCases([]);
+        setLoading(false);
+        return;
+      }
       
-      setCases(response.data.cases || []);
+      const { data: casesData, error: casesError } = await casesQuery;
+      
+      if (casesError) {
+        console.error('Supabase error:', casesError);
+        setError(casesError.message || 'Failed to fetch cases');
+        return;
+      }
+      
+      // Then fetch related data separately
+      const enrichedCases = await Promise.all(
+        (casesData || []).map(async (caseItem) => {
+          const [worker, caseManager, clinician, incident] = await Promise.all([
+            // Get worker
+            dataClient
+              .from('users')
+              .select('id, first_name, last_name, email')
+              .eq('id', caseItem.worker_id)
+              .single(),
+            
+            // Get case manager
+            dataClient
+              .from('users')
+              .select('id, first_name, last_name, email')
+              .eq('id', caseItem.case_manager_id)
+              .single(),
+            
+            // Get clinician (if exists)
+            caseItem.clinician_id ? 
+              dataClient
+                .from('users')
+                .select('id, first_name, last_name, email')
+                .eq('id', caseItem.clinician_id)
+                .single() : 
+              Promise.resolve({ data: null, error: null }),
+            
+            // Get incident
+            dataClient
+              .from('incidents')
+              .select('id, incident_type, severity, description')
+              .eq('id', caseItem.incident_id)
+              .single()
+          ]);
+          
+          return {
+            ...caseItem,
+            worker: worker.data,
+            case_manager: caseManager.data,
+            clinician: clinician.data,
+            incident: incident.data
+          };
+        })
+      );
+      
+      const data = enrichedCases;
+      
+      console.log('Cases fetched from Supabase:', data?.length || 0);
+      console.log('User role:', user?.role, 'Cases count:', data?.length || 0);
+      setCases(data || []);
     } catch (err: any) {
       console.error('Error fetching cases:', err);
-      console.error('Error response:', err.response?.data);
-      console.error('Error status:', err.response?.status);
-      setError(err.response?.data?.message || 'Failed to fetch cases');
+      setError(err.message || 'Failed to fetch cases');
     } finally {
       setLoading(false);
     }
@@ -166,13 +238,12 @@ const Cases: React.FC = () => {
   // Filter cases based on search and filters
   const filteredCases = cases.filter(caseItem => {
     const matchesSearch = searchTerm === '' || 
-      caseItem.caseNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      caseItem.injuryDetails?.bodyPart?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      caseItem.injuryDetails?.injuryType?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      caseItem.incident?.incidentNumber?.toLowerCase().includes(searchTerm.toLowerCase());
+      caseItem.case_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      caseItem.incident?.incident_type?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      caseItem.incident?.description?.toLowerCase().includes(searchTerm.toLowerCase());
     
     const matchesStatus = statusFilter === 'all' || caseItem.status === statusFilter;
-    const matchesPriority = priorityFilter === 'all' || caseItem.priority === priorityFilter;
+    const matchesPriority = priorityFilter === 'all' || (caseItem.priority || 'medium') === priorityFilter;
     
     return matchesSearch && matchesStatus && matchesPriority;
   });
@@ -222,7 +293,8 @@ const Cases: React.FC = () => {
     }
   };
 
-  const getPriorityColor = (priority: string) => {
+  const getPriorityColor = (priority?: string) => {
+    if (!priority) return 'default';
     const colors: { [key: string]: any } = {
       'low': 'success',
       'medium': 'warning',
@@ -234,7 +306,7 @@ const Cases: React.FC = () => {
   
   // Handle viewing case details - navigate to full case details page
   const handleViewCaseDetails = (caseItem: Case) => {
-    navigate(`/cases/${caseItem._id}`);
+    navigate(`/cases/${caseItem.id}`);
   };
 
   if (loading) {
@@ -252,7 +324,7 @@ const Cases: React.FC = () => {
       <Box sx={{ 
         p: { xs: 1, sm: 2, md: 3 },
         minHeight: '100vh', 
-        background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)'
+        background: 'linear-gradient(135deg, #f8fdff 0%, #e8f4f8 100%)'
       }}>
         {/* Mobile-First Header */}
         <Card sx={{ 
@@ -263,10 +335,11 @@ const Cases: React.FC = () => {
         }}>
           <Box sx={{ 
             p: { xs: 2, sm: 3 },
-            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            background: 'linear-gradient(135deg, #2d5a87 0%, #1e3a52 100%)',
             color: 'white',
             position: 'relative',
-            overflow: 'hidden'
+            overflow: 'hidden',
+            boxShadow: '0 8px 32px rgba(45, 90, 135, 0.3)'
           }}>
             {/* Background Pattern */}
             <Box sx={{
@@ -312,7 +385,23 @@ const Cases: React.FC = () => {
                     textShadow: '0 2px 4px rgba(0, 0, 0, 0.1)',
                     fontSize: { xs: '1.25rem', sm: '1.5rem' }
           }}>
-            My Cases
+            {(() => {
+              switch (user?.role) {
+                case 'clinician':
+                  return 'My Assigned Cases';
+                case 'case_manager':
+                  return 'My Managed Cases';
+                case 'worker':
+                  return 'My Cases';
+                case 'employer':
+                  return 'My Workers\' Cases';
+                case 'admin':
+                case 'site_supervisor':
+                  return 'All Cases';
+                default:
+                  return 'Cases';
+              }
+            })()}
           </Typography>
                   <Typography variant="body2" sx={{ 
                     opacity: 0.9,
@@ -379,7 +468,11 @@ const Cases: React.FC = () => {
         <Card sx={{ 
           mb: { xs: 2, sm: 3 },
           borderRadius: { xs: 2, sm: 3 },
-          boxShadow: '0 4px 20px rgba(0, 0, 0, 0.08)'
+          background: 'rgba(255, 255, 255, 0.15)',
+          backdropFilter: 'blur(15px)',
+          border: '1px solid rgba(255, 255, 255, 0.2)',
+          boxShadow: '0 8px 32px rgba(45, 90, 135, 0.2)',
+          transition: 'transform 0.3s ease, box-shadow 0.3s ease'
         }}>
           <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
             <Grid container spacing={{ xs: 2, sm: 2 }} alignItems="center">
@@ -519,7 +612,11 @@ const Cases: React.FC = () => {
         {/* Mobile-Optimized Cases Display */}
         <Card sx={{
           borderRadius: { xs: 2, sm: 3 },
-          boxShadow: '0 4px 20px rgba(0, 0, 0, 0.08)',
+          background: 'rgba(255, 255, 255, 0.12)',
+          backdropFilter: 'blur(20px)',
+          border: '1px solid rgba(255, 255, 255, 0.25)',
+          boxShadow: '0 12px 40px rgba(45, 90, 135, 0.25)',
+          transition: 'transform 0.3s ease, box-shadow 0.3s ease',
           overflow: 'hidden'
         }}>
           <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
@@ -527,9 +624,25 @@ const Cases: React.FC = () => {
               mb: { xs: 2, sm: 2 }, 
               fontWeight: 600,
               fontSize: { xs: '1.125rem', sm: '1.25rem' },
-              color: '#1f2937'
+              color: '#1e3a52'
             }}>
-              Cases ({totalItems})
+              {(() => {
+                switch (user?.role) {
+                  case 'clinician':
+                    return `Assigned Cases (${totalItems})`;
+                  case 'case_manager':
+                    return `Managed Cases (${totalItems})`;
+                  case 'worker':
+                    return `My Cases (${totalItems})`;
+                  case 'employer':
+                    return `Workers' Cases (${totalItems})`;
+                  case 'admin':
+                  case 'site_supervisor':
+                    return `All Cases (${totalItems})`;
+                  default:
+                    return `Cases (${totalItems})`;
+                }
+              })()}
             </Typography>
             
             {paginatedCases.length > 0 ? (
@@ -539,16 +652,17 @@ const Cases: React.FC = () => {
                   <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                     {paginatedCases.map((caseItem) => (
                       <Card 
-                        key={caseItem._id} 
+                        key={caseItem.id} 
                         sx={{
                           borderRadius: 2,
-                          border: '1px solid',
-                          borderColor: 'divider',
-                          bgcolor: 'white',
-                          transition: 'all 0.2s ease',
+                          background: 'rgba(255, 255, 255, 0.08)',
+                          backdropFilter: 'blur(10px)',
+                          border: '1px solid rgba(255, 255, 255, 0.15)',
+                          transition: 'all 0.3s ease',
                           '&:hover': {
-                            boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-                            transform: 'translateY(-1px)'
+                            boxShadow: '0 8px 25px rgba(45, 90, 135, 0.2)',
+                            transform: 'translateY(-3px)',
+                            background: 'rgba(255, 255, 255, 0.12)'
                           }
                         }}
                       >
@@ -573,17 +687,17 @@ const Cases: React.FC = () => {
                                   textOverflow: 'ellipsis',
                                   whiteSpace: 'nowrap'
                                 }}>
-                                  {caseItem.caseNumber}
+                                  {caseItem.case_number}
                                 </Typography>
                                 <Typography variant="caption" color="text.secondary" sx={{
                                   fontSize: { xs: '0.7rem', sm: '0.75rem' }
                                 }}>
-                                  {caseItem.injuryDetails?.bodyPart || 'N/A'} - {caseItem.injuryDetails?.injuryType || 'N/A'}
+                                  {caseItem.incident?.incident_type || 'N/A'} - {caseItem.incident?.severity || 'N/A'}
                                 </Typography>
                               </Box>
                             </Box>
                             <Button
-                              variant="outlined"
+                              variant="contained"
                               size="small"
                               onClick={() => handleViewCaseDetails(caseItem)}
                               sx={{ 
@@ -594,10 +708,14 @@ const Cases: React.FC = () => {
                                 px: { xs: 2, sm: 3 },
                                 py: { xs: 1, sm: 1 },
                                 minHeight: { xs: '32px', sm: '32px' },
-                                bgcolor: 'rgba(0,0,0,0.04)',
+                                background: 'linear-gradient(135deg, #4f94cd 0%, #2d5a87 100%)',
+                                color: 'white',
+                                boxShadow: '0 4px 12px rgba(79, 148, 205, 0.3)',
                                 '&:hover': {
-                                  bgcolor: 'rgba(0,0,0,0.08)'
-                                }
+                                  background: 'linear-gradient(135deg, #3b82c4 0%, #1e3a52 100%)',
+                                  transform: 'translateY(-1px)'
+                                },
+                                transition: 'all 0.2s ease'
                               }}
                             >
                               View
@@ -616,7 +734,7 @@ const Cases: React.FC = () => {
                                 }}
                               />
                               <Chip
-                                label={caseItem.priority?.toUpperCase() || 'UNKNOWN'}
+                                label={(caseItem.priority || 'MEDIUM').toUpperCase()}
                                 color={getPriorityColor(caseItem.priority)}
                                 size="small"
                                 variant="outlined"
@@ -629,7 +747,7 @@ const Cases: React.FC = () => {
                             <Typography variant="caption" color="text.secondary" sx={{
                               fontSize: { xs: '0.65rem', sm: '0.7rem' }
                             }}>
-                              {caseItem.createdAt ? new Date(caseItem.createdAt).toLocaleDateString() : 'N/A'}
+                              {caseItem.created_at ? new Date(caseItem.created_at).toLocaleDateString() : 'N/A'}
                             </Typography>
                           </Box>
                           
@@ -677,36 +795,40 @@ const Cases: React.FC = () => {
             WebkitOverflowScrolling: 'touch'
           }}>
             <Table size="small">
-              <TableHead sx={{ backgroundColor: '#f8fafc' }}>
+              <TableHead sx={{ 
+                background: 'rgba(184, 212, 227, 0.3)', 
+                backdropFilter: 'blur(10px)',
+                borderBottom: '1px solid rgba(168, 200, 216, 0.4)'
+              }}>
                 <TableRow>
                   <TableCell sx={{ 
                     fontWeight: 600, 
-                    color: '#374151',
-                    borderBottom: '1px solid #e2e8f0',
+                    color: '#1e3a52',
+                    borderBottom: '2px solid #a8c8d8',
                     whiteSpace: 'nowrap',
                     padding: { xs: '8px', sm: '16px' },
                     fontSize: { xs: '0.75rem', sm: '0.875rem' }
                   }}>Case Number</TableCell>
                   <TableCell sx={{ 
                     fontWeight: 600, 
-                    color: '#374151',
-                    borderBottom: '1px solid #e2e8f0',
+                    color: '#1e3a52',
+                    borderBottom: '2px solid #a8c8d8',
                     whiteSpace: 'nowrap',
                     padding: { xs: '8px', sm: '16px' },
                     fontSize: { xs: '0.75rem', sm: '0.875rem' }
                   }}>Status</TableCell>
                   <TableCell sx={{ 
                     fontWeight: 600, 
-                    color: '#374151',
-                    borderBottom: '1px solid #e2e8f0',
+                    color: '#1e3a52',
+                    borderBottom: '2px solid #a8c8d8',
                     whiteSpace: 'nowrap',
                     padding: { xs: '8px', sm: '16px' },
                     fontSize: { xs: '0.75rem', sm: '0.875rem' }
                   }}>Priority</TableCell>
                   <TableCell sx={{ 
                     fontWeight: 600, 
-                    color: '#374151',
-                    borderBottom: '1px solid #e2e8f0',
+                    color: '#1e3a52',
+                    borderBottom: '2px solid #a8c8d8',
                     whiteSpace: 'nowrap',
                     padding: { xs: '8px', sm: '16px' },
                     fontSize: { xs: '0.75rem', sm: '0.875rem' },
@@ -714,8 +836,8 @@ const Cases: React.FC = () => {
                   }}>Injury Details</TableCell>
                   <TableCell sx={{ 
                     fontWeight: 600, 
-                    color: '#374151',
-                    borderBottom: '1px solid #e2e8f0',
+                    color: '#1e3a52',
+                    borderBottom: '2px solid #a8c8d8',
                     whiteSpace: 'nowrap',
                     padding: { xs: '8px', sm: '16px' },
                     fontSize: { xs: '0.75rem', sm: '0.875rem' },
@@ -723,8 +845,8 @@ const Cases: React.FC = () => {
                   }}>Incident</TableCell>
                   <TableCell sx={{ 
                     fontWeight: 600, 
-                    color: '#374151',
-                    borderBottom: '1px solid #e2e8f0',
+                    color: '#1e3a52',
+                    borderBottom: '2px solid #a8c8d8',
                     whiteSpace: 'nowrap',
                     padding: { xs: '8px', sm: '16px' },
                     fontSize: { xs: '0.75rem', sm: '0.875rem' },
@@ -732,16 +854,16 @@ const Cases: React.FC = () => {
                   }}>Case Manager</TableCell>
                   <TableCell sx={{ 
                     fontWeight: 600, 
-                    color: '#374151',
-                    borderBottom: '1px solid #e2e8f0',
+                    color: '#1e3a52',
+                    borderBottom: '2px solid #a8c8d8',
                     whiteSpace: 'nowrap',
                     padding: { xs: '8px', sm: '16px' },
                     fontSize: { xs: '0.75rem', sm: '0.875rem' }
                   }}>Created</TableCell>
                   <TableCell sx={{ 
                     fontWeight: 600, 
-                    color: '#374151',
-                    borderBottom: '1px solid #e2e8f0',
+                    color: '#1e3a52',
+                    borderBottom: '2px solid #a8c8d8',
                     whiteSpace: 'nowrap',
                     padding: { xs: '8px', sm: '16px' },
                     fontSize: { xs: '0.75rem', sm: '0.875rem' },
@@ -749,8 +871,8 @@ const Cases: React.FC = () => {
                   }}>Last Check-in</TableCell>
                   <TableCell sx={{ 
                     fontWeight: 600, 
-                    color: '#374151',
-                    borderBottom: '1px solid #e2e8f0',
+                    color: '#1e3a52',
+                    borderBottom: '2px solid #a8c8d8',
                     whiteSpace: 'nowrap',
                     padding: { xs: '8px', sm: '16px' },
                     fontSize: { xs: '0.75rem', sm: '0.875rem' }
@@ -759,8 +881,8 @@ const Cases: React.FC = () => {
               </TableHead>
               <TableBody>
                         {paginatedCases.map((caseItem) => (
-                  <TableRow key={caseItem._id} sx={{ 
-                    '&:hover': { backgroundColor: '#f8fafc' },
+                  <TableRow key={caseItem.id} sx={{ 
+                    '&:hover': { backgroundColor: '#f8fdff' },
                     '&:last-child td': { borderBottom: 0 }
                   }}>
                     <TableCell sx={{ 
@@ -782,7 +904,7 @@ const Cases: React.FC = () => {
                           fontWeight: 500,
                           fontSize: { xs: '0.75rem', sm: '0.875rem' }
                         }}>
-                          {caseItem.caseNumber}
+                          {caseItem.case_number}
                         </Typography>
                       </Box>
                     </TableCell>
@@ -806,7 +928,7 @@ const Cases: React.FC = () => {
                       fontSize: { xs: '0.75rem', sm: '0.875rem' }
                     }}>
                       <Chip
-                        label={caseItem.priority?.toUpperCase() || 'UNKNOWN'}
+                        label={(caseItem.priority || 'MEDIUM').toUpperCase()}
                         color={getPriorityColor(caseItem.priority)}
                         size="small"
                         variant="outlined"
@@ -827,12 +949,12 @@ const Cases: React.FC = () => {
                           fontWeight: 500,
                           fontSize: { xs: '0.75rem', sm: '0.875rem' }
                         }}>
-                          {caseItem.injuryDetails?.bodyPart || 'N/A'} - {caseItem.injuryDetails?.injuryType || 'N/A'}
+                          {caseItem.incident?.incident_type || 'N/A'} - {caseItem.incident?.severity || 'N/A'}
                         </Typography>
                         <Typography variant="caption" color="text.secondary" sx={{
                           fontSize: { xs: '0.65rem', sm: '0.75rem' }
                         }}>
-                          {caseItem.injuryDetails?.description || 'No description available'}
+                          {caseItem.incident?.description || 'No description available'}
                         </Typography>
                       </Box>
                     </TableCell>
@@ -846,17 +968,17 @@ const Cases: React.FC = () => {
                           fontWeight: 500,
                           fontSize: { xs: '0.75rem', sm: '0.875rem' }
                         }}>
-                          {caseItem.incident?.incidentNumber || 'N/A'}
+                          {caseItem.incident?.id || 'N/A'}
                         </Typography>
                         <Typography variant="caption" color="text.secondary" sx={{
                           fontSize: { xs: '0.65rem', sm: '0.75rem' }
                         }}>
-                          {caseItem.incident?.incidentDate ? new Date(caseItem.incident.incidentDate).toLocaleDateString() : 'N/A'}
+                          {caseItem.created_at ? new Date(caseItem.created_at).toLocaleDateString() : 'N/A'}
                         </Typography>
                         <Typography variant="caption" color="text.secondary" display="block" sx={{
                           fontSize: { xs: '0.65rem', sm: '0.75rem' }
                         }}>
-                          {caseItem.incident?.incidentType?.replace('_', ' ').toUpperCase() || 'UNKNOWN'}
+                          {caseItem.incident?.incident_type?.replace('_', ' ').toUpperCase() || 'UNKNOWN'}
                         </Typography>
                       </Box>
                     </TableCell>
@@ -868,21 +990,16 @@ const Cases: React.FC = () => {
                       <Typography variant="body2" sx={{
                         fontSize: { xs: '0.75rem', sm: '0.875rem' }
                       }}>
-                        {caseItem.caseManager?.firstName || 'N/A'} {caseItem.caseManager?.lastName || 'N/A'}
+                        {caseItem.case_manager?.first_name || 'N/A'} {caseItem.case_manager?.last_name || 'N/A'}
                       </Typography>
                       {caseItem.clinician && (
                         <Typography variant="caption" color="text.secondary" display="block" sx={{
                           fontSize: { xs: '0.65rem', sm: '0.75rem' }
                         }}>
-                          Clinician: {caseItem.clinician.firstName} {caseItem.clinician.lastName}
+                          Clinician: {caseItem.clinician.first_name} {caseItem.clinician.last_name}
                         </Typography>
                       )}
-                      {caseItem.notes && caseItem.notes.length > 0 && (
-                        <Typography variant="caption" color="primary" display="block" sx={{
-                          fontSize: { xs: '0.65rem', sm: '0.75rem' }
-                        }}>
-                          {caseItem.notes.length} note{caseItem.notes.length !== 1 ? 's' : ''}</Typography>
-                      )}
+                      {/* Notes feature removed - not available in current schema */}
                     </TableCell>
                     <TableCell sx={{ 
                       padding: { xs: '8px', sm: '16px' },
@@ -892,7 +1009,7 @@ const Cases: React.FC = () => {
                       <Typography variant="body2" sx={{
                         fontSize: { xs: '0.75rem', sm: '0.875rem' }
                       }}>
-                        {caseItem.createdAt ? new Date(caseItem.createdAt).toLocaleDateString() : 'N/A'}
+                        {caseItem.created_at ? new Date(caseItem.created_at).toLocaleDateString() : 'N/A'}
                       </Typography>
                     </TableCell>
                     <TableCell sx={{ 
@@ -934,7 +1051,7 @@ const Cases: React.FC = () => {
                       fontSize: { xs: '0.75rem', sm: '0.875rem' }
                     }}>
                       <Button
-                        variant="outlined"
+                        variant="contained"
                         size="small"
                         onClick={() => handleViewCaseDetails(caseItem)}
                         sx={{ 
@@ -945,7 +1062,15 @@ const Cases: React.FC = () => {
                           px: { xs: 2, sm: 3 },
                           py: { xs: 1, sm: 1 },
                           minHeight: { xs: '36px', sm: '32px' },
-                          touchAction: 'manipulation'
+                          touchAction: 'manipulation',
+                          background: 'linear-gradient(135deg, #4f94cd 0%, #2d5a87 100%)',
+                          color: 'white',
+                          boxShadow: '0 4px 12px rgba(79, 148, 205, 0.3)',
+                          '&:hover': {
+                            background: 'linear-gradient(135deg, #3b82c4 0%, #1e3a52 100%)',
+                            transform: 'translateY(-1px)'
+                          },
+                          transition: 'all 0.2s ease'
                         }}
                       >
                         View Details
@@ -966,8 +1091,8 @@ const Cases: React.FC = () => {
                     alignItems: 'center', 
                     mt: 3,
                     pt: 2,
-                    borderTop: '1px solid',
-                    borderColor: 'divider',
+                    borderTop: '2px solid',
+                    borderColor: '#b8d4e3',
                     flexDirection: { xs: 'column', sm: 'row' },
                     gap: { xs: 2, sm: 0 }
                   }}>
@@ -1044,7 +1169,23 @@ const Cases: React.FC = () => {
                 fontSize: { xs: '0.875rem', sm: '1rem' }
               }}>
                   {cases.length === 0 
-                    ? 'Cases will appear here when incidents are reported involving you.'
+                    ? (() => {
+                        switch (user?.role) {
+                          case 'clinician':
+                            return 'No cases have been assigned to you yet. Case managers will assign cases to you when needed.';
+                          case 'case_manager':
+                            return 'No cases have been assigned to you yet. You can create new cases or get assigned to existing ones.';
+                          case 'worker':
+                            return 'No cases have been created for you yet. Cases will appear here when incidents involving you are reported.';
+                          case 'employer':
+                            return 'No cases have been created for your workers yet. Cases will appear here when incidents involving your workers are reported.';
+                          case 'admin':
+                          case 'site_supervisor':
+                            return 'No cases have been created yet. Cases will appear here when incidents are reported.';
+                          default:
+                            return 'No cases found.';
+                        }
+                      })()
                     : 'No cases match your current filters. Try adjusting your search criteria.'
                   }
               </Typography>

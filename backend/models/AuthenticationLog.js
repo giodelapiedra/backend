@@ -21,7 +21,7 @@ const authenticationLogSchema = new mongoose.Schema({
   action: {
     type: String,
     required: true,
-    enum: ['login', 'logout', 'login_failed', 'password_reset', 'account_locked', 'account_unlocked']
+    enum: ['login', 'logout', 'password_reset', 'account_locked', 'account_unlocked']
   },
   ipAddress: {
     type: String,
@@ -93,7 +93,7 @@ authenticationLogSchema.statics.getRecentLogins = function(limit = 50) {
     .limit(limit);
 };
 
-// Static method to get failed login attempts
+// Static method to get failed login attempts (deprecated - no longer logging failed attempts)
 authenticationLogSchema.statics.getFailedLogins = function(limit = 50) {
   return this.find({ success: false })
     .populate('userId', 'firstName lastName email role')

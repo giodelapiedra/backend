@@ -39,9 +39,9 @@ import {
   Add,
   CloudUpload,
 } from '@mui/icons-material';
-import { useAuth } from '../../contexts/AuthContext';
+import { useAuth } from '../../contexts/AuthContext.supabase';
 import LayoutWithSidebar from '../../components/LayoutWithSidebar';
-import api from '../../utils/api';
+import { dataClient } from '../../lib/supabase';
 
 const AdminDashboard: React.FC = () => {
   const { user } = useAuth();
@@ -79,35 +79,58 @@ const AdminDashboard: React.FC = () => {
   const [successDialog, setSuccessDialog] = useState(false);
   const [createdUser, setCreatedUser] = useState<any>(null);
   const [profilePhoto, setProfilePhoto] = useState<File | null>(null);
+  
+  // Filter states
+  const [searchTerm, setSearchTerm] = useState('');
+  const [roleFilter, setRoleFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
 
   const fetchUsers = useCallback(async () => {
     try {
       setLoading(true);
-      console.log('Fetching users with pagination...');
-      console.log('Current page:', currentPage);
-      console.log('Page size:', pageSize);
+      console.log('🔄 Fetching users from Supabase...');
       
-      // Build query parameters
-      const params = new URLSearchParams({
-        page: currentPage.toString(),
-        limit: pageSize.toString(),
-      });
+      let query = dataClient
+        .from('users')
+        .select('*', { count: 'exact' });
       
-      const response = await api.get(`/users?${params.toString()}`);
-      console.log('Users response:', response.data);
-      console.log('Pagination info:', response.data.pagination);
+      // Apply filters
+      if (searchTerm) {
+        query = query.or(`first_name.ilike.%${searchTerm}%,last_name.ilike.%${searchTerm}%,email.ilike.%${searchTerm}%`);
+      }
       
-      setUsers(response.data.users || []);
-      setTotalUsers(response.data.pagination?.total || 0);
-      setTotalPages(response.data.pagination?.pages || 0);
+      if (roleFilter !== 'all') {
+        query = query.eq('role', roleFilter);
+      }
+      
+      if (statusFilter !== 'all') {
+        query = query.eq('is_active', statusFilter === 'active');
+      }
+      
+      // Apply pagination
+      const from = (currentPage - 1) * pageSize;
+      const to = from + pageSize - 1;
+      query = query.range(from, to);
+      
+      const { data, error, count } = await query;
+      
+      if (error) {
+        console.error('❌ Error fetching users:', error);
+        setError('Failed to fetch users: ' + error.message);
+        return;
+      }
+      
+      console.log('✅ Users fetched:', data?.length);
+      setUsers(data || []);
+      setTotalUsers(count || 0);
+      setTotalPages(Math.ceil((count || 0) / pageSize));
     } catch (err: any) {
-      console.error('Error fetching users:', err);
-      console.error('Error response:', err.response?.data);
-      setError(err.response?.data?.message || 'Failed to fetch users');
+      console.error('❌ Error fetching users:', err);
+      setError(err.message || 'Failed to fetch users');
     } finally {
       setLoading(false);
     }
-  }, [currentPage, pageSize]);
+  }, [currentPage, pageSize, searchTerm, roleFilter, statusFilter]);
 
   useEffect(() => {
     fetchUsers();
@@ -170,49 +193,69 @@ const AdminDashboard: React.FC = () => {
         
         formData.append('profileImage', profilePhoto);
         
-        const response = await api.post('/users', formData, {
-          headers: {
-            'Content-Type': 'multipart/form-data',
-          },
-        });
-        setCreatedUser(response.data.user);
-      } else {
-        // Regular JSON request without photo
-        const userData: any = {
-          firstName: userForm.firstName.trim(),
-          lastName: userForm.lastName.trim(),
+        // For now, skip file upload and create user without photo
+        console.log('⚠️ File upload not implemented yet, creating user without photo');
+        const userData = {
+          first_name: userForm.firstName.trim(),
+          last_name: userForm.lastName.trim(),
           email: userForm.email.trim().toLowerCase(),
-          password: userForm.password,
+          password_hash: userForm.password,
           role: userForm.role,
           phone: userForm.phone.trim() || '',
-          isActive: true,
-          medicalInfo: {
+          is_active: userForm.isActive,
+          medical_info: {},
+          emergency_contact: {},
+          address: {}
+        };
+        
+        const { data, error } = await dataClient
+          .from('users')
+          .insert([userData])
+          .select()
+          .single();
+        
+        if (error) {
+          console.error('❌ Error creating user:', error);
+          setError('Failed to create user: ' + error.message);
+          return;
+        }
+        
+        setCreatedUser(data);
+      } else {
+        // Regular JSON request without photo
+        const userData = {
+          first_name: userForm.firstName.trim(),
+          last_name: userForm.lastName.trim(),
+          email: userForm.email.trim().toLowerCase(),
+          password_hash: userForm.password,
+          role: userForm.role,
+          phone: userForm.phone.trim() || '',
+          is_active: userForm.isActive,
+          specialty: userForm.role === 'clinician' ? userForm.specialty.trim() : null,
+          license_number: userForm.role === 'clinician' ? userForm.licenseNumber.trim() : null,
+          team: userForm.role === 'team_leader' ? userForm.team || 'DEFAULT TEAM' : null,
+          medical_info: {
             allergies: [],
             medications: [],
             medicalConditions: []
           },
-          isAvailable: true
+          emergency_contact: {},
+          address: {}
         };
 
-        // Add clinician-specific fields only if role is clinician
-        if (userForm.role === 'clinician') {
-          if (userForm.specialty.trim()) {
-            userData.specialty = userForm.specialty.trim();
-          }
-          if (userForm.licenseNumber.trim()) {
-            userData.licenseNumber = userForm.licenseNumber.trim();
-          }
+        const { data, error } = await dataClient
+          .from('users')
+          .insert([userData])
+          .select()
+          .single();
+        
+        if (error) {
+          console.error('❌ Error creating user:', error);
+          setError('Failed to create user: ' + error.message);
+          return;
         }
-
-        // Add team leader-specific fields
-        if (userForm.role === 'team_leader') {
-          userData.team = userForm.team || 'DEFAULT TEAM';
-          userData.defaultTeam = userForm.team || 'DEFAULT TEAM';
-          userData.managedTeams = [userForm.team || 'DEFAULT TEAM'];
-        }
-
-        const response = await api.post('/users', userData);
-        setCreatedUser(response.data.user);
+        
+        setCreatedUser(data);
       }
       
       setSuccessMessage('User created successfully!');
@@ -231,14 +274,41 @@ const AdminDashboard: React.FC = () => {
   const handleUpdateUser = async () => {
     try {
       setLoading(true);
-      await api.put(`/users/${editingUser._id}`, userForm);
+      console.log('🔄 Updating user in Supabase...');
+      
+      const updateData = {
+        first_name: userForm.firstName.trim(),
+        last_name: userForm.lastName.trim(),
+        email: userForm.email.trim().toLowerCase(),
+        role: userForm.role,
+        phone: userForm.phone.trim() || '',
+        is_active: userForm.isActive,
+        specialty: userForm.role === 'clinician' ? userForm.specialty.trim() : null,
+        license_number: userForm.role === 'clinician' ? userForm.licenseNumber.trim() : null,
+        team: userForm.role === 'team_leader' ? userForm.team || 'DEFAULT TEAM' : null
+      };
+      
+      const { data, error } = await dataClient
+        .from('users')
+        .update(updateData)
+        .eq('id', editingUser.id)
+        .select()
+        .single();
+      
+      if (error) {
+        console.error('❌ Error updating user:', error);
+        setError('Failed to update user: ' + error.message);
+        return;
+      }
+      
+      console.log('✅ User updated successfully:', data);
       setSuccessMessage('User updated successfully!');
       setUserDialog(false);
       setEditingUser(null);
       resetUserForm();
       fetchUsers();
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to update user');
+      setError(err.message || 'Failed to update user');
     } finally {
       setLoading(false);
     }
@@ -685,8 +755,8 @@ const AdminDashboard: React.FC = () => {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {users.map((userItem) => (
-                    <TableRow key={userItem._id}>
+                  {users.map((userItem, index) => (
+                    <TableRow key={userItem.id || userItem._id || `user-${index}`}>
                       <TableCell sx={{ fontSize: { xs: '0.875rem', sm: '1rem' } }}>
                         {userItem.firstName} {userItem.lastName}
                       </TableCell>

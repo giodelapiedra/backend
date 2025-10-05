@@ -59,9 +59,10 @@ import {
   Clear,
   Sort,
 } from '@mui/icons-material';
-import { useAuth } from '../../contexts/AuthContext';
+import { useAuth } from '../../contexts/AuthContext.supabase';
+import { dataClient } from '../../lib/supabase';
+import { CaseAssignmentService } from '../../utils/caseAssignmentService';
 import LayoutWithSidebar from '../../components/LayoutWithSidebar';
-import api from '../../utils/api';
 
 interface ActivityLog {
   _id: string;
@@ -148,32 +149,54 @@ const WorkerActivityMonitor: React.FC = () => {
   const fetchData = async () => {
     try {
       setLoading(true);
-      const [activityLogsRes, casesRes] = await Promise.all([
-        api.get('/activity-logs'),
-        api.get('/cases')
-      ]);
       
-      setActivityLogs(activityLogsRes.data.logs || []);
-      setCases(casesRes.data.cases || []);
+      if (!user?.id) {
+        throw new Error('User not authenticated');
+      }
+
+      // Fetch activity logs and cases for this clinician
+      const activityLogsData: any[] = []; // Activity logs table exists but no data yet
+      const assignedCases = await CaseAssignmentService.getClinicianCases(user.id);
+      const casesData = assignedCases;
+      const enrichedActivityLogs: any[] = [];
+      const enrichedCases = assignedCases;
+      
+      console.log('Fetched assigned cases for activity monitor:', assignedCases.length);
+      console.log('Current user (clinician):', user.id);
+      
+      setActivityLogs(enrichedActivityLogs || []);
+      setCases(enrichedCases || []);
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to fetch data');
+      setError(err.message || 'Failed to fetch data');
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchData();
-  }, []);
+    if (user?.id) {
+      fetchData();
+    }
+  }, [user?.id]);
 
   const handleReviewLog = async () => {
     if (!selectedLog) return;
     
     try {
       setIsReviewing(true);
-      await api.put(`/activity-logs/${selectedLog._id}/review`, {
-        clinicianNotes: reviewNotes
-      });
+      
+      const { error: updateError } = await dataClient
+        .from('activity_logs')
+        .update({
+          is_reviewed: true,
+          reviewed_at: new Date().toISOString(),
+          clinician_notes: reviewNotes
+        })
+        .eq('id', selectedLog._id);
+      
+      if (updateError) {
+        throw updateError;
+      }
       
       // Update the log in state
       setActivityLogs(prev => prev.map(log => 
@@ -186,7 +209,7 @@ const WorkerActivityMonitor: React.FC = () => {
       setReviewNotes('');
       setSelectedLog(null);
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to review log');
+      setError(err.message || 'Failed to review log');
     } finally {
       setIsReviewing(false);
     }

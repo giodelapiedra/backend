@@ -44,52 +44,98 @@ import {
   Image as ImageIcon,
   VideoCall,
   MoreVert,
+  Refresh,
 } from '@mui/icons-material';
 import LayoutWithSidebar from '../components/LayoutWithSidebar';
-import api from '../utils/api';
+import { dataClient } from '../lib/supabase';
+import { useAuth } from '../contexts/AuthContext.supabase';
 import { createImageProps } from '../utils/imageUtils';
+import { useGetCaseByIdQuery } from '../store/api/casesApi';
 import '../styles/print.css';
 
+// Add CSS animations for high severity notifications
+const highSeverityStyles = `
+  @keyframes pulse {
+    0% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    50% {
+      opacity: 0.7;
+      transform: scale(1.05);
+    }
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+`;
+
+// Inject styles
+if (typeof document !== 'undefined') {
+  const styleSheet = document.createElement('style');
+  styleSheet.textContent = highSeverityStyles;
+  document.head.appendChild(styleSheet);
+}
+
 interface Notification {
-  _id: string;
+  id: string;
+  recipient_id: string;
+  sender_id: string;
+  type: string;
   title: string;
   message: string;
-  type: string;
-  priority: 'low' | 'medium' | 'high' | 'urgent';
-  isRead: boolean;
-  createdAt: string;
-  sender: {
+  is_read: boolean;
+  created_at: string;
+  severity?: string;
+  priority?: string;
+  sender?: {
     firstName: string;
     lastName: string;
     profileImage?: string;
   };
-  actionUrl?: string;
+  related_incident_id?: string;
+  related_case_id?: string;
 }
 
 interface Case {
-  _id: string;
-  caseNumber: string;
-  status: string;
-  priority: string;
-  createdAt: string;
-  injuryDetails: {
-    bodyPart: string;
-    injuryType: string;
-    severity: string;
-    description: string;
+  id?: string;
+  _id?: string;
+  case_number?: string;
+  caseNumber?: string;
+  worker_id?: string;
+  employer_id?: string;
+  case_manager_id?: string;
+  status?: string;
+  priority?: string;
+  injury_type?: string;
+  created_at?: string;
+  createdAt?: string;
+  incident_id?: string;
+  worker?: {
+    id?: string;
+    _id?: string;
+    first_name?: string;
+    firstName?: string;
+    last_name?: string;
+    lastName?: string;
+    email?: string;
   };
-  worker: {
-    _id: string;
-    firstName: string;
-    lastName: string;
-    email: string;
+  case_manager?: {
+    id?: string;
+    first_name?: string;
+    last_name?: string;
+    email?: string;
   };
   incident?: {
-    incidentNumber: string;
-    incidentDate: string;
-    description: string;
-    severity: string;
-    incidentType: string;
+    id?: string;
+    incident_type?: string;
+    incidentType?: string;
+    severity?: string;
+    description?: string;
+    reported_by?: string;
+    incidentNumber?: string;
+    incidentDate?: string;
     photos?: Array<{
       url: string;
       caption: string;
@@ -99,6 +145,7 @@ interface Case {
 }
 
 const NotificationsPage: React.FC = () => {
+  const { user } = useAuth();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -107,14 +154,68 @@ const NotificationsPage: React.FC = () => {
   const [selectedCase, setSelectedCase] = useState<Case | null>(null);
   const [caseDetailDialog, setCaseDetailDialog] = useState(false);
   const [loadingCase, setLoadingCase] = useState(false);
-
+  const [selectedIncident, setSelectedIncident] = useState<any>(null);
+  const [incidentDetailDialog, setIncidentDetailDialog] = useState(false);
+  const [loadingIncident, setLoadingIncident] = useState(false);
 
   useEffect(() => {
-    fetchNotifications();
-    
-    // Completely disable all notification polling to stop repeated requests
-    // TODO: Re-enable with proper SSE authentication later
-  }, []);
+    if (user?.id) {
+      fetchNotifications();
+    }
+  }, [user?.id]);
+
+  // Add real-time subscription for notifications
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const subscription = dataClient
+      .channel('notifications-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'notifications',
+          filter: `recipient_id=eq.${user.id}`
+        },
+        (payload) => {
+          console.log('New notification received:', payload);
+          // Refresh notifications when new one is added
+          fetchNotifications();
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'notifications',
+          filter: `recipient_id=eq.${user.id}`
+        },
+        (payload) => {
+          console.log('Notification updated:', payload);
+          // Refresh notifications when one is updated
+          fetchNotifications();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [user?.id]);
+
+  // Add window focus listener to refresh notifications
+  useEffect(() => {
+    const handleFocus = () => {
+      if (user?.id) {
+        fetchNotifications();
+      }
+    };
+
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [user?.id]);
 
   // Helper function to categorize notifications by time
   const categorizeNotificationsByTime = (notifications: Notification[]) => {
@@ -130,7 +231,7 @@ const NotificationsPage: React.FC = () => {
     };
 
     notifications.forEach(notification => {
-      const notificationDate = new Date(notification.createdAt);
+      const notificationDate = new Date(notification.created_at);
       
       if (notificationDate >= today) {
         categorized.today.push(notification);
@@ -166,10 +267,34 @@ const NotificationsPage: React.FC = () => {
   const fetchNotifications = async () => {
     try {
       setLoading(true);
-      const response = await api.get('/notifications');
-      setNotifications(response.data.notifications || []);
+      setError('');
+      
+      if (!user?.id) {
+        setError('User not authenticated');
+        return;
+      }
+
+      console.log('Fetching notifications for user:', user.id);
+      console.log('User email:', user.email);
+
+      const { data: notificationsData, error: notificationsError } = await dataClient
+        .from('notifications')
+        .select('*')
+        .eq('recipient_id', user.id)
+        .order('created_at', { ascending: false });
+
+      if (notificationsError) {
+        console.error('Error fetching notifications:', notificationsError);
+        throw notificationsError;
+      }
+
+      console.log('Fetched notifications:', notificationsData);
+      console.log('Total notifications found:', notificationsData?.length || 0);
+
+      setNotifications(notificationsData || []);
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to fetch notifications');
+      console.error('Error fetching notifications:', err);
+      setError(err.message || 'Failed to fetch notifications');
     } finally {
       setLoading(false);
     }
@@ -177,10 +302,36 @@ const NotificationsPage: React.FC = () => {
 
   const markAsRead = async (notificationId: string) => {
     try {
-      await api.put(`/notifications/${notificationId}/read`);
-      setNotifications(prev => 
-        prev.map(n => n._id === notificationId ? { ...n, isRead: true } : n)
+      console.log('🔄 Marking notification as read:', notificationId);
+
+      const { error: updateError } = await dataClient
+        .from('notifications')
+        .update({ 
+          is_read: true
+        })
+        .eq('id', notificationId);
+
+      if (updateError) {
+        throw updateError;
+      }
+
+      setNotifications(prev =>
+        prev.map(n => n.id === notificationId ? { ...n, is_read: true } : n)
       );
+
+      // Trigger global notification refresh event
+      console.log('📢 Triggering global notification refresh for single notification...');
+      const refreshEvent = new CustomEvent('notificationsMarkedAsRead', {
+        detail: { 
+          userId: user?.id,
+          notificationId: notificationId,
+          timestamp: Date.now(),
+          allRead: false
+        }
+      });
+      window.dispatchEvent(refreshEvent);
+
+      console.log('✅ Notification marked as read and cache cleared');
     } catch (err: any) {
       console.error('Failed to mark notification as read:', err);
     }
@@ -188,10 +339,57 @@ const NotificationsPage: React.FC = () => {
 
   const markAllAsRead = async () => {
     try {
-      await api.put('/notifications/read-all');
+      if (!user?.id) return;
+
+      console.log('🔄 Marking all notifications as read...');
+
+      const { error: updateError } = await dataClient
+        .from('notifications')
+        .update({ 
+          is_read: true
+        })
+        .eq('recipient_id', user.id)
+        .eq('is_read', false);
+
+      if (updateError) {
+        throw updateError;
+      }
+
       setNotifications(prev => 
-        prev.map(n => ({ ...n, isRead: true }))
+        prev.map(n => ({ ...n, is_read: true }))
       );
+
+      // Trigger global notification refresh event
+      console.log('📢 Triggering global notification refresh...');
+      const refreshEvent = new CustomEvent('notificationsMarkedAsRead', {
+        detail: { 
+          userId: user.id,
+          timestamp: Date.now(),
+          allRead: true
+        }
+      });
+      window.dispatchEvent(refreshEvent);
+
+      // Clear browser cache for notifications
+      if ('caches' in window) {
+        const cacheNames = await caches.keys();
+        await Promise.all(
+          cacheNames.map(cacheName => caches.delete(cacheName))
+        );
+        console.log('🧹 Browser cache cleared for notifications');
+      }
+
+      // Clear localStorage cache
+      const keysToRemove = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && (key.includes('rtk') || key.includes('cache') || key.includes('supabase') || key.includes('notification'))) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach(key => localStorage.removeItem(key));
+
+      console.log('✅ All notifications marked as read and cache cleared');
     } catch (err: any) {
       console.error('Failed to mark all notifications as read:', err);
     }
@@ -199,28 +397,152 @@ const NotificationsPage: React.FC = () => {
 
   const deleteNotification = async (notificationId: string) => {
     try {
-      await api.delete(`/notifications/${notificationId}`);
-      setNotifications(prev => prev.filter(n => n._id !== notificationId));
+      const { error: deleteError } = await dataClient
+        .from('notifications')
+        .delete()
+        .eq('id', notificationId);
+
+      if (deleteError) {
+        throw deleteError;
+      }
+
+      setNotifications(prev => prev.filter(n => n.id !== notificationId));
     } catch (err: any) {
       console.error('Failed to delete notification:', err);
     }
   };
 
   // Handle case viewing
-  const handleViewCase = async (actionUrl: string) => {
+  const handleViewCase = async (notification: Notification) => {
     try {
       setLoadingCase(true);
-      // Extract case ID from actionUrl (assuming format like /cases/123)
-      const caseId = actionUrl.split('/').pop();
+      
+      // Try to get case ID from notification
+      let caseId = notification.related_case_id;
+      
+      if (!caseId && notification.related_incident_id) {
+        // Get case ID from incident
+        const { data: caseData, error: caseError } = await dataClient
+          .from('cases')
+          .select('id')
+          .eq('incident_id', notification.related_incident_id)
+          .single();
+        
+        if (!caseError && caseData) {
+          caseId = caseData.id;
+        }
+      }
+      
+      if (!caseId) {
+        // Try to extract case number from message
+        const caseNumberMatch = notification.message.match(/Case:\s*([A-Z0-9-]+)/i);
+        if (caseNumberMatch) {
+          const caseNumber = caseNumberMatch[1];
+          const { data: caseData, error: caseError } = await dataClient
+            .from('cases')
+            .select('id')
+            .eq('case_number', caseNumber)
+            .single();
+          
+          if (!caseError && caseData) {
+            caseId = caseData.id;
+          }
+        }
+      }
+      
       if (caseId) {
-        const response = await api.get(`/cases/${caseId}`);
-        setSelectedCase(response.data.case);
+        const { data, error } = await dataClient
+          .from('cases')
+          .select(`
+            *,
+            worker:users!worker_id(id, first_name, last_name, email),
+            case_manager:users!case_manager_id(id, first_name, last_name, email),
+            incident:incidents!incident_id(id, severity, incident_type, description, reported_by)
+          `)
+          .eq('id', caseId)
+          .single();
+        
+        if (error) throw error;
+        console.log('Case data loaded:', data);
+        console.log('Incident data:', data.incident);
+        setSelectedCase(data);
         setCaseDetailDialog(true);
+      } else {
+        console.error('Could not find case ID for notification');
+        alert('Case details not available');
       }
     } catch (error) {
       console.error('Error fetching case details:', error);
+      alert('Error loading case details');
     } finally {
       setLoadingCase(false);
+    }
+  };
+
+  // Handle incident viewing
+  const handleViewIncident = async (notification: Notification) => {
+    try {
+      setLoadingIncident(true);
+      
+      // Try to get incident ID from notification message or case
+      let incidentId = notification.related_incident_id;
+      
+      if (!incidentId && notification.related_case_id) {
+        // Get incident ID from case
+        const { data: caseData, error: caseError } = await dataClient
+          .from('cases')
+          .select('incident_id')
+          .eq('id', notification.related_case_id)
+          .single();
+        
+        if (!caseError && caseData) {
+          incidentId = caseData.incident_id;
+        }
+      }
+      
+      if (!incidentId) {
+        // Try to extract from message or find by description
+        const { data: incidents, error: incidentError } = await dataClient
+          .from('incidents')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(10);
+        
+        if (!incidentError && incidents) {
+          // Find incident that matches the notification time and type
+          const matchingIncident = incidents.find(incident => 
+            incident.severity === notification.severity &&
+            Math.abs(new Date(incident.created_at).getTime() - new Date(notification.created_at).getTime()) < 60000 // Within 1 minute
+          );
+          
+          if (matchingIncident) {
+            incidentId = matchingIncident.id;
+          }
+        }
+      }
+      
+      if (incidentId) {
+        const { data, error } = await dataClient
+          .from('incidents')
+          .select(`
+            *,
+            reported_by_user:users!reported_by(id, first_name, last_name, email)
+          `)
+          .eq('id', incidentId)
+          .single();
+        
+        if (error) throw error;
+        setSelectedIncident(data);
+        setIncidentDetailDialog(true);
+      } else {
+        console.error('Could not find incident ID for notification');
+        alert('Incident details not available');
+      }
+    } catch (error) {
+      console.error('Error fetching incident details:', error);
+      alert('Error loading incident details');
+    } finally {
+      setLoadingIncident(false);
     }
   };
 
@@ -443,11 +765,11 @@ const NotificationsPage: React.FC = () => {
             <div>
               <div class="info-item">
                 <div class="info-label">Worker Name</div>
-                <div class="info-value">${selectedCase?.worker.firstName} ${selectedCase?.worker.lastName}</div>
+                <div class="info-value">${selectedCase?.worker?.firstName || selectedCase?.worker?.first_name || 'N/A'} ${selectedCase?.worker?.lastName || selectedCase?.worker?.last_name || 'N/A'}</div>
               </div>
               <div class="info-item">
                 <div class="info-label">Email Address</div>
-                <div class="info-value">${selectedCase?.worker.email}</div>
+                <div class="info-value">${selectedCase?.worker?.email || 'N/A'}</div>
               </div>
             </div>
             <div>
@@ -463,25 +785,27 @@ const NotificationsPage: React.FC = () => {
           </div>
           <div class="status-badges">
             <span class="badge ${selectedCase?.status}">${selectedCase?.status?.replace('_', ' ').toUpperCase() || 'UNKNOWN'}</span>
-            <span class="badge ${selectedCase?.priority}">${selectedCase?.priority?.toUpperCase() || 'UNKNOWN'}</span>
+            <span class="badge ${selectedCase?.incident?.severity}">${selectedCase?.incident?.severity?.toUpperCase() || 'UNKNOWN'}</span>
           </div>
         </div>
         
         <div class="section">
-          <h3>Injury Details</h3>
-          <div class="injury-details">
+          <h3>Case Information</h3>
+          <div class="case-details">
             <div class="info-item">
-              <div class="info-label">Body Part & Injury Type</div>
-              <div class="info-value">${selectedCase?.injuryDetails.bodyPart} - ${selectedCase?.injuryDetails.injuryType}</div>
+              <div class="info-label">Case Number</div>
+              <div class="info-value">${selectedCase?.case_number || selectedCase?.caseNumber || 'N/A'}</div>
             </div>
             <div class="info-item">
-              <div class="info-label">Severity Level</div>
-              <div class="info-value">${selectedCase?.injuryDetails.severity?.replace('_', ' ').toUpperCase() || 'UNKNOWN'}</div>
+              <div class="info-label">Status</div>
+              <div class="info-value">${selectedCase?.status?.replace('_', ' ').toUpperCase() || 'UNKNOWN'}</div>
             </div>
+            ${selectedCase?.injury_type ? `
             <div class="info-item">
-              <div class="info-label">Description</div>
-              <div class="info-value">${selectedCase?.injuryDetails.description || 'No description provided'}</div>
+              <div class="info-label">Injury Type</div>
+              <div class="info-value">${selectedCase.injury_type}</div>
             </div>
+            ` : ''}
           </div>
         </div>
         
@@ -491,23 +815,23 @@ const NotificationsPage: React.FC = () => {
           <div class="incident-details">
             <div class="info-item">
               <div class="info-label">Incident Number</div>
-              <div class="info-value">${selectedCase.incident.incidentNumber}</div>
+              <div class="info-value">${selectedCase.incident?.id || 'N/A'}</div>
             </div>
             <div class="info-item">
               <div class="info-label">Incident Date</div>
-              <div class="info-value">${new Date(selectedCase.incident.incidentDate).toLocaleDateString()}</div>
+              <div class="info-value">${selectedCase.incident?.incidentDate ? new Date(selectedCase.incident.incidentDate).toLocaleDateString() : 'N/A'}</div>
             </div>
             <div class="info-item">
               <div class="info-label">Incident Type</div>
-              <div class="info-value">${selectedCase.incident.incidentType?.replace('_', ' ').toUpperCase() || 'UNKNOWN'}</div>
+              <div class="info-value">${selectedCase.incident?.incident_type?.replace('_', ' ').toUpperCase() || 'UNKNOWN'}</div>
             </div>
             <div class="info-item">
               <div class="info-label">Severity</div>
-              <div class="info-value">${selectedCase.incident.severity?.replace('_', ' ').toUpperCase() || 'UNKNOWN'}</div>
+              <div class="info-value">${selectedCase.incident?.severity?.replace('_', ' ').toUpperCase() || 'UNKNOWN'}</div>
             </div>
             <div class="info-item">
               <div class="info-label">Description</div>
-              <div class="info-value">${selectedCase.incident.description || 'No description provided'}</div>
+              <div class="info-value">${selectedCase.incident?.description || 'No description provided'}</div>
             </div>
           </div>
         </div>
@@ -578,13 +902,39 @@ const NotificationsPage: React.FC = () => {
     }
   };
 
+  const isHighSeverity = (notification: Notification) => {
+    // Check direct severity field - only high severity levels
+    if (notification.severity === 'medical_treatment' || 
+        notification.severity === 'lost_time' || 
+        notification.severity === 'fatality') {
+      return true;
+    }
+
+    // Check priority field - only high/urgent priority
+    if (notification.priority === 'high' || notification.priority === 'urgent') {
+      return true;
+    }
+
+    // Check message content for high severity keywords only
+    const highSeverityKeywords = ['medical_treatment', 'lost_time', 'fatality', 'high', 'urgent', 'critical'];
+    const messageLower = notification.message.toLowerCase();
+    if (highSeverityKeywords.some(keyword => messageLower.includes(keyword))) {
+      return true;
+    }
+
+    // Only return true for actual high severity cases
+    return false;
+  };
+
   // Notification Item Component
   const NotificationItem: React.FC<{
     notification: Notification;
     onMarkAsRead: (id: string) => void;
     onDelete: (id: string) => void;
+    onViewIncident: (notification: Notification) => void;
+    onViewCase: (notification: Notification) => void;
     getTimeAgo: (dateString: string) => string;
-  }> = ({ notification, onMarkAsRead, onDelete, getTimeAgo }) => {
+  }> = ({ notification, onMarkAsRead, onDelete, onViewIncident, onViewCase, getTimeAgo }) => {
     const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
 
     const handleOptionsClick = (event: React.MouseEvent<HTMLElement>) => {
@@ -595,26 +945,50 @@ const NotificationsPage: React.FC = () => {
       setAnchorEl(null);
     };
 
+    const isHigh = isHighSeverity(notification);
+    
     return (
     <Box
       sx={{
         display: 'flex',
         alignItems: 'center',
         padding: '16px',
-        backgroundColor: notification.isRead ? 'transparent' : '#f8f9fa',
+        backgroundColor: isHigh 
+          ? (notification.is_read ? 'rgba(239, 68, 68, 0.05)' : 'rgba(239, 68, 68, 0.1)')
+          : (notification.is_read ? 'transparent' : '#f8f9fa'),
         borderRadius: '12px',
         transition: 'all 0.2s ease',
         cursor: 'pointer',
-        border: '1px solid transparent',
+        border: isHigh 
+          ? `2px solid ${notification.is_read ? 'rgba(239, 68, 68, 0.3)' : 'rgba(239, 68, 68, 0.5)'}`
+          : '1px solid transparent',
+        position: 'relative',
         '&:hover': {
-          backgroundColor: notification.isRead ? '#f8f9fa' : '#f1f3f4',
-          borderColor: '#e5e7eb'
-        }
+          backgroundColor: isHigh 
+            ? (notification.is_read ? 'rgba(239, 68, 68, 0.1)' : 'rgba(239, 68, 68, 0.15)')
+            : (notification.is_read ? '#f8f9fa' : '#f1f3f4'),
+          borderColor: isHigh ? 'rgba(239, 68, 68, 0.7)' : '#e5e7eb',
+          transform: isHigh ? 'translateY(-1px)' : 'none',
+          boxShadow: isHigh ? '0 4px 12px rgba(239, 68, 68, 0.2)' : 'none'
+        },
+        ...(isHigh && !notification.is_read && {
+          '&::before': {
+            content: '""',
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            height: '3px',
+            background: 'linear-gradient(90deg, #ef4444, #dc2626, #b91c1c)',
+            borderRadius: '12px 12px 0 0',
+            animation: 'pulse 2s infinite'
+          }
+        })
       }}
     >
       {/* User Avatar */}
       <Box sx={{ marginRight: '16px', position: 'relative' }}>
-        {notification.sender.profileImage ? (
+        {notification.sender?.profileImage ? (
           <img
             {...createImageProps(notification.sender.profileImage)}
             alt={`${notification.sender.firstName} ${notification.sender.lastName}`}
@@ -635,7 +1009,7 @@ const NotificationsPage: React.FC = () => {
               fontWeight: '600',
             }}
           >
-            {notification.sender.firstName.charAt(0)}{notification.sender.lastName.charAt(0)}
+            {notification.sender ? `${notification.sender.firstName.charAt(0)}${notification.sender.lastName.charAt(0)}` : 'N'}
           </Avatar>
         )}
         
@@ -648,12 +1022,17 @@ const NotificationsPage: React.FC = () => {
             width: '20px',
             height: '20px',
             borderRadius: '50%',
-            backgroundColor: 'white',
+            backgroundColor: isHigh ? '#ef4444' : 'white',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            border: '2px solid white',
-            boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+            border: `2px solid ${isHigh ? '#dc2626' : 'white'}`,
+            boxShadow: isHigh 
+              ? '0 2px 8px rgba(239, 68, 68, 0.4)' 
+              : '0 2px 4px rgba(0,0,0,0.1)',
+            ...(isHigh && !notification.is_read && {
+              animation: 'pulse 1.5s infinite'
+            })
           }}
         >
           {getNotificationIcon(notification.type)}
@@ -665,20 +1044,25 @@ const NotificationsPage: React.FC = () => {
         <Typography
           variant="h6"
           sx={{
-            fontWeight: notification.isRead ? 500 : 600,
-            color: notification.isRead ? '#6b7280' : '#111827',
+            fontWeight: notification.is_read ? 500 : 600,
+            color: isHigh 
+              ? (notification.is_read ? '#dc2626' : '#b91c1c')
+              : (notification.is_read ? '#6b7280' : '#111827'),
             marginBottom: '4px',
-            fontSize: '0.875rem',
-            lineHeight: 1.4
+            fontSize: isHigh ? '0.9rem' : '0.875rem',
+            lineHeight: 1.4,
+            ...(isHigh && !notification.is_read && {
+              textShadow: '0 1px 2px rgba(239, 68, 68, 0.1)'
+            })
           }}
         >
-          {notification.title}
+          {isHigh && !notification.is_read && '🚨 '}{notification.title}
         </Typography>
         
         <Typography
           variant="body2"
           sx={{
-            color: notification.isRead ? '#9ca3af' : '#6b7280',
+            color: notification.is_read ? '#9ca3af' : '#6b7280',
             fontSize: '0.75rem',
             lineHeight: 1.4,
             marginBottom: '4px'
@@ -694,20 +1078,24 @@ const NotificationsPage: React.FC = () => {
             fontSize: '0.75rem'
           }}
         >
-          {getTimeAgo(notification.createdAt)}
+          {getTimeAgo(notification.created_at)}
         </Typography>
       </Box>
 
       {/* Status and Options */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
         {/* Unread Indicator */}
-        {!notification.isRead && (
+        {!notification.is_read && (
           <Box
             sx={{
-              width: '8px',
-              height: '8px',
+              width: isHigh ? '12px' : '8px',
+              height: isHigh ? '12px' : '8px',
               borderRadius: '50%',
-              backgroundColor: '#9c27b0',
+              backgroundColor: isHigh ? '#ef4444' : '#9c27b0',
+              ...(isHigh && {
+                animation: 'pulse 1s infinite',
+                boxShadow: '0 0 8px rgba(239, 68, 68, 0.6)'
+              })
             }}
           />
         )}
@@ -741,9 +1129,33 @@ const NotificationsPage: React.FC = () => {
           }
         }}
       >
+        {(notification.type === 'incident_reported' || notification.type === 'incident_case_created') && (
+          <MenuItem
+            onClick={() => {
+              onViewIncident(notification);
+              handleOptionsClose();
+            }}
+            sx={{ fontSize: '0.875rem' }}
+          >
+            <Warning sx={{ mr: 1, fontSize: '1rem' }} />
+            View Incident Details
+          </MenuItem>
+        )}
+        {(notification.type === 'incident_reported' || notification.type === 'incident_case_created' || notification.message.includes('Case:')) && (
+          <MenuItem
+            onClick={() => {
+              onViewCase(notification);
+              handleOptionsClose();
+            }}
+            sx={{ fontSize: '0.875rem' }}
+          >
+            <Assignment sx={{ mr: 1, fontSize: '1rem' }} />
+            View Case Details
+          </MenuItem>
+        )}
         <MenuItem
           onClick={() => {
-            onMarkAsRead(notification._id);
+            onMarkAsRead(notification.id);
             handleOptionsClose();
           }}
           sx={{ fontSize: '0.875rem' }}
@@ -753,7 +1165,7 @@ const NotificationsPage: React.FC = () => {
         </MenuItem>
         <MenuItem
           onClick={() => {
-            onDelete(notification._id);
+            onDelete(notification.id);
             handleOptionsClose();
           }}
           sx={{ fontSize: '0.875rem', color: '#dc2626' }}
@@ -766,7 +1178,7 @@ const NotificationsPage: React.FC = () => {
     );
   };
 
-  const unreadCount = notifications.filter(n => !n.isRead).length;
+  const unreadCount = notifications.filter(n => !n.is_read).length;
   const categorizedNotifications = categorizeNotificationsByTime(notifications);
 
   if (loading) {
@@ -793,11 +1205,11 @@ const NotificationsPage: React.FC = () => {
             </Typography>
           </Box>
           
-          {unreadCount > 0 && (
+          <Box sx={{ display: 'flex', gap: 2 }}>
             <Button
               variant="outlined"
-              startIcon={<MarkEmailRead />}
-              onClick={markAllAsRead}
+              startIcon={<Refresh />}
+              onClick={fetchNotifications}
               sx={{ 
                 borderRadius: 2,
                 borderColor: '#d1d5db',
@@ -808,9 +1220,27 @@ const NotificationsPage: React.FC = () => {
                 }
               }}
             >
-              Mark All as Read
+              Refresh
             </Button>
-          )}
+            {unreadCount > 0 && (
+              <Button
+                variant="outlined"
+                startIcon={<MarkEmailRead />}
+                onClick={markAllAsRead}
+                sx={{ 
+                  borderRadius: 2,
+                  borderColor: '#d1d5db',
+                  color: '#374151',
+                  '&:hover': {
+                    borderColor: '#9ca3af',
+                    backgroundColor: '#f9fafb'
+                  }
+                }}
+              >
+                Mark All as Read
+              </Button>
+            )}
+          </Box>
         </Box>
 
         {error && (
@@ -850,10 +1280,12 @@ const NotificationsPage: React.FC = () => {
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                   {categorizedNotifications.today.map((notification) => (
                     <NotificationItem
-                      key={notification._id}
+                      key={notification.id}
                       notification={notification}
                       onMarkAsRead={markAsRead}
                       onDelete={deleteNotification}
+                      onViewIncident={handleViewIncident}
+                      onViewCase={handleViewCase}
                       getTimeAgo={getTimeAgo}
                     />
                   ))}
@@ -877,10 +1309,12 @@ const NotificationsPage: React.FC = () => {
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                   {categorizedNotifications.yesterday.map((notification) => (
                     <NotificationItem
-                      key={notification._id}
+                      key={notification.id}
                       notification={notification}
                       onMarkAsRead={markAsRead}
                       onDelete={deleteNotification}
+                      onViewIncident={handleViewIncident}
+                      onViewCase={handleViewCase}
                       getTimeAgo={getTimeAgo}
                     />
                   ))}
@@ -904,10 +1338,12 @@ const NotificationsPage: React.FC = () => {
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                   {categorizedNotifications.older.map((notification) => (
                     <NotificationItem
-                      key={notification._id}
+                      key={notification.id}
                       notification={notification}
                       onMarkAsRead={markAsRead}
                       onDelete={deleteNotification}
+                      onViewIncident={handleViewIncident}
+                      onViewCase={handleViewCase}
                       getTimeAgo={getTimeAgo}
                     />
                   ))}
@@ -990,23 +1426,23 @@ const NotificationsPage: React.FC = () => {
                     <Grid container spacing={3} alignItems="center">
                       <Grid item xs={12} md={8}>
                         <Typography variant="h5" sx={{ fontWeight: 600, mb: 1, color: '#1e293b' }}>
-                          {selectedCase.worker.firstName} {selectedCase.worker.lastName}
+                          {selectedCase.worker?.firstName || selectedCase.worker?.first_name || 'N/A'} {selectedCase.worker?.lastName || selectedCase.worker?.last_name || 'N/A'}
                         </Typography>
                         <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
-                          {selectedCase.worker.email}
+                          {selectedCase.worker?.email || 'N/A'}
                         </Typography>
                         <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
                           <Chip 
                             icon={<Assignment />}
                             label={selectedCase.status?.replace('_', ' ').toUpperCase() || 'UNKNOWN'}
-                            color={getPriorityColor(selectedCase.status)}
+                            color={getPriorityColor(selectedCase.status || 'unknown')}
                             variant="filled"
                             sx={{ fontWeight: 600 }}
                           />
                           <Chip 
                             icon={<Warning />}
-                            label={selectedCase.priority?.toUpperCase() || 'UNKNOWN'}
-                            color={getPriorityColor(selectedCase.priority)}
+                            label={selectedCase.incident?.severity?.toUpperCase() || 'UNKNOWN'}
+                            color={getPriorityColor(selectedCase.incident?.severity || 'unknown')}
                             variant="filled"
                             sx={{ fontWeight: 600 }}
                           />
@@ -1018,7 +1454,7 @@ const NotificationsPage: React.FC = () => {
                             Case Created
                           </Typography>
                           <Typography variant="body1" sx={{ fontWeight: 600 }}>
-                            {new Date(selectedCase.createdAt).toLocaleDateString()}
+                            {new Date(selectedCase.createdAt || selectedCase.created_at || '').toLocaleDateString()}
                           </Typography>
                         </Box>
                       </Grid>
@@ -1042,9 +1478,10 @@ const NotificationsPage: React.FC = () => {
                           Case Information
                         </Typography>
                         
+                        {/* Case Information */}
                         <Box sx={{ mb: 3 }}>
                           <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1, fontWeight: 600 }}>
-                            Injury Details
+                            Case Information
                           </Typography>
                           <Box sx={{ 
                             p: 2, 
@@ -1053,24 +1490,17 @@ const NotificationsPage: React.FC = () => {
                             border: '1px solid #e2e8f0'
                           }}>
                             <Typography variant="body1" sx={{ fontWeight: 600, mb: 1 }}>
-                              {selectedCase.injuryDetails.bodyPart} - {selectedCase.injuryDetails.injuryType}
+                              Case Number: {selectedCase.case_number || selectedCase.caseNumber || 'N/A'}
                             </Typography>
                             <Typography variant="body2" color="text.secondary">
-                              {selectedCase.injuryDetails.description}
+                              Status: {selectedCase.status?.replace('_', ' ').toUpperCase() || 'UNKNOWN'}
                             </Typography>
+                            {selectedCase.injury_type && (
+                              <Typography variant="body2" color="text.secondary">
+                                Injury Type: {selectedCase.injury_type}
+                              </Typography>
+                            )}
                           </Box>
-                        </Box>
-
-                        <Box sx={{ mb: 3 }}>
-                          <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1, fontWeight: 600 }}>
-                            Severity Level
-                          </Typography>
-                          <Chip 
-                            label={selectedCase.injuryDetails.severity?.replace('_', ' ').toUpperCase() || 'UNKNOWN'}
-                            color={getPriorityColor(selectedCase.injuryDetails.severity)}
-                            variant="outlined"
-                            sx={{ fontWeight: 600 }}
-                          />
                         </Box>
                       </CardContent>
                     </Card>
@@ -1103,15 +1533,11 @@ const NotificationsPage: React.FC = () => {
                               border: '1px solid #fbbf24'
                             }}>
                               <Typography variant="body1" sx={{ fontWeight: 600, mb: 1 }}>
-                                {selectedCase.incident.incidentNumber}
-                              </Typography>
-                              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                                <CalendarToday sx={{ fontSize: 16, mr: 0.5, verticalAlign: 'middle' }} />
-                                {new Date(selectedCase.incident.incidentDate).toLocaleDateString()}
+                                Incident ID: {selectedCase.incident.id}
                               </Typography>
                               <Typography variant="body2" color="text.secondary">
                                 <Description sx={{ fontSize: 16, mr: 0.5, verticalAlign: 'middle' }} />
-                                {selectedCase.incident.description}
+                                {selectedCase.incident.description || 'No description provided'}
                               </Typography>
                             </Box>
                           </Box>
@@ -1122,14 +1548,14 @@ const NotificationsPage: React.FC = () => {
                             </Typography>
                             <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
                               <Chip 
-                                label={selectedCase.incident.incidentType?.replace('_', ' ').toUpperCase() || 'UNKNOWN'}
+                                label={selectedCase.incident.incident_type?.replace('_', ' ').toUpperCase() || 'UNKNOWN'}
                                 color="info"
                                 variant="outlined"
                                 sx={{ fontWeight: 600 }}
                               />
                               <Chip 
                                 label={selectedCase.incident.severity?.replace('_', ' ').toUpperCase() || 'UNKNOWN'}
-                                color={getPriorityColor(selectedCase.incident.severity)}
+                                color={getPriorityColor(selectedCase.incident.severity || 'unknown')}
                                 variant="outlined"
                                 sx={{ fontWeight: 600 }}
                               />
@@ -1153,10 +1579,10 @@ const NotificationsPage: React.FC = () => {
                         mb: 3
                       }}>
                         <PhotoCamera sx={{ mr: 1.5, color: '#10b981' }} />
-                        Incident Photos ({selectedCase.incident.photos.length})
+                        Incident Photos ({selectedCase.incident?.photos?.length || 0})
                       </Typography>
                       <Grid container spacing={2}>
-                        {selectedCase.incident.photos.map((photo, index) => (
+                        {selectedCase.incident?.photos?.map((photo: any, index: number) => (
                           <Grid item xs={12} sm={6} md={4} key={index}>
                             <Card sx={{ 
                               border: '2px solid #e2e8f0',
@@ -1238,10 +1664,175 @@ const NotificationsPage: React.FC = () => {
             </Button>
           </DialogActions>
         </Dialog>
+
+        {/* Incident Detail Dialog */}
+        <Dialog
+          open={incidentDetailDialog}
+          onClose={() => setIncidentDetailDialog(false)}
+          maxWidth="md"
+          fullWidth
+          PaperProps={{
+            sx: {
+              borderRadius: 3,
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)'
+            }
+          }}
+        >
+          <DialogTitle sx={{ 
+            p: 3, 
+            backgroundColor: '#f8fafc', 
+            borderBottom: '1px solid #e5e7eb',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 2
+          }}>
+            <Warning color="warning" />
+            <Box>
+              <Typography variant="h6" sx={{ fontWeight: 600, color: '#111827' }}>
+                Incident Details
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Complete incident information and reporting details
+              </Typography>
+            </Box>
+          </DialogTitle>
+          
+          <DialogContent sx={{ p: 0 }}>
+            {loadingIncident ? (
+              <Box display="flex" justifyContent="center" alignItems="center" minHeight="200px">
+                <CircularProgress size={40} />
+              </Box>
+            ) : selectedIncident ? (
+              <Box className="incident-details-content" sx={{ p: 3 }}>
+                {/* Incident Header */}
+                <Card sx={{ mb: 3, border: '1px solid #e5e7eb' }}>
+                  <CardContent sx={{ p: 3 }}>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
+                      <Box>
+                        <Typography variant="h6" sx={{ fontWeight: 600, color: '#111827', mb: 1 }}>
+                          Incident Report
+                        </Typography>
+                        <Chip
+                          label={selectedIncident.incident_type?.replace('_', ' ').toUpperCase() || 'UNKNOWN'}
+                          color="primary"
+                          size="small"
+                          sx={{ mb: 1 }}
+                        />
+                      </Box>
+                      <Chip
+                        label={selectedIncident.severity?.toUpperCase() || 'UNKNOWN'}
+                        color={
+                          selectedIncident.severity === 'high' ? 'error' :
+                          selectedIncident.severity === 'medium' ? 'warning' : 'success'
+                        }
+                        size="small"
+                      />
+                    </Box>
+                    
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                      <strong>Reported:</strong> {new Date(selectedIncident.created_at).toLocaleString()}
+                    </Typography>
+                    
+                    {selectedIncident.reported_by_user && (
+                      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                        <strong>Reported by:</strong> {selectedIncident.reported_by_user.first_name} {selectedIncident.reported_by_user.last_name}
+                      </Typography>
+                    )}
+                  </CardContent>
+                </Card>
+
+                {/* Incident Description */}
+                <Card sx={{ mb: 3, border: '1px solid #e5e7eb' }}>
+                  <CardContent sx={{ p: 3 }}>
+                    <Typography variant="h6" sx={{ fontWeight: 600, color: '#111827', mb: 2 }}>
+                      Description
+                    </Typography>
+                    <Typography variant="body1" sx={{ 
+                      lineHeight: 1.6,
+                      color: '#374151',
+                      whiteSpace: 'pre-wrap'
+                    }}>
+                      {selectedIncident.description || 'No description provided'}
+                    </Typography>
+                  </CardContent>
+                </Card>
+
+                {/* Incident Details */}
+                <Card sx={{ border: '1px solid #e5e7eb' }}>
+                  <CardContent sx={{ p: 3 }}>
+                    <Typography variant="h6" sx={{ fontWeight: 600, color: '#111827', mb: 2 }}>
+                      Incident Information
+                    </Typography>
+                    
+                    <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2 }}>
+                      <Box>
+                        <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
+                          Incident Type
+                        </Typography>
+                        <Typography variant="body1" sx={{ fontWeight: 500 }}>
+                          {selectedIncident.incident_type?.replace('_', ' ').toUpperCase() || 'Not specified'}
+                        </Typography>
+                      </Box>
+                      
+                      <Box>
+                        <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
+                          Severity Level
+                        </Typography>
+                        <Typography variant="body1" sx={{ fontWeight: 500 }}>
+                          {selectedIncident.severity?.toUpperCase() || 'Not specified'}
+                        </Typography>
+                      </Box>
+                      
+                      <Box>
+                        <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
+                          Incident ID
+                        </Typography>
+                        <Typography variant="body1" sx={{ fontWeight: 500, fontFamily: 'monospace' }}>
+                          {selectedIncident.id}
+                        </Typography>
+                      </Box>
+                      
+                      <Box>
+                        <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
+                          Date Reported
+                        </Typography>
+                        <Typography variant="body1" sx={{ fontWeight: 500 }}>
+                          {new Date(selectedIncident.created_at).toLocaleDateString()}
+                        </Typography>
+                      </Box>
+                    </Box>
+                  </CardContent>
+                </Card>
+              </Box>
+            ) : (
+              <Box display="flex" justifyContent="center" alignItems="center" minHeight="200px">
+                <Alert severity="error">
+                  Failed to load incident details
+                </Alert>
+              </Box>
+            )}
+          </DialogContent>
+          
+          <DialogActions sx={{ p: 3, backgroundColor: '#f8fafc' }}>
+            <Button
+              onClick={() => setIncidentDetailDialog(false)}
+              variant="outlined"
+              sx={{ 
+                borderRadius: 2,
+                px: 3,
+                py: 1,
+                fontWeight: 600
+              }}
+            >
+              Close
+            </Button>
+          </DialogActions>
+        </Dialog>
       </Box>
     </LayoutWithSidebar>
   );
 };
 
 export default NotificationsPage;
+
 

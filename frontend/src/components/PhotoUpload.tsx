@@ -14,7 +14,7 @@ import {
   Delete,
   PhotoCamera,
 } from '@mui/icons-material';
-import { createImageProps } from '../utils/imageUtils';
+import { getProfileImageProps, clearImageCache } from '../utils/imageUtils';
 
 interface PhotoUploadProps {
   onPhotoChange: (file: File | null) => void;
@@ -104,6 +104,7 @@ const PhotoUpload: React.FC<PhotoUploadProps> = ({
           <img
             src={preview}
             alt="Profile preview"
+            crossOrigin="anonymous"
             style={{
               width: size - 4,
               height: size - 4,
@@ -113,8 +114,9 @@ const PhotoUpload: React.FC<PhotoUploadProps> = ({
           />
         ) : currentPhoto ? (
           <img
-            {...createImageProps(currentPhoto)}
+            {...getProfileImageProps(currentPhoto)}
             alt="Current profile photo"
+            crossOrigin="anonymous"
             style={{
               width: size - 4,
               height: size - 4,

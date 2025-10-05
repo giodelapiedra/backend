@@ -13,33 +13,19 @@ root.render(
   </React.StrictMode>
 );
 
-// Register service worker
+// Service Worker registration DISABLED for real-time updates
+// This prevents caching issues that interfere with real-time data
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    // Check if we're on the appointments page
-    const isAppointmentsPage = window.location.pathname.includes('/appointments');
+    console.log('Service Worker registration DISABLED for real-time updates');
     
-    // If we're on the appointments page, don't register the service worker
-    // to prevent automatic refreshes
-    if (!isAppointmentsPage) {
-      navigator.serviceWorker.register('/sw.js')
-        .then((registration) => {
-          console.log('SW registered: ', registration);
-        })
-        .catch((registrationError) => {
-          console.log('SW registration failed: ', registrationError);
-        });
-    } else {
-      console.log('Skipping SW registration on appointments page to prevent refreshes');
-      
-      // Unregister any existing service worker on the appointments page
-      navigator.serviceWorker.getRegistrations().then(registrations => {
-        for (let registration of registrations) {
-          registration.unregister();
-          console.log('SW unregistered for appointments page');
-        }
-      });
-    }
+    // Unregister any existing service workers to prevent caching
+    navigator.serviceWorker.getRegistrations().then(registrations => {
+      for (let registration of registrations) {
+        registration.unregister();
+        console.log('SW unregistered to prevent caching issues');
+      }
+    });
   });
 }
 

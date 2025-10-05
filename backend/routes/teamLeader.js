@@ -3,7 +3,7 @@ const router = express.Router();
 const { body, validationResult } = require('express-validator');
 const { authMiddleware } = require('../middleware/auth');
 const asyncHandler = require('../middleware/asyncHandler');
-const { cache } = require('../middleware/cache');
+const { cache, invalidateCache } = require('../middleware/cache');
 const rateLimit = require('express-rate-limit');
 const { 
   getDashboard, 
@@ -340,5 +340,30 @@ router.get('/teams-list',
     await getTeamList(req, res);
   })
 );
+
+// @route   POST /api/team-leader/clear-cache
+// @desc    Clear dashboard cache for immediate data refresh
+// @access  Private (Team Leader)
+router.post('/clear-cache', authMiddleware, asyncHandler(async (req, res) => {
+  if (req.user.role !== 'team_leader') {
+    return res.status(403).json({ message: 'Access denied. Team leader role required.' });
+  }
+
+  try {
+    // Clear dashboard cache for this team leader
+    const cacheKey = `team-leader-dashboard-${req.user._id}`;
+    cache.del(cacheKey);
+    
+    console.log(`Dashboard cache cleared for team leader: ${req.user._id}`);
+    
+    res.json({
+      message: 'Dashboard cache cleared successfully',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error clearing cache:', error);
+    res.status(500).json({ message: 'Error clearing cache' });
+  }
+}));
 
 module.exports = router;

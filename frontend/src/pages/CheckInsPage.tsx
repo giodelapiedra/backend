@@ -37,7 +37,7 @@ import {
 } from '@mui/icons-material';
 import LayoutWithSidebar from '../components/LayoutWithSidebar';
 import api from '../utils/api';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuth } from '../contexts/AuthContext.supabase';
 import { useNavigate } from 'react-router-dom';
 
 interface CheckIn {

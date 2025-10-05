@@ -159,7 +159,7 @@ caseSchema.pre('save', async function() {
 });
 
 // Database indexes for better performance
-caseSchema.index({ caseNumber: 1 });
+// Note: caseNumber index is automatically created by unique: true constraint
 caseSchema.index({ worker: 1 });
 caseSchema.index({ employer: 1 });
 caseSchema.index({ caseManager: 1 });

@@ -3,11 +3,30 @@
  */
 
 /**
+ * Checks if an image URL is a Supabase storage URL
+ */
+const isSupabaseUrl = (url: string): boolean => {
+  return url.includes('supabase.co') || url.includes('/storage/v1/object/');
+};
+
+/**
+ * Checks if an image URL is a base64 data URL
+ */
+const isBase64Url = (url: string): boolean => {
+  return url.startsWith('data:image/');
+};
+
+/**
  * Constructs the full URL for an uploaded image
- * @param imagePath - The relative path to the image (e.g., "/uploads/incidents/filename.jpg")
+ * @param imagePath - The relative path or full URL to the image
  * @returns The full URL to access the image
  */
 export const getImageUrl = (imagePath: string): string => {
+  // If it's already a full URL (Supabase or base64), return as is
+  if (isSupabaseUrl(imagePath) || isBase64Url(imagePath) || imagePath.startsWith('http')) {
+    return imagePath;
+  }
+  
   // Get the base URL from environment variable
   const baseUrl = process.env.REACT_APP_API_URL?.replace('/api', '') || 'http://localhost:5000';
   
@@ -22,32 +41,38 @@ export const getImageUrl = (imagePath: string): string => {
 
 /**
  * Creates an image element with error handling and fallback
- * @param imagePath - The relative path to the image
+ * @param imagePath - The relative path or full URL to the image
  * @param onError - Optional callback for error handling
  * @param onLoad - Optional callback for successful load
  * @returns Image element props
  */
 export const createImageProps = (
-  imagePath: string,
+  imagePath: string | null | undefined,
   onError?: (e: React.SyntheticEvent<HTMLImageElement, Event>) => void,
   onLoad?: (e: React.SyntheticEvent<HTMLImageElement, Event>) => void
 ) => {
+  // Handle null/undefined imagePath
+  if (!imagePath) {
+    return {
+      src: getDefaultAvatarUrl(),
+      onError: onError,
+      onLoad: onLoad,
+      crossOrigin: 'anonymous' as 'anonymous'
+    };
+  }
+
   const handleError = (e: React.SyntheticEvent<HTMLImageElement, Event>) => {
     const img = e.currentTarget;
+    const originalSrc = img.src;
     
-    // Check if the image actually failed to load
-    if (img.complete && img.naturalWidth === 0) {
-      // Try alternative URL construction as fallback
-      const alternativeUrl = `http://localhost:5000${imagePath}`;
+    // Check if it's already the fallback to prevent infinite loop
+    if (!originalSrc.includes('svg+xml') && !originalSrc.includes('data:image')) {
+      // Show default avatar on error
+      img.src = getDefaultAvatarUrl();
+      img.style.border = 'none';
       
-      // Only try alternative if it's different from current URL
-      if (img.src !== alternativeUrl) {
-        img.src = alternativeUrl;
-      } else {
-        // Show error placeholder
-        img.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgdmlld0JveD0iMCAwIDIwMCAyMDAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIyMDAiIGhlaWdodD0iMjAwIiBmaWxsPSIjRjVGNUY1Ii8+CjxwYXRoIGQ9Ik03NSA3NUgxMjVWMTI1SDc1Vjc1WiIgZmlsbD0iI0NDQ0NDQyIvPgo8c3ZnIHg9Ijc1IiB5PSI3NSIgd2lkdGg9IjUwIiBoZWlnaHQ9IjUwIiB2aWV3Qm94PSIwIDAgMjQgMjQiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzk5OTk5OSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPgo8cGF0aCBkPSJNMTQuNSAySDkuNVY3SDE0LjVWMloiLz4KPHBhdGggZD0iTTE3IDlIN1YxOUgxN1Y5WiIvPgo8L3N2Zz4KPC9zdmc+';
-        img.style.border = '2px dashed #ff0000';
-      }
+      console.warn('Image failed to load:', originalSrc);
+      console.log('Switching to fallback avatar');
     }
     
     // Call the original onError callback if provided
@@ -57,18 +82,96 @@ export const createImageProps = (
   };
 
   const handleLoad = (e: React.SyntheticEvent<HTMLImageElement, Event>) => {
+    // Reset any error styling on successful load
+    e.currentTarget.style.border = 'none';
+    
     // Call the original onLoad callback if provided
     if (onLoad) {
       onLoad(e);
     }
   };
 
+  // Get the appropriate URL
+  let src: string;
+  
+  if (isSupabaseUrl(imagePath) || isBase64Url(imagePath) || imagePath.startsWith('http')) {
+    // Use the URL as-is for Supabase storage, base64, or full URLs
+    src = imagePath;
+  } else {
+    // Use getImageUrl for local paths
+    src = getImageUrl(imagePath);
+  }
+
   return {
-    src: getImageUrl(imagePath),
+    src: src,
     onError: handleError,
     onLoad: handleLoad,
     crossOrigin: 'anonymous' as 'anonymous'
   };
+};
+
+/**
+ * Gets the default avatar URL
+ */
+export const getDefaultAvatarUrl = (): string => {
+  // SVG fallback avatar - corrected format
+  const avatarSvg = `<svg width="100" height="100" xmlns="http://www.w3.org/2000/svg"><circle cx="50" cy="50" r="50" fill="#e0e0e0"/><circle cx="50" cy="35" r="15" fill="#999"/><path d="M20 80 Q50 60 80 80" stroke="#999" stroke-width="3" fill="none"/></svg>`;
+  
+  return `data:image/svg+xml;base64,${btoa(avatarSvg)}`;
+};
+
+/**
+ * Check if a Supabase storage URL exists
+ */
+const checkSupabaseImageExists = async (url: string): Promise<boolean> => {
+  try {
+    const response = await fetch(url, { method: 'HEAD' });
+    return response.ok;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Optimized profile image props with cache busting for Supabase URLs
+ * @param profileImageUrl - The profile image URL from database
+ * @returns Image props with proper cache handling
+ */
+export const getProfileImageProps = (profileImageUrl: string | null | undefined) => {
+  if (!profileImageUrl) {
+    return createImageProps(getDefaultAvatarUrl());
+  }
+
+  let finalUrl = profileImageUrl;
+
+  // For Supabase storage URLs, add cache busting and check if it exists
+  if (isSupabaseUrl(profileImageUrl)) {
+    const separator = profileImageUrl.includes('?') ? '&' : '?';
+    finalUrl = `${profileImageUrl}${separator}t=${Date.now()}`;
+    
+    // Add a retry mechanism for Supabase URLs
+    return {
+      ...createImageProps(finalUrl),
+      onError: (e: React.SyntheticEvent<HTMLImageElement, Event>) => {
+        const img = e.currentTarget;
+        
+        // If it's a Supabase URL and failed, try without timestamp
+        if (isSupabaseUrl(img.src)) {
+          const baseUrl = img.src.split('?')[0];
+          console.warn(`Supabase image failed: ${img.src}, trying base URL: ${baseUrl}`);
+          
+          img.src = baseUrl;
+        } else {
+          // Fall back to default avatar
+          img.src = getDefaultAvatarUrl();
+          img.style.border = 'none';
+          console.log('Switching to fallback avatar');
+        }
+      }
+    };
+  }
+
+  return createImageProps(finalUrl);
 };
 
 /**
@@ -104,7 +207,9 @@ export const debugAllImages = () => {
       naturalWidth: img.naturalWidth,
       naturalHeight: img.naturalHeight,
       loading: img.loading,
-      crossOrigin: img.crossOrigin
+      crossOrigin: img.crossOrigin,
+      supabaseUrl: isSupabaseUrl(img.src),
+      base64Url: isBase64Url(img.src)
     });
   });
   
@@ -144,4 +249,19 @@ export const testImageCORS = (imagePath: string = '/uploads/incidents/incident-1
   });
   
   return url;
+};
+
+/**
+ * Clear image cache for a specific URL
+ */
+export const clearImageCache = (imageUrl: string): string => {
+  if (isSupabaseUrl(imageUrl)) {
+    // Add cache busting parameter for Supabase URLs
+    const separator = imageUrl.includes('?') ? '&' : '?';
+    return `${imageUrl}${separator}v=${Date.now()}`;
+  }
+  
+  // For other URLs, add timestamp parameter
+  const separator = imageUrl.includes('?') ? '&' : '?';
+  return `${imageUrl}${separator}t=${Date.now()}`;
 };

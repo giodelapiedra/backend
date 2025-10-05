@@ -41,9 +41,10 @@ import {
   Mood,
   TrendingUp
 } from '@mui/icons-material';
-import api from '../../utils/api';
 import Toast from '../../components/Toast';
 import LayoutWithSidebar from '../../components/LayoutWithSidebar';
+import { dataClient } from '../../lib/supabase';
+import { useAuth } from '../../contexts/AuthContext.supabase';
 
 interface AssessmentLog {
   _id: string;
@@ -122,6 +123,7 @@ interface FilterState {
 }
 
 const AssessmentLogs: React.FC = () => {
+  const { user } = useAuth();
   const [data, setData] = useState<AssessmentLogsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -147,41 +149,206 @@ const AssessmentLogs: React.FC = () => {
       setLoading(true);
       setError(null);
 
-      const queryParams = new URLSearchParams();
-      
-      // Add pagination
-      queryParams.append('page', (page + 1).toString());
-      queryParams.append('limit', rowsPerPage.toString());
+      if (!user?.id) {
+        setError('User not authenticated');
+        return;
+      }
 
-      // Add filters
+      // Get team leader's managed teams first
+      const { data: teamLeader, error: teamLeaderError } = await dataClient
+        .from('users')
+        .select('team, managed_teams')
+        .eq('id', user.id)
+        .single();
+
+      if (teamLeaderError) {
+        console.error('Error fetching team leader data:', teamLeaderError);
+        throw teamLeaderError;
+      }
+
+      // Get all managed teams including current team
+      const managedTeams = teamLeader?.managed_teams || [];
+      if (teamLeader?.team && !managedTeams.includes(teamLeader.team)) {
+        managedTeams.push(teamLeader.team);
+      }
+
+      // Get team members from all managed teams
+      let teamMembers = [];
+      if (managedTeams.length > 0) {
+        const { data: teamMembersData, error: teamMembersError } = await dataClient
+          .from('users')
+          .select('*')
+          .eq('role', 'worker')
+          .eq('is_active', true)
+          .in('team', managedTeams);
+
+        if (teamMembersError) {
+          console.error('Error fetching team members:', teamMembersError);
+          throw teamMembersError;
+        }
+
+        teamMembers = teamMembersData || [];
+      }
+
+      const teamMemberIds = teamMembers?.map(member => member.id) || [];
+
+      // Build query for work readiness assessments
+      let query = dataClient
+        .from('work_readiness')
+        .select(`
+          *,
+          worker:users!work_readiness_worker_id_fkey(*)
+        `)
+        .in('worker_id', teamMemberIds)
+        .order('submitted_at', { ascending: false });
+
+      // Apply date filters
       if (filters.startDate) {
-        queryParams.append('startDate', filters.startDate.toISOString().split('T')[0]);
+        query = query.gte('submitted_at', `${filters.startDate.toISOString().split('T')[0]}T00:00:00.000Z`);
       }
       if (filters.endDate) {
-        queryParams.append('endDate', filters.endDate.toISOString().split('T')[0]);
-      }
-      if (filters.workerId) {
-        queryParams.append('workerId', filters.workerId);
-      }
-      if (filters.readinessLevel) {
-        queryParams.append('readinessLevel', filters.readinessLevel);
-      }
-      if (filters.fatigueLevel) {
-        queryParams.append('fatigueLevel', filters.fatigueLevel);
-      }
-      if (filters.mood) {
-        queryParams.append('mood', filters.mood);
+        query = query.lte('submitted_at', `${filters.endDate.toISOString().split('T')[0]}T23:59:59.999Z`);
       }
 
-      const response = await api.get(`/work-readiness/logs?${queryParams.toString()}`);
-      setData(response.data.data);
+      // Apply other filters
+      if (filters.workerId) {
+        query = query.eq('worker_id', filters.workerId);
+      }
+      if (filters.readinessLevel) {
+        query = query.eq('readiness_level', filters.readinessLevel);
+      }
+      if (filters.fatigueLevel) {
+        query = query.eq('fatigue_level', parseInt(filters.fatigueLevel));
+      }
+      if (filters.mood) {
+        query = query.eq('mood', filters.mood);
+      }
+
+      // Apply pagination
+      const offset = page * rowsPerPage;
+      query = query.range(offset, offset + rowsPerPage - 1);
+
+      const { data: assessments, error: assessmentsError } = await query;
+
+      if (assessmentsError) {
+        console.error('Error fetching assessments:', assessmentsError);
+        throw assessmentsError;
+      }
+
+      // Get total count for pagination
+      let countQuery = dataClient
+        .from('work_readiness')
+        .select('*', { count: 'exact', head: true })
+        .in('worker_id', teamMemberIds);
+
+      // Apply same filters for count
+      if (filters.startDate) {
+        countQuery = countQuery.gte('submitted_at', `${filters.startDate.toISOString().split('T')[0]}T00:00:00.000Z`);
+      }
+      if (filters.endDate) {
+        countQuery = countQuery.lte('submitted_at', `${filters.endDate.toISOString().split('T')[0]}T23:59:59.999Z`);
+      }
+      if (filters.workerId) {
+        countQuery = countQuery.eq('worker_id', filters.workerId);
+      }
+      if (filters.readinessLevel) {
+        countQuery = countQuery.eq('readiness_level', filters.readinessLevel);
+      }
+      if (filters.fatigueLevel) {
+        countQuery = countQuery.eq('fatigue_level', parseInt(filters.fatigueLevel));
+      }
+      if (filters.mood) {
+        countQuery = countQuery.eq('mood', filters.mood);
+      }
+
+      const { count, error: countError } = await countQuery;
+
+      if (countError) {
+        console.error('Error fetching count:', countError);
+        throw countError;
+      }
+
+      // Calculate summary statistics
+      const totalAssessments = count || 0;
+      const avgFatigueLevel = assessments?.length > 0 
+        ? assessments.reduce((sum, a) => sum + (a.fatigue_level || 0), 0) / assessments.length 
+        : 0;
+
+      const readinessDistribution = {
+        fit: assessments?.filter(a => a.readiness_level === 'fit').length || 0,
+        minor: assessments?.filter(a => a.readiness_level === 'minor').length || 0,
+        not_fit: assessments?.filter(a => a.readiness_level === 'not_fit').length || 0
+      };
+
+      const fatigueDistribution = {
+        1: assessments?.filter(a => a.fatigue_level === 1).length || 0,
+        2: assessments?.filter(a => a.fatigue_level === 2).length || 0,
+        3: assessments?.filter(a => a.fatigue_level === 3).length || 0,
+        4: assessments?.filter(a => a.fatigue_level === 4).length || 0,
+        5: assessments?.filter(a => a.fatigue_level === 5).length || 0
+      };
+
+      const moodDistribution = {
+        excellent: assessments?.filter(a => a.mood === 'excellent').length || 0,
+        good: assessments?.filter(a => a.mood === 'good').length || 0,
+        okay: assessments?.filter(a => a.mood === 'okay').length || 0,
+        poor: assessments?.filter(a => a.mood === 'poor').length || 0,
+        terrible: assessments?.filter(a => a.mood === 'terrible').length || 0
+      };
+
+      // Format assessments to match expected structure
+      const formattedAssessments = assessments?.map(assessment => ({
+        _id: assessment.id,
+        worker: {
+          _id: assessment.worker?.id,
+          firstName: assessment.worker?.first_name,
+          lastName: assessment.worker?.last_name,
+          email: assessment.worker?.email,
+          team: assessment.worker?.team
+        },
+        fatigueLevel: assessment.fatigue_level,
+        painDiscomfort: assessment.pain_discomfort,
+        painAreas: assessment.pain_areas || [],
+        readinessLevel: assessment.readiness_level,
+        mood: assessment.mood,
+        notes: assessment.notes,
+        submittedAt: assessment.submitted_at,
+        status: assessment.status
+      })) || [];
+
+      const formattedTeamMembers = teamMembers?.map(member => ({
+        _id: member.id,
+        name: `${member.first_name} ${member.last_name}`,
+        email: member.email,
+        team: member.team
+      })) || [];
+
+      const responseData: AssessmentLogsData = {
+        assessments: formattedAssessments,
+        pagination: {
+          currentPage: page + 1,
+          totalPages: Math.ceil(totalAssessments / rowsPerPage),
+          totalCount: totalAssessments,
+          limit: rowsPerPage
+        },
+        summary: {
+          totalAssessments,
+          avgFatigueLevel: Math.round(avgFatigueLevel * 10) / 10,
+          readinessDistribution,
+          fatigueDistribution,
+          moodDistribution
+        },
+        teamMembers: formattedTeamMembers
+      };
+
+      setData(responseData);
     } catch (err: any) {
       console.error('Error fetching assessment logs:', err);
-      setError(err.response?.data?.message || 'Failed to fetch assessment logs');
+      setError(err.message || 'Failed to fetch assessment logs');
     } finally {
       setLoading(false);
     }
-  }, [page, rowsPerPage, filters]);
+  }, [page, rowsPerPage, filters, user?.id]);
 
   useEffect(() => {
     fetchAssessmentLogs();
@@ -246,8 +413,107 @@ const AssessmentLogs: React.FC = () => {
       // Export all records (no pagination)
       queryParams.append('limit', '10000');
 
-      const response = await api.get(`/work-readiness/logs?${queryParams.toString()}`);
-      const logs = response.data.data.assessments;
+      // Use the same fetch logic but without pagination for export
+      if (!user?.id) {
+        setToast({ message: 'User not authenticated', type: 'error' });
+        return;
+      }
+
+      // Get team leader's managed teams first
+      const { data: teamLeader, error: teamLeaderError } = await dataClient
+        .from('users')
+        .select('team, managed_teams')
+        .eq('id', user.id)
+        .single();
+
+      if (teamLeaderError) {
+        throw teamLeaderError;
+      }
+
+      // Get all managed teams including current team
+      const managedTeams = teamLeader?.managed_teams || [];
+      if (teamLeader?.team && !managedTeams.includes(teamLeader.team)) {
+        managedTeams.push(teamLeader.team);
+      }
+
+      // Get team members from all managed teams
+      let teamMembers = [];
+      if (managedTeams.length > 0) {
+        const { data: teamMembersData, error: teamMembersError } = await dataClient
+          .from('users')
+          .select('*')
+          .eq('role', 'worker')
+          .eq('is_active', true)
+          .in('team', managedTeams);
+
+        if (teamMembersError) {
+          throw teamMembersError;
+        }
+
+        teamMembers = teamMembersData || [];
+      }
+
+      const teamMemberIds = teamMembers?.map(member => member.id) || [];
+
+      // Build query for work readiness assessments
+      let query = dataClient
+        .from('work_readiness')
+        .select(`
+          *,
+          worker:users!work_readiness_worker_id_fkey(*)
+        `)
+        .in('worker_id', teamMemberIds)
+        .order('submitted_at', { ascending: false });
+
+      // Apply date filters
+      if (filters.startDate) {
+        query = query.gte('submitted_at', `${filters.startDate.toISOString().split('T')[0]}T00:00:00.000Z`);
+      }
+      if (filters.endDate) {
+        query = query.lte('submitted_at', `${filters.endDate.toISOString().split('T')[0]}T23:59:59.999Z`);
+      }
+
+      // Apply other filters
+      if (filters.workerId) {
+        query = query.eq('worker_id', filters.workerId);
+      }
+      if (filters.readinessLevel) {
+        query = query.eq('readiness_level', filters.readinessLevel);
+      }
+      if (filters.fatigueLevel) {
+        query = query.eq('fatigue_level', parseInt(filters.fatigueLevel));
+      }
+      if (filters.mood) {
+        query = query.eq('mood', filters.mood);
+      }
+
+      // Limit to 10000 records for export
+      query = query.limit(10000);
+
+      const { data: assessments, error: assessmentsError } = await query;
+
+      if (assessmentsError) {
+        throw assessmentsError;
+      }
+
+      const logs = assessments?.map(assessment => ({
+        _id: assessment.id,
+        worker: {
+          _id: assessment.worker?.id,
+          firstName: assessment.worker?.first_name,
+          lastName: assessment.worker?.last_name,
+          email: assessment.worker?.email,
+          team: assessment.worker?.team
+        },
+        fatigueLevel: assessment.fatigue_level,
+        painDiscomfort: assessment.pain_discomfort,
+        painAreas: assessment.pain_areas || [],
+        readinessLevel: assessment.readiness_level,
+        mood: assessment.mood,
+        notes: assessment.notes,
+        submittedAt: assessment.submitted_at,
+        status: assessment.status
+      })) || [];
 
       // Create CSV content
       const csvContent = [
@@ -359,10 +625,10 @@ const AssessmentLogs: React.FC = () => {
   return (
     <LayoutWithSidebar>
         <Box sx={{ 
-          p: 3, 
+          p: { xs: 1, sm: 2, md: 3 }, 
           minHeight: '100vh',
-          background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)',
-          position: 'relative',
+          background: { xs: 'transparent', md: 'transparent' },
+          fontFamily: { xs: '-apple-system BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', md: 'inherit' },
           '&::before': {
             content: '""',
             position: 'absolute',
@@ -374,127 +640,198 @@ const AssessmentLogs: React.FC = () => {
             zIndex: 0
           }
         }}>
-          {/* Header */}
-          <Box sx={{ mb: 4, position: 'relative', zIndex: 1 }}>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-              <Box>
-                <Typography variant="h4" component="h1" gutterBottom sx={{ 
-                  fontWeight: 700, 
-                  color: '#1a202c',
-                  textShadow: '0 2px 4px rgba(0,0,0,0.1)'
-                }}>
-                  Assessment Logs
-                </Typography>
-                <Typography variant="subtitle1" sx={{ 
-                  color: '#4a5568',
-                  textShadow: '0 1px 2px rgba(0,0,0,0.05)'
-                }}>
-                  Complete history of team work readiness assessments
-                </Typography>
-              </Box>
-              <Box sx={{ display: 'flex', gap: 2 }}>
-                <Button
-                  variant="outlined"
-                  startIcon={<FilterList />}
-                  onClick={() => setShowFilters(!showFilters)}
-                  sx={{ 
-                    borderRadius: 3,
-                    background: 'rgba(255, 255, 255, 0.8)',
-                    backdropFilter: 'blur(10px)',
-                    border: '1px solid rgba(255, 255, 255, 0.3)',
-                    color: '#374151',
-                    fontWeight: 600,
-                    boxShadow: '0 4px 15px rgba(0,0,0,0.1)',
-                    '&:hover': {
+          {/* Enhanced Header with Section Dividers */}
+          <Box sx={{ 
+            mb: 4, // 32px - reduced spacing to bring sections closer
+            position: 'relative', 
+            zIndex: 1,
+            borderRadius: 3,
+            overflow: 'hidden',
+            pb: 2, // Reduced padding bottom
+            '&::after': {
+              content: '""',
+              position: 'absolute',
+              bottom: 0,
+              left: 0,
+              right: 0,
+              height: '1px',
+              background: 'linear-gradient(90deg, transparent 0%, rgba(123, 104, 238, 0.2) 20%, rgba(123, 104, 238, 0.3) 50%, rgba(123, 104, 238, 0.2) 80%, transparent 100%)',
+              opacity: 0.8
+            }
+          }}>
+            <Box sx={{ 
+              mb: 4, // 32px - consistent medium spacing
+              position: 'relative'
+            }}>
+              <Box sx={{ 
+                display: 'flex', 
+                justifyContent: 'space-between', 
+                alignItems: 'flex-start', 
+                mb: 3
+              }}>
+                <Box sx={{ textAlign: { xs: 'center', md: 'left' }, flex: 1 }}>
+                  <Typography variant="h4" component="h1" gutterBottom sx={{ 
+                    fontSize: { xs: '1.75rem', md: '2.25rem' },
+                    fontWeight: 700,
+                    lineHeight: 1.2,
+                    letterSpacing: '-0.025em',
+                    color: '#1a202c',
+                    mb: 1
+                  }}>
+                    Assessment Logs
+                  </Typography>
+                  <Typography variant="subtitle1" sx={{ 
+                    fontSize: { xs: '0.875rem', md: '1rem' },
+                    fontWeight: 400,
+                    color: '#6b7280',
+                    mb: 0,
+                    maxWidth: { xs: '100%', md: '600px' }
+                  }}>
+                    Complete history of team work readiness assessments
+                  </Typography>
+                </Box>
+                
+                <Box sx={{ display: 'flex', gap: 2, mt: { xs: 2, md: 0 } }}>
+                  <Button
+                    variant="outlined"
+                    startIcon={<FilterList />}
+                    onClick={() => setShowFilters(!showFilters)}
+                    sx={{ 
+                      borderRadius: '12px',
+                      padding: '12px 20px',
                       background: 'rgba(255, 255, 255, 0.9)',
-                      border: '1px solid rgba(255, 255, 255, 0.5)',
-                      transform: 'translateY(-2px)',
-                      boxShadow: '0 8px 25px rgba(0,0,0,0.15)'
-                    }
-                  }}
-                >
-                  {showFilters ? 'Hide Filters' : 'Show Filters'}
-                </Button>
-                <Button
-                  variant="contained"
-                  startIcon={<Download />}
-                  onClick={handleExportLogs}
-                  sx={{ 
-                    borderRadius: 3,
-                    background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                    boxShadow: '0 4px 15px rgba(16, 185, 129, 0.4)',
-                    fontWeight: 600,
-                    '&:hover': { 
-                      background: 'linear-gradient(135deg, #059669 0%, #047857 100%)',
-                      transform: 'translateY(-2px)',
-                      boxShadow: '0 8px 25px rgba(16, 185, 129, 0.6)'
-                    }
-                  }}
-                >
-                  Export CSV
-                </Button>
-                <Button
-                  variant="outlined"
-                  startIcon={<Refresh />}
-                  onClick={fetchAssessmentLogs}
-                  sx={{ 
-                    borderRadius: 3,
-                    background: 'rgba(255, 255, 255, 0.8)',
-                    backdropFilter: 'blur(10px)',
-                    border: '1px solid rgba(255, 255, 255, 0.3)',
-                    color: '#374151',
-                    fontWeight: 600,
-                    boxShadow: '0 4px 15px rgba(0,0,0,0.1)',
-                    '&:hover': {
+                      border: '2px solid rgba(123, 104, 238, 0.2)',
+                      color: '#5A4FCF',
+                      fontWeight: 600,
+                      transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                      '&:hover': {
+                        border: '2px solid rgba(123, 104, 238, 0.4)',
+                        background: 'rgba(123, 104, 238, 0.05)',
+                        transform: 'translateY(-2px)',
+                        boxShadow: '0 8px 25px rgba(123, 104, 238, 0.2)'
+                      },
+                      '&:active': {
+                        transform: 'translateY(1px)',
+                        boxShadow: '0 2px 8px rgba(123, 104, 238, 0.2)'
+                      }
+                    }}
+                  >
+                    {showFilters ? 'Hide Filters' : 'Show Filters'}
+                  </Button>
+                  <Button
+                    variant="contained"
+                    startIcon={<Download />}
+                    onClick={handleExportLogs}
+                    sx={{ 
+                      borderRadius: '12px',
+                      padding: '12px 20px',
+                      background: 'linear-gradient(135deg, #7B68EE 0%, #5A4FCF 100%)',
+                      fontWeight: 600,
+                      boxShadow: '0 4px 12px rgba(123, 104, 238, 0.3)',
+                      transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                      '&:hover': { 
+                        background: 'linear-gradient(135deg, #5A4FCF 0%, #4c3db8 100%)',
+                        transform: 'translateY(-2px)',
+                        boxShadow: '0 8px 25px rgba(123, 104, 238, 0.4)'
+                      },
+                      '&:active': {
+                        transform: 'translateY(1px)',
+                        boxShadow: '0 2px 8px rgba(123, 104, 238, 0.3)'
+                      }
+                    }}
+                  >
+                    Export CSV
+                  </Button>
+                  <Button
+                    variant="outlined"
+                    startIcon={<Refresh />}
+                    onClick={fetchAssessmentLogs}
+                    sx={{ 
+                      borderRadius: '12px',
+                      padding: '12px 20px',
                       background: 'rgba(255, 255, 255, 0.9)',
-                      border: '1px solid rgba(255, 255, 255, 0.5)',
-                      transform: 'translateY(-2px)',
-                      boxShadow: '0 8px 25px rgba(0,0,0,0.15)'
-                    }
-                  }}
-                >
-                  Refresh
-                </Button>
+                      border: '2px solid rgba(123, 104, 238, 0.2)',
+                      color: '#5A4FCF',
+                      fontWeight: 600,
+                      transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                      '&:hover': {
+                        border: '2px solid rgba(123, 104, 238, 0.4)',
+                        background: 'rgba(123, 104, 238, 0.05)',
+                        transform: 'translateY(-2px)',
+                        boxShadow: '0 8px 25px rgba(123, 104, 238, 0.2)'
+                      }
+                    }}
+                  >
+                    Refresh
+                  </Button>
+                </Box>
               </Box>
             </Box>
 
-            {/* Summary Cards */}
+            {/* Summary Cards with Professional Spacing */}
             {data?.summary && (
-              <Grid container spacing={3} sx={{ mb: 3, position: 'relative', zIndex: 1 }}>
+              <Box sx={{ 
+                mb: 4, // 32px - reduced spacing to bring sections closer
+                position: 'relative', 
+                zIndex: 1,
+                pb: 2, // Reduced padding for divider
+                '&::after': {
+                  content: '""',
+                  position: 'absolute',
+                  bottom: 0,
+                  left: 0,
+                  right: 0,
+                  height: '1px',
+                  background: 'linear-gradient(90deg, transparent 0%, rgba(123, 104, 238, 0.1) 30%, rgba(123, 104, 238, 0.2) 50%, rgba(123, 104, 238, 0.1) 70%, transparent 100%)',
+                  opacity: 0.6
+                }
+              }}>
+                <Grid container spacing={2} justifyContent="center"> {/* Perfectly centered */}
                 <Grid item xs={12} sm={6} md={3}>
                   <Card sx={{ 
-                    background: 'rgba(255, 255, 255, 0.8)',
-                    backdropFilter: 'blur(10px)',
-                    borderRadius: 4,
-                    border: '1px solid rgba(255, 255, 255, 0.3)',
-                    boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.1)',
-                    color: '#1a202c',
-                    transition: 'all 0.3s ease',
+                    borderRadius: '16px',
+                    border: '1px solid rgba(0, 0, 0, 0.06)',
+                    background: 'rgba(255, 255, 255, 0.95)',
+                    backdropFilter: 'blur(20px)',
+                    boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06)',
+                    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
                     '&:hover': {
-                      transform: 'translateY(-5px)',
-                      boxShadow: '0 12px 40px 0 rgba(0, 0, 0, 0.15)',
-                      background: 'rgba(255, 255, 255, 0.9)'
+                      transform: 'translateY(-4px)',
+                      boxShadow: '0 10px 25px rgba(0, 0, 0, 0.15), 0 4px 10px rgba(0, 0, 0, 0.09)'
                     }
                   }}>
                     <CardContent>
                       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                         <Box>
-                          <Typography variant="h4" sx={{ fontWeight: 700, textShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+                          <Typography sx={{ 
+                            fontSize: '1.75rem',
+                            fontWeight: 700,
+                            color: '#111827',
+                            lineHeight: 1.2,
+                            mb: 0.5
+                          }}>
                             {data.summary.totalAssessments}
                           </Typography>
-                          <Typography variant="body2" sx={{ opacity: 0.9, textShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
+                          <Typography sx={{ 
+                            fontSize: '0.875rem',
+                            fontWeight: 500,
+                            color: '#6b7280',
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.05em'
+                          }}>
                             Total Assessments
                           </Typography>
                         </Box>
                         <Box sx={{ 
-                          width: 60, 
-                          height: 60, 
-                          borderRadius: 3, 
-                          background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
+                          width: 56, 
+                          height: 56, 
+                          borderRadius: '14px', 
+                          background: 'linear-gradient(135deg, #7B68EE 0%, #5A4FCF 100%)',
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
-                          boxShadow: '0 4px 20px rgba(59, 130, 246, 0.4)'
+                          boxShadow: '0 4px 12px rgba(123, 104, 238, 0.25), 0 2px 6px rgba(123, 104, 238, 0.15)',
+                          transition: 'all 0.2s ease'
                         }}>
                           <Assessment sx={{ fontSize: 30, color: 'white' }} />
                         </Box>
@@ -504,38 +841,49 @@ const AssessmentLogs: React.FC = () => {
                 </Grid>
                 <Grid item xs={12} sm={6} md={3}>
                   <Card sx={{ 
-                    background: 'rgba(255, 255, 255, 0.8)',
-                    backdropFilter: 'blur(10px)',
-                    borderRadius: 4,
-                    border: '1px solid rgba(255, 255, 255, 0.3)',
-                    boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.1)',
-                    color: '#1a202c',
-                    transition: 'all 0.3s ease',
+                    borderRadius: '16px',
+                    border: '1px solid rgba(0, 0, 0, 0.06)',
+                    background: 'rgba(255, 255, 255, 0.95)',
+                    backdropFilter: 'blur(20px)',
+                    boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06)',
+                    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
                     '&:hover': {
-                      transform: 'translateY(-5px)',
-                      boxShadow: '0 12px 40px 0 rgba(0, 0, 0, 0.15)',
-                      background: 'rgba(255, 255, 255, 0.9)'
+                      transform: 'translateY(-4px)',
+                      boxShadow: '0 10px 25px rgba(0, 0, 0, 0.15), 0 4px 10px rgba(0, 0, 0, 0.09)'
                     }
                   }}>
                     <CardContent>
                       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                         <Box>
-                          <Typography variant="h4" sx={{ fontWeight: 700, textShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+                          <Typography sx={{ 
+                            fontSize: '1.75rem',
+                            fontWeight: 700,
+                            color: '#111827',
+                            lineHeight: 1.2,
+                            mb: 0.5
+                          }}>
                             {data.summary.avgFatigueLevel}
                           </Typography>
-                          <Typography variant="body2" sx={{ opacity: 0.9, textShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
+                          <Typography sx={{ 
+                            fontSize: '0.875rem',
+                            fontWeight: 500,
+                            color: '#6b7280',
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.05em'
+                          }}>
                             Avg Fatigue Level
                           </Typography>
                         </Box>
                         <Box sx={{ 
-                          width: 60, 
-                          height: 60, 
-                          borderRadius: 3, 
-                          background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                          width: 56, 
+                          height: 56, 
+                          borderRadius: '14px', 
+                          background: 'linear-gradient(135deg, #20B2AA 0%, #008B8B 100%)',
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
-                          boxShadow: '0 4px 20px rgba(16, 185, 129, 0.4)'
+                          boxShadow: '0 4px 12px rgba(32, 178, 170, 0.25), 0 2px 6px rgba(32, 178, 170, 0.15)',
+                          transition: 'all 0.2s ease'
                         }}>
                           <TrendingUp sx={{ fontSize: 30, color: 'white' }} />
                         </Box>
@@ -545,38 +893,49 @@ const AssessmentLogs: React.FC = () => {
                 </Grid>
                 <Grid item xs={12} sm={6} md={3}>
                   <Card sx={{ 
-                    background: 'rgba(255, 255, 255, 0.8)',
-                    backdropFilter: 'blur(10px)',
-                    borderRadius: 4,
-                    border: '1px solid rgba(255, 255, 255, 0.3)',
-                    boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.1)',
-                    color: '#1a202c',
-                    transition: 'all 0.3s ease',
+                    borderRadius: '16px',
+                    border: '1px solid rgba(0, 0, 0, 0.06)',
+                    background: 'rgba(255, 255, 255, 0.95)',
+                    backdropFilter: 'blur(20px)',
+                    boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06)',
+                    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
                     '&:hover': {
-                      transform: 'translateY(-5px)',
-                      boxShadow: '0 12px 40px 0 rgba(0, 0, 0, 0.15)',
-                      background: 'rgba(255, 255, 255, 0.9)'
+                      transform: 'translateY(-4px)',
+                      boxShadow: '0 10px 25px rgba(0, 0, 0, 0.15), 0 4px 10px rgba(0, 0, 0, 0.09)'
                     }
                   }}>
                     <CardContent>
                       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                         <Box>
-                          <Typography variant="h4" sx={{ fontWeight: 700, textShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+                          <Typography sx={{ 
+                            fontSize: '1.75rem',
+                            fontWeight: 700,
+                            color: '#111827',
+                            lineHeight: 1.2,
+                            mb: 0.5
+                          }}>
                             {data.summary.readinessDistribution.fit}
                           </Typography>
-                          <Typography variant="body2" sx={{ opacity: 0.9, textShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
+                          <Typography sx={{ 
+                            fontSize: '0.875rem',
+                            fontWeight: 500,
+                            color: '#6b7280',
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.05em'
+                          }}>
                             Fit for Work
                           </Typography>
                         </Box>
                         <Box sx={{ 
-                          width: 60, 
-                          height: 60, 
-                          borderRadius: 3, 
-                          background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+                          width: 56, 
+                          height: 56, 
+                          borderRadius: '14px', 
+                          background: 'linear-gradient(135deg, #FF8C00 0%, #FF7F00 100%)',
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
-                          boxShadow: '0 4px 20px rgba(245, 158, 11, 0.4)'
+                          boxShadow: '0 4px 12px rgba(255, 140, 0, 0.25), 0 2px 6px rgba(255, 140, 0, 0.15)',
+                          transition: 'all 0.2s ease'
                         }}>
                           <Person sx={{ fontSize: 30, color: 'white' }} />
                         </Box>
@@ -586,38 +945,49 @@ const AssessmentLogs: React.FC = () => {
                 </Grid>
                 <Grid item xs={12} sm={6} md={3}>
                   <Card sx={{ 
-                    background: 'rgba(255, 255, 255, 0.8)',
-                    backdropFilter: 'blur(10px)',
-                    borderRadius: 4,
-                    border: '1px solid rgba(255, 255, 255, 0.3)',
-                    boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.1)',
-                    color: '#1a202c',
-                    transition: 'all 0.3s ease',
+                    borderRadius: '16px',
+                    border: '1px solid rgba(0, 0, 0, 0.06)',
+                    background: 'rgba(255, 255, 255, 0.95)',
+                    backdropFilter: 'blur(20px)',
+                    boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06)',
+                    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
                     '&:hover': {
-                      transform: 'translateY(-5px)',
-                      boxShadow: '0 12px 40px 0 rgba(0, 0, 0, 0.15)',
-                      background: 'rgba(255, 255, 255, 0.9)'
+                      transform: 'translateY(-4px)',
+                      boxShadow: '0 10px 25px rgba(0, 0, 0, 0.15), 0 4px 10px rgba(0, 0, 0, 0.09)'
                     }
                   }}>
                     <CardContent>
                       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                         <Box>
-                          <Typography variant="h4" sx={{ fontWeight: 700, textShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+                          <Typography sx={{ 
+                            fontSize: '1.75rem',
+                            fontWeight: 700,
+                            color: '#111827',
+                            lineHeight: 1.2,
+                            mb: 0.5
+                          }}>
                             {data.summary.readinessDistribution.not_fit}
                           </Typography>
-                          <Typography variant="body2" sx={{ opacity: 0.9, textShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
+                          <Typography sx={{ 
+                            fontSize: '0.875rem',
+                            fontWeight: 500,
+                            color: '#6b7280',
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.05em'
+                          }}>
                             Not Fit for Work
                           </Typography>
                         </Box>
                         <Box sx={{ 
-                          width: 60, 
-                          height: 60, 
-                          borderRadius: 3, 
-                          background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
+                          width: 56, 
+                          height: 56, 
+                          borderRadius: '14px', 
+                          background: 'linear-gradient(135deg, #FF6B6B 0%, #E55555 100%)',
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
-                          boxShadow: '0 4px 20px rgba(139, 92, 246, 0.4)'
+                          boxShadow: '0 4px 12px rgba(255, 107, 107, 0.25), 0 2px 6px rgba(255, 107, 107, 0.15)',
+                          transition: 'all 0.2s ease'
                         }}>
                           <Mood sx={{ fontSize: 30, color: 'white' }} />
                         </Box>
@@ -625,30 +995,50 @@ const AssessmentLogs: React.FC = () => {
                     </CardContent>
                   </Card>
                 </Grid>
-              </Grid>
+                </Grid>
+              </Box>
             )}
 
-            {/* Filters */}
-            {showFilters && (
+            {/* Enhanced Filters with Professional Spacing */}
+            <Box sx={{
+              maxHeight: showFilters ? '500px' : '0',
+              overflow: 'hidden',
+              transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+              mb: showFilters ? 6 : 0, // 48px when visible
+              opacity: showFilters ? 1 : 0,
+              position: 'relative',
+              '&::after': showFilters ? {
+                content: '""',
+                position: 'absolute',
+                bottom: -24, // Half margin distance
+                left: 0,
+                right: 0,
+                height: '1px',
+                background: 'linear-gradient(90deg, transparent 0%, rgba(123, 104, 238, 0.08) 30%, rgba(123, 104, 238, 0.15) 50%, rgba(123, 104, 238, 0.08) 70%, transparent 100%)',
+                opacity: 0.6
+              } : {}
+            }}>
               <Card sx={{ 
-                mb: 3, 
-                background: 'rgba(255, 255, 255, 0.8)',
-                backdropFilter: 'blur(10px)',
-                borderRadius: 4,
-                border: '1px solid rgba(255, 255, 255, 0.3)',
-                boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.1)',
+                borderRadius: '16px',
+                border: '1px solid rgba(0, 0, 0, 0.06)',
+                background: 'rgba(255, 255, 255, 0.95)',
+                backdropFilter: 'blur(20px)',
+                boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06)',
                 position: 'relative',
                 zIndex: 1
               }}>
                 <CardContent>
-                  <Typography variant="h6" sx={{ 
-                    mb: 3, 
-                    fontWeight: 600, 
-                    color: '#1a202c',
-                    textShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                  <Typography sx={{ 
+                    mb: 3,
+                    fontSize: '1.125rem',
+                    fontWeight: 600,
+                    color: '#374151',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 1
                   }}>
-                    <FilterList sx={{ mr: 1, verticalAlign: 'middle' }} />
-                    Filters
+                    <FilterList sx={{ fontSize: '1.25rem' }} />
+                    Advanced Filters
                   </Typography>
                   <Grid container spacing={3}>
                     <Grid item xs={12} sm={6} md={3}>
@@ -837,48 +1227,137 @@ const AssessmentLogs: React.FC = () => {
                   </Grid>
                 </CardContent>
               </Card>
-            )}
+            </Box>
           </Box>
 
-          {/* Assessment Logs Table */}
+          {/* Enhanced Assessment Logs Table with Perfect Alignment */}
           <Card sx={{ 
-            background: 'rgba(255, 255, 255, 0.8)',
-            backdropFilter: 'blur(10px)',
-            borderRadius: 4,
-            border: '1px solid rgba(255, 255, 255, 0.3)',
-            boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.1)',
+            borderRadius: '16px',
+            border: '1px solid rgba(0, 0, 0, 0.06)',
+            background: 'rgba(255, 255, 255, 0.95)',
+            backdropFilter: 'blur(20px)',
+            boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06)',
             position: 'relative',
-            zIndex: 1
+            zIndex: 1,
+            overflow: 'hidden',
+            mx: 0, // Ensure full width alignment
+            mt: 0 // Removed margin - closer to header
           }}>
             <CardContent sx={{ p: 0 }}>
-              <Box sx={{ p: 3, borderBottom: '1px solid #e2e8f0' }}>
-                <Typography variant="h6" sx={{ fontWeight: 600, color: '#1a202c' }}>
+              <Box sx={{ p: 3, borderBottom: '1px solid rgba(0, 0, 0, 0.08)' }}>
+                <Typography sx={{ 
+                  fontSize: '1.125rem',
+                  fontWeight: 600,
+                  color: '#374151',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 2
+                }}>
+                  <Assessment sx={{ fontSize: '1.25rem', opacity: 0.7 }} />
                   Assessment Records
                   {data?.pagination && (
-                    <Typography component="span" variant="body2" sx={{ color: '#6b7280', ml: 2 }}>
-                      ({data.pagination.totalCount} total records)
+                    <Typography component="span" sx={{ 
+                      fontSize: '0.875rem',
+                      fontWeight: 400,
+                      color: '#6b7280',
+                      opacity: 0.8
+                    }}>
+                      • {data.pagination.totalCount} total records
                     </Typography>
                   )}
                 </Typography>
               </Box>
               
               <TableContainer>
-                <Table>
+                <Table sx={{
+                  '& .MuiTableRow-root:nth-of-type(even)': {
+                    background: 'rgba(248, 250, 252, 0.5)'
+                  },
+                  '& .MuiTableCell-root': {
+                    padding: '16px 12px',
+                    borderBottom: '1px solid rgba(0, 0, 0, 0.08)'
+                  },
+                  '& .MuiTableRow-root:hover': {
+                    background: 'rgba(123, 104, 238, 0.04)',
+                    transition: 'all 0.15s ease'
+                  }
+                }}>
                   <TableHead>
-                    <TableRow sx={{ background: '#f8fafc' }}>
-                      <TableCell sx={{ fontWeight: 600 }}>Date & Time</TableCell>
-                      <TableCell sx={{ fontWeight: 600 }}>Worker</TableCell>
-                      <TableCell sx={{ fontWeight: 600 }}>Fatigue Level</TableCell>
-                      <TableCell sx={{ fontWeight: 600 }}>Readiness</TableCell>
-                      <TableCell sx={{ fontWeight: 600 }}>Mood</TableCell>
-                      <TableCell sx={{ fontWeight: 600 }}>Pain Areas</TableCell>
-                      <TableCell sx={{ fontWeight: 600 }}>Status</TableCell>
-                      <TableCell sx={{ fontWeight: 600 }}>Actions</TableCell>
+                    <TableRow sx={{ 
+                      background: 'rgba(248, 250, 252, 0.8)',
+                      borderBottom: '2px solid rgba(0, 0, 0, 0.12)'
+                    }}>
+                      <TableCell sx={{ 
+                        fontWeight: 600,
+                        color: '#374151',
+                        fontSize: '0.875rem',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.05em'
+                      }}>Date & Time</TableCell>
+                      <TableCell sx={{ 
+                        fontWeight: 600,
+                        color: '#374151',
+                        fontSize: '0.875rem',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.05em'
+                      }}>Worker</TableCell>
+                      <TableCell sx={{ 
+                        fontWeight: 600,
+                        color: '#374151',
+                        fontSize: '0.875rem',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.05em'
+                      }}>Fatigue Level</TableCell>
+                      <TableCell sx={{ 
+                        fontWeight: 600,
+                        color: '#374151',
+                        fontSize: '0.875rem',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.05em'
+                      }}>Readiness</TableCell>
+                      <TableCell sx={{ 
+                        fontWeight: 600,
+                        color: '#374151',
+                        fontSize: '0.875rem',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.05em'
+                      }}>Mood</TableCell>
+                      <TableCell sx={{ 
+                        fontWeight: 600,
+                        color: '#374151',
+                        fontSize: '0.875rem',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.05em'
+                      }}>Pain Areas</TableCell>
+                      <TableCell sx={{ 
+                        fontWeight: 600,
+                        color: '#374151',
+                        fontSize: '0.875rem',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.05em'
+                      }}>Status</TableCell>
+                      <TableCell sx={{ 
+                        fontWeight: 600,
+                        color: '#374151',
+                        fontSize: '0.875rem',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.05em'
+                      }}>Actions</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
                     {filteredAssessments.map((assessment) => (
-                      <TableRow key={assessment._id} sx={{ '&:hover': { background: '#f8fafc' } }}>
+                      <TableRow 
+                        key={assessment._id}
+                        sx={{
+                          cursor: 'pointer',
+                          transition: 'all 0.15s ease',
+                          '&:hover': {
+                            background: 'rgba(123, 104, 238, 0.06)',
+                            transform: 'scale(1.001)'
+                          }
+                        }}
+                      >
                         <TableCell>
                           <Box>
                             <Typography variant="body2" sx={{ fontWeight: 500 }}>

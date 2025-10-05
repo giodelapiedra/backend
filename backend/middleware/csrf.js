@@ -6,7 +6,9 @@ const csrfProtection = (req, res, next) => {
   // Skip CSRF for GET requests and health checks only
   if (req.method === 'GET' || 
       req.path.startsWith('/api/health') ||
-      req.path.startsWith('/api/csrf-token')) {
+      req.path.startsWith('/api/csrf-token') ||
+      req.path.startsWith('/api/goal-kpi')) {  // Skip CSRF for goal-kpi routes
+    console.log('🔄 CSRF: Skipping CSRF protection for:', req.method, req.path);
     return next();
   }
 
@@ -18,7 +20,12 @@ const csrfProtection = (req, res, next) => {
   // Get CSRF token from header or body
   const token = req.headers['x-csrf-token'] || req.body._csrf;
   
+  console.log('🔍 CSRF: Checking token for:', req.method, req.path);
+  console.log('🔍 CSRF: Token from header:', req.headers['x-csrf-token'] ? 'present' : 'missing');
+  console.log('🔍 CSRF: Token from body:', req.body._csrf ? 'present' : 'missing');
+  
   if (!token) {
+    console.log('❌ CSRF: Token missing for:', req.method, req.path);
     return res.status(403).json({ 
       message: 'CSRF token missing' 
     });

@@ -200,7 +200,7 @@ class AutoAssignmentService {
           user: caseData.worker,
           type: 'case_created',
           title: 'New Case Created',
-          message: `A rehabilitation case has been created for you. Case number: ${caseData.caseNumber}`,
+          message: `A rehabilitation case has been created for you. Case number: ${caseData.caseNumber} - ${caseData.workerName || 'Worker'}`,
           case: caseId,
           isRead: false
         });

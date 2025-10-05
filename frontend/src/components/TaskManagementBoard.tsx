@@ -39,9 +39,11 @@ import {
   ArrowUpward,
   ArrowDownward,
   Person as PersonIcon,
+  Refresh,
 } from '@mui/icons-material';
-import api from '../utils/api';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuth } from '../contexts/AuthContext.supabase';
+import { dataClient } from '../lib/supabase';
+import { CaseAssignmentService } from '../utils/caseAssignmentService';
 
 interface TaskProps {
   _id: string;
@@ -61,20 +63,28 @@ interface TaskProps {
 }
 
 interface CaseTask {
-  _id: string;
-  caseNumber: string;
+  id: string;
+  _id?: string; // For backward compatibility
+  case_number: string;
+  caseNumber?: string; // For backward compatibility
   status: string;
   priority: string;
   worker: {
-    _id: string;
-    firstName: string;
-    lastName: string;
+    id: string;
+    _id?: string; // For backward compatibility
+    first_name: string;
+    firstName?: string; // For backward compatibility
+    last_name: string;
+    lastName?: string; // For backward compatibility
     email?: string;
   };
   clinician?: {
-    _id: string;
-    firstName: string;
-    lastName: string;
+    id: string;
+    _id?: string; // For backward compatibility
+    first_name: string;
+    firstName?: string; // For backward compatibility
+    last_name: string;
+    lastName?: string; // For backward compatibility
     email?: string;
   };
   injuryDetails?: {
@@ -84,25 +94,60 @@ interface CaseTask {
     description: string;
   };
   incident?: {
-    incidentNumber: string;
-    incidentDate: string;
-    incidentType: string;
+    id: string;
+    incidentNumber?: string; // For backward compatibility
+    incidentDate?: string; // For backward compatibility
+    incident_type: string;
+    incidentType?: string; // For backward compatibility
     severity: string;
   };
-  createdAt?: string;
+  created_at?: string;
+  createdAt?: string; // For backward compatibility
 }
 
-interface CaseDetails extends CaseTask {
+interface CaseDetails {
+  id: string;
+  _id?: string; // For backward compatibility
+  case_number: string;
+  caseNumber?: string; // For backward compatibility
+  status: string;
+  priority: string;
+  worker: {
+    id: string;
+    _id?: string; // For backward compatibility
+    first_name: string;
+    firstName?: string; // For backward compatibility
+    last_name: string;
+    lastName?: string; // For backward compatibility
+    email?: string;
+  };
   clinician?: {
-    _id: string;
-    firstName: string;
-    lastName: string;
+    id: string;
+    _id?: string; // For backward compatibility
+    first_name: string;
+    firstName?: string; // For backward compatibility
+    last_name: string;
+    lastName?: string; // For backward compatibility
     email?: string;
   };
   employer?: {
     firstName: string;
     lastName: string;
     email: string;
+  };
+  injuryDetails?: {
+    bodyPart: string;
+    injuryType: string;
+    severity: string;
+    description: string;
+  };
+  incident?: {
+    id: string;
+    incidentNumber?: string; // For backward compatibility
+    incidentDate?: string; // For backward compatibility
+    incident_type: string;
+    incidentType?: string; // For backward compatibility
+    severity: string;
   };
   workRestrictions?: {
     lifting?: {
@@ -114,6 +159,8 @@ interface CaseDetails extends CaseTask {
     other?: string;
   };
   expectedReturnDate?: string;
+  created_at?: string;
+  createdAt?: string; // For backward compatibility
   notes?: Array<{
     content: string;
     author: {
@@ -226,31 +273,40 @@ const TaskManagementBoard: React.FC = () => {
     try {
       setLoading(true);
       setError(null); // Clear any previous errors
-      console.log('Fetching clinician cases...');
+      console.log('Fetching clinician cases from Supabase...');
       
-      const response = await api.get('/cases/clinician-cases');
-      console.log('API response:', response.data);
-      
-      if (!response.data) {
-        throw new Error('No data received from API');
+      if (!user?.id) {
+        throw new Error('User not authenticated');
       }
       
-      if (!Array.isArray(response.data.cases)) {
-        console.warn('Invalid cases data:', response.data);
-        throw new Error('Invalid data format received from API');
+      // Use CaseAssignmentService to get clinician cases from Supabase
+      const assignedCases = await CaseAssignmentService.getClinicianCases(user.id);
+      console.log('Supabase response:', assignedCases);
+      
+      if (!Array.isArray(assignedCases)) {
+        console.warn('Invalid cases data:', assignedCases);
+        throw new Error('Invalid data format received from Supabase');
       }
       
-      if (response.data.cases.length === 0) {
+      if (assignedCases.length === 0) {
         console.log('No cases assigned to clinician');
         setTasks([]);
         return;
       }
       
       // Transform cases into task format with error handling for each case
-      const caseTasks = response.data.cases.reduce((validTasks: TaskProps[], caseItem: CaseTask) => {
+      const caseTasks = assignedCases.reduce((validTasks: TaskProps[], caseItem: CaseTask) => {
         try {
-          if (!caseItem._id || !caseItem.caseNumber) {
-            console.warn('Skipping invalid case item:', caseItem);
+          // Check for both old and new field names
+          const caseId = caseItem.id || caseItem._id;
+          const caseNumber = caseItem.case_number || caseItem.caseNumber;
+          
+          if (!caseId || !caseNumber) {
+            console.warn('Skipping invalid case item - missing id or case_number:', {
+              id: caseId,
+              case_number: caseNumber,
+              caseItem
+            });
             return validTasks;
           }
           
@@ -263,15 +319,15 @@ const TaskManagementBoard: React.FC = () => {
       }, []);
       
       console.log('Tasks transformed successfully:', {
-        totalCases: response.data.cases.length,
+        totalCases: assignedCases.length,
         validTasks: caseTasks.length
       });
       
       setTasks(caseTasks);
       
       // Show warning if some cases couldn't be transformed
-      if (caseTasks.length < response.data.cases.length) {
-        console.warn(`${response.data.cases.length - caseTasks.length} cases were skipped due to invalid data`);
+      if (caseTasks.length < assignedCases.length) {
+        console.warn(`${assignedCases.length - caseTasks.length} cases were skipped due to invalid data`);
       }
       
     } catch (err: any) {
@@ -281,32 +337,99 @@ const TaskManagementBoard: React.FC = () => {
       let errorMessage = 'Failed to fetch assigned cases';
       let errorDetails = '';
       
-      if (err.response) {
-        errorMessage = err.response.data?.message || errorMessage;
-        errorDetails = ` (Status: ${err.response.status})`;
-        
-        // Log additional error context
-        console.error('Error context:', {
-          status: err.response.status,
-          statusText: err.response.statusText,
-          data: err.response.data,
-          headers: err.response.headers
-        });
-      } else if (err.request) {
-        errorDetails = ' (No response received from server)';
-      } else {
-        errorDetails = ` (${err.message})`;
+      if (err.message) {
+        errorMessage = err.message;
+        errorDetails = ' (Supabase error)';
       }
       
       setError(`${errorMessage}${errorDetails}`);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [user?.id]);
 
   useEffect(() => {
     fetchAssignedCases();
   }, [fetchAssignedCases]);
+
+  // Listen for real-time updates when case manager assigns cases
+  useEffect(() => {
+    const handleClinicianDataRefresh = (event: CustomEvent) => {
+      const { clinicianId, timestamp, cacheCleared } = event.detail;
+      console.log('Received clinician data refresh event for:', clinicianId);
+      console.log('Cache cleared:', cacheCleared);
+      console.log('Timestamp:', timestamp);
+      
+      // Check if this refresh is for the current user
+      if (user?.id === clinicianId) {
+        console.log('🔄 Refreshing clinician tasks data with cache cleared...');
+        
+        // Clear any local state that might be cached
+        setTasks([]);
+        setError(null);
+        
+        // Force fetch with fresh data
+        fetchAssignedCases();
+      }
+    };
+
+    // Add event listener
+    window.addEventListener('clinicianDataRefresh', handleClinicianDataRefresh as EventListener);
+
+    // Cleanup
+    return () => {
+      window.removeEventListener('clinicianDataRefresh', handleClinicianDataRefresh as EventListener);
+    };
+  }, [user?.id, fetchAssignedCases]);
+
+  // Real-time subscription to cases table for this clinician
+  useEffect(() => {
+    if (!user?.id) return;
+
+    console.log('Setting up real-time subscription for clinician:', user.id);
+
+    const subscription = dataClient
+      .channel('clinician-cases-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'cases',
+          filter: `clinician_id=eq.${user.id}`
+        },
+        (payload) => {
+          console.log('Real-time case update received:', payload);
+          console.log('New case data:', payload.new);
+          console.log('Old case data:', payload.old);
+          
+          // Refresh the data when a case is assigned to this clinician
+          if (payload.new && payload.new.clinician_id === user.id) {
+            console.log('Case assigned to this clinician, refreshing data...');
+            fetchAssignedCases();
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'cases',
+          filter: `clinician_id=eq.${user.id}`
+        },
+        (payload) => {
+          console.log('New case inserted for this clinician:', payload);
+          fetchAssignedCases();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      console.log('Cleaning up real-time subscription');
+      subscription.unsubscribe();
+    };
+  }, [user?.id, fetchAssignedCases]);
 
   useEffect(() => {
     if (tasks.length > 0) {
@@ -351,8 +474,9 @@ const TaskManagementBoard: React.FC = () => {
         progress = 0;
     }
 
-    // Create a title based on available data
-    let title = `Case ${caseItem.caseNumber}`;
+      // Create a title based on available data
+    const caseNumber = caseItem.case_number || caseItem.caseNumber;
+    let title = `Case ${caseNumber}`;
     let description = 'No details available';
     let tags: string[] = [];
     
@@ -370,12 +494,13 @@ const TaskManagementBoard: React.FC = () => {
       // Use incident details if available and no valid injury details
       else if (caseItem.incident && 
                typeof caseItem.incident === 'object' && 
-               caseItem.incident.incidentType) {
-        title = `Incident - ${caseItem.incident.incidentType}`;
+               (caseItem.incident.incident_type || caseItem.incident.incidentType)) {
+        const incidentType = caseItem.incident.incident_type || caseItem.incident.incidentType;
+        title = `Incident - ${incidentType}`;
         description = caseItem.incident.severity ? 
           `Incident severity: ${caseItem.incident.severity}` : 
           'Incident details not available';
-        if (caseItem.incident.incidentType) tags.push(caseItem.incident.incidentType);
+        if (incidentType) tags.push(incidentType);
         if (caseItem.incident.severity) tags.push(caseItem.incident.severity);
       }
 
@@ -391,30 +516,35 @@ const TaskManagementBoard: React.FC = () => {
     } catch (error) {
       console.error('Error transforming case data:', error, caseItem);
       // Use fallback values if transformation fails
-      title = `Case ${caseItem.caseNumber}`;
+      title = `Case ${caseNumber}`;
       description = 'Error loading case details';
       tags = [];
     }
     
     // Calculate a due date (placeholder - 14 days from creation or today)
     let dueDate = new Date();
-    if (caseItem.createdAt) {
-      dueDate = new Date(caseItem.createdAt);
+    const createdAt = caseItem.created_at || caseItem.createdAt;
+    if (createdAt) {
+      dueDate = new Date(createdAt);
       dueDate.setDate(dueDate.getDate() + 14); // 14 days from creation
     } else {
       dueDate.setDate(dueDate.getDate() + 14); // 14 days from today
     }
     
     return {
-      _id: caseItem._id,
-      caseNumber: caseItem.caseNumber,
+      _id: caseItem.id || caseItem._id || '',
+      caseNumber: caseItem.case_number || caseItem.caseNumber || '',
       title: title,
       description: description,
       priority: caseItem.priority as 'high' | 'medium' | 'low',
       status: taskStatus,
       progress: progress,
       dueDate: dueDate.toISOString().split('T')[0],
-      assignees: [caseItem.worker],
+      assignees: [{
+        _id: caseItem.worker.id || caseItem.worker._id || '',
+        firstName: caseItem.worker.first_name || caseItem.worker.firstName || '',
+        lastName: caseItem.worker.last_name || caseItem.worker.lastName || ''
+      }],
       tags: tags
     };
   };
@@ -422,8 +552,89 @@ const TaskManagementBoard: React.FC = () => {
   const handleViewCase = async (caseId: string) => {
     try {
       setLoadingCaseDetails(true);
-      const response = await api.get(`/cases/${caseId}`);
-      setSelectedCase(response.data.case);
+      
+      // Fetch case details from Supabase
+      const { data: caseData, error: caseError } = await dataClient
+        .from('cases')
+        .select(`
+          *,
+          worker:users!cases_worker_id_fkey(
+            id,
+            first_name,
+            last_name,
+            email
+          ),
+          clinician:users!cases_clinician_id_fkey(
+            id,
+            first_name,
+            last_name,
+            email
+          ),
+          incident:incidents!cases_incident_id_fkey(
+            id,
+            incident_type,
+            severity,
+            description
+          )
+        `)
+        .eq('id', caseId)
+        .single();
+      
+      if (caseError) {
+        throw caseError;
+      }
+      
+      if (!caseData) {
+        throw new Error('Case not found');
+      }
+      
+      // Transform the data to match the expected format
+      const transformedCase: CaseDetails = {
+        id: caseData.id,
+        _id: caseData.id, // For backward compatibility
+        case_number: caseData.case_number,
+        caseNumber: caseData.case_number, // For backward compatibility
+        status: caseData.status,
+        priority: caseData.priority || 'medium',
+        worker: {
+          id: caseData.worker?.id || '',
+          _id: caseData.worker?.id || '', // For backward compatibility
+          first_name: caseData.worker?.first_name || '',
+          firstName: caseData.worker?.first_name || '', // For backward compatibility
+          last_name: caseData.worker?.last_name || '',
+          lastName: caseData.worker?.last_name || '', // For backward compatibility
+          email: caseData.worker?.email || ''
+        },
+        clinician: caseData.clinician ? {
+          id: caseData.clinician.id,
+          _id: caseData.clinician.id, // For backward compatibility
+          first_name: caseData.clinician.first_name,
+          firstName: caseData.clinician.first_name, // For backward compatibility
+          last_name: caseData.clinician.last_name,
+          lastName: caseData.clinician.last_name, // For backward compatibility
+          email: caseData.clinician.email
+        } : undefined,
+        injuryDetails: caseData.injury_details ? {
+          bodyPart: caseData.injury_details.body_part || '',
+          injuryType: caseData.injury_details.injury_type || '',
+          severity: caseData.injury_details.severity || '',
+          description: caseData.injury_details.description || ''
+        } : undefined,
+        incident: caseData.incident ? {
+          id: caseData.incident.id,
+          incidentNumber: caseData.incident.id, // For backward compatibility
+          incidentDate: caseData.incident.created_at, // For backward compatibility
+          incident_type: caseData.incident.incident_type || '',
+          incidentType: caseData.incident.incident_type || '', // For backward compatibility
+          severity: caseData.incident.severity || ''
+        } : undefined,
+        workRestrictions: caseData.work_restrictions,
+        expectedReturnDate: caseData.expected_return_date,
+        created_at: caseData.created_at,
+        createdAt: caseData.created_at // For backward compatibility
+      };
+      
+      setSelectedCase(transformedCase);
       setCaseDialogOpen(true);
     } catch (error) {
       console.error('Error fetching case details:', error);
@@ -721,7 +932,7 @@ const TaskManagementBoard: React.FC = () => {
             Close
           </Button>
           <Button 
-            onClick={() => handleOpenFullCase(selectedCase._id)}
+            onClick={() => handleOpenFullCase(selectedCase.id || selectedCase._id || '')}
             variant="contained"
             startIcon={<Visibility />}
           >
@@ -879,6 +1090,26 @@ const TaskManagementBoard: React.FC = () => {
             }}
           >
             Filters
+          </Button>
+          
+          <Button 
+            variant="outlined" 
+            startIcon={<Refresh />}
+            onClick={() => {
+              console.log('Manual refresh triggered');
+              fetchAssignedCases();
+            }}
+            sx={{ 
+              borderRadius: '8px',
+              color: '#7B68EE',
+              borderColor: '#7B68EE',
+              '&:hover': { 
+                borderColor: '#6A5ACD', 
+                backgroundColor: 'rgba(123, 104, 238, 0.04)' 
+              }
+            }}
+          >
+            Refresh
           </Button>
           
           <Button 

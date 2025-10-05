@@ -46,6 +46,7 @@ interface AuthContextType {
   register: (userData: RegisterData, profilePhoto?: File | null) => Promise<void>;
   logout: () => void;
   refreshUser: () => Promise<void>;
+  updateUserInContext: (updatedUserData: any) => void;
   loading: boolean;
   error: string | null;
 }
@@ -333,6 +334,23 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
+  const updateUserInContext = (updatedUserData: any) => {
+    console.log('=== UPDATE USER IN CONTEXT ===');
+    console.log('Updated user data:', updatedUserData);
+    
+    setUser(updatedUserData);
+    
+    // Update stored user data in cookies
+    Cookies.set('user', JSON.stringify(updatedUserData), { 
+      secure: process.env.NODE_ENV === 'production', 
+      sameSite: 'strict', 
+      expires: 7,
+      path: '/'
+    });
+    
+    console.log('=== END UPDATE USER IN CONTEXT ===');
+  };
+
   const logout = async () => {
     try {
       // Call backend logout endpoint to clear server-side cookies
@@ -367,6 +385,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     register,
     logout,
     refreshUser,
+    updateUserInContext,
     loading,
     error
   };

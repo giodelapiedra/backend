@@ -1,6 +1,5 @@
-require('dotenv').config();
+require('dotenv').config({ path: './env.supabase' }); // Load Supabase environment
 const express = require('express');
-const mongoose = require('mongoose');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
@@ -29,6 +28,7 @@ const adminRoutes = require('./routes/admin');
 const clinicianAnalyticsRoutes = require('./routes/clinicianAnalytics');
 const teamLeaderRoutes = require('./routes/teamLeader');
 const workReadinessRoutes = require('./routes/workReadiness');
+const goalKpiRoutes = require('./routes/goalKpi');
 
 const app = express();
 
@@ -146,23 +146,34 @@ if (process.env.NODE_ENV === 'development') {
 // CSRF protection for state-changing operations
 app.use(csrfProtection);
 
-// MongoDB connection using centralized config
-const { connectDB } = require('./config/database');
+// Supabase connection using centralized config
+const { supabase } = require('./config/supabase');
 const { dbHealthCheck, getDatabaseStatus } = require('./middleware/dbHealth');
 
-// Suppress mongoose warnings about duplicate indexes
-mongoose.set('strictQuery', false);
+// Test Supabase connection
+const testSupabaseConnection = async () => {
+  try {
+    const { data, error } = await supabase
+      .from('users')
+      .select('count')
+      .limit(1);
+    
+    if (error) {
+      console.error('❌ Supabase connection failed:', error);
+      return false;
+    }
+    
+    console.log('✅ Supabase connection established successfully');
+    console.log('Database: PostgreSQL (Supabase)');
+    return true;
+  } catch (err) {
+    console.error('❌ Supabase connection error:', err);
+    return false;
+  }
+};
 
-// Connect to MongoDB and log detailed information
-connectDB()
-  .then(connection => {
-    console.log('✅ Database connection established successfully');
-    return connection;
-  })
-  .catch(err => {
-    console.error('❌ MongoDB connection failed:', err);
-    // Don't exit the process, let it try to reconnect
-  });
+// Test connection on startup
+testSupabaseConnection();
 
 // Enhanced image serving
 const { 
@@ -185,7 +196,7 @@ app.get('/api/images/proxy', imageServingMiddleware, proxyCloudinaryImage);
 app.get('/api/images/:type/:filename', authMiddleware, imageServingMiddleware, serveImage);
 
 // Routes
-app.use('/api/auth', authRoutes); // Removed authLimiter
+app.use('/api/auth', require('./routes/auth.supabase')); // Use Supabase auth routes
 app.use('/api/users', userRoutes);
 app.use('/api/cases', caseRoutes);
 app.use('/api/assessments', assessmentRoutes);
@@ -201,6 +212,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/clinicians/analytics', clinicianAnalyticsRoutes);
 app.use('/api/team-leader', teamLeaderRoutes);
 app.use('/api/work-readiness', workReadinessRoutes);
+app.use('/api/goal-kpi', goalKpiRoutes);
 
 // Apply database health check middleware to all routes
 app.use(dbHealthCheck);

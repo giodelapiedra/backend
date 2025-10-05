@@ -27,8 +27,8 @@ import {
   ContentCopy,
 } from '@mui/icons-material';
 import { format, addMonths, subMonths, startOfMonth, endOfMonth, eachDayOfInterval, isSameMonth, isToday, parseISO, isSameDay } from 'date-fns';
-import { useAuth } from '../../contexts/AuthContext';
-import api from '../../utils/api';
+import { useAuth } from '../../contexts/AuthContext.supabase';
+import { dataClient } from '../../lib/supabase';
 import LayoutWithSidebar from '../../components/LayoutWithSidebar';
 
 interface Appointment {
@@ -476,14 +476,11 @@ const AppointmentCalendar: React.FC = () => {
         const formattedStartDate = format(startDate, 'yyyy-MM-dd');
         const formattedEndDate = format(endDate, 'yyyy-MM-dd');
         
-        // Get all appointments for the month without pagination
-        const response = await api.get(`/appointments?startDate=${formattedStartDate}&endDate=${formattedEndDate}&limit=100`);
-        
-        if (response.data && response.data.appointments) {
-          setAppointments(response.data.appointments);
-        }
+        // Appointments table doesn't exist yet, so we'll use mock data
+        const appointmentsData: any[] = [];
+        setAppointments(appointmentsData);
       } catch (err: any) {
-        setError(err.response?.data?.message || 'Failed to fetch appointments');
+        setError(err.message || 'Failed to fetch appointments');
         console.error('Error fetching appointments:', err);
       } finally {
         setLoading(false);

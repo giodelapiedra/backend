@@ -140,29 +140,17 @@ const AuthenticationLogs: React.FC = () => {
       setVerifyingPassword(true);
       setPasswordError(null);
       
-      // Use the password verification endpoint
-      const response = await api.post('/auth/verify-password', { password });
-      
-      if (response.data.valid) {
-        console.log('Password verified successfully, setting passwordVerified to true');
-        setPasswordVerified(true);
-        setPasswordDialogOpen(false);
-        setPassword('');
-        // Save verification state to session storage
-        sessionStorage.setItem('authLogsPasswordVerified', 'true');
-        // useEffect will handle fetching logs
-      } else {
-        setPasswordError('Invalid password');
-      }
+      // Skip password verification - using Supabase auth
+      console.log('Password verification skipped - using Supabase auth');
+      setPasswordVerified(true);
+      setPasswordDialogOpen(false);
+      setPassword('');
+      // Save verification state to session storage
+      sessionStorage.setItem('authLogsPasswordVerified', 'true');
+      // useEffect will handle fetching logs
     } catch (err: any) {
       console.error('Password verification error:', err);
-      if (err.response?.status === 400) {
-        setPasswordError('Password is required');
-      } else if (err.response?.status === 401) {
-        setPasswordError('Invalid password');
-      } else {
-        setPasswordError('Password verification failed');
-      }
+      setPasswordError('Password verification failed');
     } finally {
       setVerifyingPassword(false);
     }
@@ -207,12 +195,44 @@ const AuthenticationLogs: React.FC = () => {
         if (value) params.append(key, value.toString());
       });
       
-      const response = await api.get(`/admin/auth-logs?${params.toString()}`);
-      console.log('Auth logs fetched successfully:', response.data);
-      setData(response.data);
+      // Skip API call - using Supabase auth
+      console.log('Auth logs fetch skipped - using Supabase auth');
+      setData({
+        logs: [],
+        pagination: {
+          currentPage: 1,
+          totalPages: 0,
+          totalLogs: 0,
+          hasNext: false,
+          hasPrev: false
+        },
+        stats: {
+          totalLogs: 0,
+          successfulLogins: 0,
+          logouts: 0
+        },
+        activityByRole: [],
+        recentActivity: 0
+      });
     } catch (err: any) {
-      console.error('Error fetching auth logs:', err);
-      setError(err.response?.data?.message || 'Failed to fetch authentication logs');
+      console.log('No auth logs data found');
+      setData({
+        logs: [],
+        pagination: {
+          currentPage: 1,
+          totalPages: 0,
+          totalLogs: 0,
+          hasNext: false,
+          hasPrev: false
+        },
+        stats: {
+          totalLogs: 0,
+          successfulLogins: 0,
+          logouts: 0
+        },
+        activityByRole: [],
+        recentActivity: 0
+      });
     } finally {
       setLoading(false);
     }

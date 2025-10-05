@@ -122,9 +122,14 @@ const StatCard = React.memo(({ icon, label, value, color }: { icon: React.ReactN
     <CardContent>
       <Box display="flex" alignItems="center" mb={1}>
         {icon}
-        <Typography variant="h6" sx={{ ml: 1 }}>{label}</Typography>
+        <Typography variant="h6" sx={{ 
+          ml: 1,
+          fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
+        }}>{label}</Typography>
       </Box>
-      <Typography variant="h4" color={color}>
+      <Typography variant="h4" color={color} sx={{
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
+      }}>
         {value}
       </Typography>
     </CardContent>
@@ -166,6 +171,7 @@ const WorkReadinessDashboard: React.FC = React.memo(() => {
   });
 
   // Filtering State
+  
   const [fatigueFilter, setFatigueFilter] = useState<string>('all'); // 'all', 'low', 'high'
 
   // Pagination State for Non-Compliant Workers
@@ -573,278 +579,180 @@ const WorkReadinessDashboard: React.FC = React.memo(() => {
       `}</style>
       
       <Box sx={{ 
-        p: { xs: 1, sm: 2, md: 3 }, 
+        p: { xs: 0, sm: 2, md: 3 }, 
+        pb: { xs: '100px', sm: 2, md: 3 },
         minHeight: '100vh',
-        position: 'relative',
-        background: 'linear-gradient(135deg, #f8fdff 0%, #e8f4f8 100%)',
-        fontFamily: { xs: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', md: 'inherit' }
+        background: '#f8fafc'
       }}>
-        {/* Enhanced Header with Better Hierarchy */}
+        {/* Professional Header */}
         <Box sx={{ 
-          mb: { xs: 3, md: 5 }, 
-          position: 'relative', 
-          zIndex: 1,
-          background: 'linear-gradient(135deg, #2d5a87 0%, #1e3a52 100%)',
-          padding: { xs: '24px 20px', md: '32px 40px' },
-          borderRadius: { xs: '20px', md: '24px' },
-          boxShadow: '0 12px 48px rgba(45, 90, 135, 0.25), 0 4px 16px rgba(45, 90, 135, 0.1)',
-          backdropFilter: 'blur(20px)',
-          border: '1px solid rgba(255, 255, 255, 0.15)',
-          overflow: 'hidden',
-          transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-          '&:hover': {
-            transform: 'translateY(-2px)',
-            boxShadow: '0 16px 64px rgba(45, 90, 135, 0.3), 0 6px 20px rgba(45, 90, 135, 0.15)'
-          }
+          mb: { xs: 3, md: 4 },
+          background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)',
+          p: { xs: 3, md: 5 },
+          borderRadius: { xs: 2, md: 3 },
+          boxShadow: '0 4px 20px rgba(99, 102, 241, 0.2)'
         }}>
-          {/* Background Pattern */}
-          <Box sx={{
-            position: 'absolute',
-            top: 0,
-            right: 0,
-            width: '200px',
-            height: '200px',
-            background: 'radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%)',
-            borderRadius: '50%',
-            transform: 'translate(50%, -50%)',
-            zIndex: 0
-          }} />
-          
-          <Box sx={{ position: 'relative', zIndex: 1 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
-              <Box>
-                <Typography variant="h4" sx={{ 
-                  fontWeight: 800, 
-                  color: 'white',
-                  textShadow: '0 2px 8px rgba(0,0,0,0.3)',
-                  fontSize: { xs: '1.75rem', sm: '2.25rem', md: '2.5rem' },
-                  mb: 1,
-                  letterSpacing: '-0.02em',
-                  lineHeight: 1.2
-                }}>
-                  Work Readiness Dashboard
-                </Typography>
-                <Typography variant="body1" sx={{ 
-                  color: 'rgba(255, 255, 255, 0.85)',
-                  textShadow: '0 1px 2px rgba(0,0,0,0.2)',
-                  fontSize: { xs: '0.9rem', sm: '1rem' },
-                  fontWeight: 400,
-                  lineHeight: 1.5
-                }}>
-
-                  Monitor your team's work readiness assessments and compliance
-                </Typography>
-              </Box>
-              {/* Real-time Status Indicator */}
-              <Box sx={{ 
-                display: 'flex', 
-                alignItems: 'center', 
-                gap: 1,
-                background: 'rgba(255, 255, 255, 0.1)',
-                padding: '8px 12px',
-                borderRadius: '20px',
-                backdropFilter: 'blur(10px)'
-              }}>
-                <Box sx={{
-                  width: '8px',
-                  height: '8px',
-                  borderRadius: '50%',
-                  background: '#22c55e',
-                  animation: 'pulse 2s infinite'
-                }} />
-                <Typography variant="caption" sx={{ 
-                  color: 'white', 
-                  fontWeight: 500,
-                  fontSize: '0.75rem'
-                }}>
-                  LIVE DATA
-                </Typography>
-              </Box>
-            </Box>
-          </Box>
+          <Typography variant="h4" sx={{ 
+            fontWeight: 700,
+            color: 'white',
+            fontSize: { xs: '1.5rem', md: '2rem' },
+            mb: 1,
+            letterSpacing: '-0.02em'
+          }}>
+            Work Readiness Dashboard
+          </Typography>
+          <Typography sx={{ 
+            color: 'rgba(255, 255, 255, 0.9)',
+            fontSize: { xs: '0.875rem', md: '1rem' }
+          }}>
+            Monitor your team's work readiness and compliance
+          </Typography>
         </Box>
 
-        {/* Enhanced Compliance Overview with Better Metrics */}
-        <Box className="stagger-animation">
+        {/* Metrics Section */}
+        <Box sx={{ mb: { xs: 3, md: 4 } }}>
           <Typography variant="h6" sx={{ 
-            fontWeight: 700, 
-            color: '#374151',
+            fontWeight: 700,
+            color: '#0f172a',
             mb: 3,
-            fontSize: { xs: '1.25rem', md: '1.5rem' },
-            letterSpacing: '-0.025em',
-            borderBottom: '2px solid rgba(45, 90, 135, 0.1)',
-            paddingBottom: 1
+            fontSize: { xs: '1.125rem', md: '1.25rem' },
+            px: { xs: 2, md: 0 }
           }}>
             Real-time Metrics
           </Typography>
-          <Grid container spacing={{ xs: 2, md: 3 }} sx={{ mb: { xs: 3, md: 4 }, position: 'relative', zIndex: 1 }}>
+          <Grid container spacing={{ xs: 2, md: 3 }} sx={{ px: { xs: 2, md: 0 } }}>
           <Grid item xs={6} sm={6} md={3}>
             <Card sx={{ 
-              background: 'rgba(255, 255, 255, 0.95)',
-              backdropFilter: 'blur(20px)',
-              borderRadius: { xs: 3, md: 4 },
-              border: '1px solid rgba(45, 90, 135, 0.1)',
-              boxShadow: { xs: '0 4px 12px rgba(45, 90, 135, 0.08)', md: '0 8px 32px rgba(45, 90, 135, 0.15)' },
-              transition: 'all 0.3s ease',
+              background: '#ffffff',
+              borderRadius: 2,
+              border: '1px solid #f1f5f9',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+              transition: 'all 0.2s ease',
               '&:hover': {
-                transform: { xs: 'scale(0.98)', md: 'translateY(-5px)' },
-                boxShadow: { xs: '0 8px 25px rgba(45, 90, 135, 0.2)', md: '0 12px 40px rgba(45, 90, 135, 0.25)' },
-                background: 'rgba(255, 255, 255, 1)'
+                boxShadow: '0 4px 12px rgba(0,0,0,0.12)',
+                transform: 'translateY(-2px)',
+                borderColor: '#e2e8f0'
               }
             }}>
-              <CardContent sx={{ textAlign: 'center', p: { xs: 2, md: 3 } }}>
+              <CardContent sx={{ textAlign: 'center', p: { xs: 3, md: 4 } }}>
                 <Box sx={{ 
-                  width: { xs: 45, md: 60 }, 
-                  height: { xs: 45, md: 60 }, 
-                  borderRadius: 3, 
-                  background: 'linear-gradient(135deg, #2d5a87 0%, #1e3a52 100%)',
+                  width: 56,
+                  height: 56,
+                  borderRadius: 2,
+                  background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                   margin: '0 auto 16px',
-                  boxShadow: '0 4px 20px rgba(45, 90, 135, 0.3)'
+                  boxShadow: '0 4px 12px rgba(99, 102, 241, 0.3)'
                 }}>
-                  <People sx={{ fontSize: { xs: 24, md: 30 }, color: 'white' }} />
+                  <People sx={{ fontSize: 32, color: 'white' }} />
                 </Box>
-                <Typography variant="h4" sx={{ 
-                  fontWeight: 700, 
-                  color: '#2d5a87', 
-                  mb: 1,
-                  fontSize: { xs: '1.25rem', md: '2rem' }
+                <Typography variant="h3" sx={{ 
+                  fontWeight: 700,
+                  color: '#0f172a',
+                  fontSize: { xs: '2rem', md: '2.5rem' },
+                  mb: 0.5,
+                  lineHeight: 1
                 }}>
                   {data.compliance.totalTeamMembers}
                 </Typography>
-                <Typography variant="body2" sx={{ 
-                  color: '#6b7280', 
-                  fontWeight: 500,
-                  fontSize: { xs: '0.75rem', md: '0.875rem' }
+                <Typography sx={{ 
+                  color: '#64748b',
+                  fontSize: '0.875rem',
+                  fontWeight: 500
                 }}>
                   Total Team Members
                 </Typography>
-                {/* Trend Indicator */}
-                <Box sx={{ 
-                  mt: 1,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 0.5
-                }}>
-                  <Typography variant="caption" sx={{ 
-                    color: '#10b981',
-                    fontWeight: 600,
-                    fontSize: '0.7rem'
-                  }}>
-                    Active Status
-                  </Typography>
-                </Box>
               </CardContent>
             </Card>
           </Grid>
           <Grid item xs={6} sm={6} md={3}>
             <Card sx={{ 
-              background: 'rgba(255, 255, 255, 0.95)',
-              backdropFilter: 'blur(20px)',
-              borderRadius: { xs: 3, md: 4 },
-              border: '1px solid rgba(45, 90, 135, 0.1)',
-              boxShadow: { xs: '0 4px 12px rgba(45, 90, 135, 0.08)', md: '0 8px 32px rgba(45, 90, 135, 0.15)' },
-              transition: 'all 0.3s ease',
+              background: '#ffffff',
+              borderRadius: 2,
+              border: '1px solid #f1f5f9',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+              transition: 'all 0.2s ease',
               '&:hover': {
-                transform: { xs: 'scale(0.98)', md: 'translateY(-5px)' },
-                boxShadow: { xs: '0 8px 25px rgba(45, 90, 135, 0.2)', md: '0 12px 40px rgba(45, 90, 135, 0.25)' },
-                background: 'rgba(255, 255, 255, 1)'
+                boxShadow: '0 4px 12px rgba(0,0,0,0.12)',
+                transform: 'translateY(-2px)',
+                borderColor: '#e2e8f0'
               }
             }}>
-              <CardContent sx={{ textAlign: 'center', p: { xs: 2, md: 3 } }}>
+              <CardContent sx={{ textAlign: 'center', p: { xs: 3, md: 4 } }}>
                 <Box sx={{ 
-                  width: { xs: 45, md: 60 }, 
-                  height: { xs: 45, md: 60 }, 
-                  borderRadius: 3, 
-                  background: 'linear-gradient(135deg, #2d5a87 0%, #1e3a52 100%)',
+                  width: 56,
+                  height: 56,
+                  borderRadius: 2,
+                  background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                   margin: '0 auto 16px',
-                  boxShadow: '0 4px 20px rgba(45, 90, 135, 0.3)'
+                  boxShadow: '0 4px 12px rgba(16, 185, 129, 0.3)'
                 }}>
-                  <CheckCircle sx={{ fontSize: { xs: 24, md: 30 }, color: 'white' }} />
+                  <CheckCircle sx={{ fontSize: 32, color: 'white' }} />
                 </Box>
-                <Typography variant="h4" sx={{ 
-                  fontWeight: 700, 
-                  color: '#2d5a87', 
-                  mb: 1,
-                  fontSize: { xs: '1.25rem', md: '2rem' }
+                <Typography variant="h3" sx={{ 
+                  fontWeight: 700,
+                  color: '#0f172a',
+                  fontSize: { xs: '2rem', md: '2.5rem' },
+                  mb: 0.5,
+                  lineHeight: 1
                 }}>
                   {data.compliance.submittedAssessments}
                 </Typography>
-                <Typography variant="body2" sx={{ 
-                  color: '#6b7280', 
-                  fontWeight: 500,
-                  fontSize: { xs: '0.75rem', md: '0.875rem' }
+                <Typography sx={{ 
+                  color: '#64748b',
+                  fontSize: '0.875rem',
+                  fontWeight: 500
                 }}>
-                  Assessments Completed
+                  Completed Today
                 </Typography>
-                {/* Trend Indicator */}
-                <Box sx={{ 
-                  mt: 1,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 0.5
-                }}>
-                  <Typography variant="caption" sx={{ 
-                    color: '#059669',
-                    fontWeight: 600,
-                    fontSize: '0.7rem',
-                    background: 'rgba(5, 150, 105, 0.1)',
-                    padding: '2px 6px',
-                    borderRadius: '4px'
-                  }}>
-                    {data.compliance.submittedAssessments > 0 ? 'Data Received' : 'Awaiting Data'}
-                  </Typography>
-                </Box>
               </CardContent>
             </Card>
           </Grid>
           <Grid item xs={6} sm={6} md={3}>
             <Card sx={{ 
-              background: 'rgba(255, 255, 255, 0.95)',
-              backdropFilter: 'blur(20px)',
-              borderRadius: { xs: 3, md: 4 },
-              border: '1px solid rgba(45, 90, 135, 0.1)',
-              boxShadow: { xs: '0 4px 12px rgba(45, 90, 135, 0.08)', md: '0 8px 32px rgba(45, 90, 135, 0.15)' },
-              transition: 'all 0.3s ease',
+              background: '#ffffff',
+              borderRadius: 2,
+              border: '1px solid #f1f5f9',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+              transition: 'all 0.2s ease',
               '&:hover': {
-                transform: { xs: 'scale(0.98)', md: 'translateY(-5px)' },
-                boxShadow: { xs: '0 8px 25px rgba(45, 90, 135, 0.2)', md: '0 12px 40px rgba(45, 90, 135, 0.25)' },
-                background: 'rgba(255, 255, 255, 1)'
+                boxShadow: '0 4px 12px rgba(0,0,0,0.12)',
+                transform: 'translateY(-2px)',
+                borderColor: '#e2e8f0'
               }
             }}>
-              <CardContent sx={{ textAlign: 'center', p: { xs: 2, md: 3 } }}>
+              <CardContent sx={{ textAlign: 'center', p: { xs: 3, md: 4 } }}>
                 <Box sx={{ 
-                  width: { xs: 45, md: 60 }, 
-                  height: { xs: 45, md: 60 }, 
-                  borderRadius: 3, 
-                  background: 'linear-gradient(135deg, #2d5a87 0%, #1e3a52 100%)',
+                  width: 56,
+                  height: 56,
+                  borderRadius: 2,
+                  background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)',
                   display: "flex",
                   alignItems: 'center',
                   justifyContent: 'center',
                   margin: '0 auto 16px',
-                  boxShadow: '0 4px 20px rgba(45, 90, 135, 0.3)'
+                  boxShadow: '0 4px 12px rgba(99, 102, 241, 0.3)'
                 }}>
-                  <TrendingUp sx={{ fontSize: { xs: 24, md: 30 }, color: 'white' }} />
+                  <TrendingUp sx={{ fontSize: 32, color: 'white' }} />
                 </Box>
-                <Typography variant="h4" sx={{ 
-                  fontWeight: 700, 
-                  color: '#2d5a87', 
-                  mb: 1,
-                  fontSize: { xs: '1.25rem', md: '2rem' }
+                <Typography variant="h3" sx={{ 
+                  fontWeight: 700,
+                  color: '#0f172a',
+                  fontSize: { xs: '2rem', md: '2.5rem' },
+                  mb: 0.5,
+                  lineHeight: 1
                 }}>
                   {data.compliance.complianceRate}%
                 </Typography>
-                <Typography variant="body2" sx={{ 
-                  color: '#6b7280', 
-                  fontWeight: 500,
-                  fontSize: { xs: '0.75rem', md: '0.875rem' }
+                <Typography sx={{ 
+                  color: '#64748b',
+                  fontSize: '0.875rem',
+                  fontWeight: 500
                 }}>
                   Compliance Rate
                 </Typography>
@@ -853,37 +761,37 @@ const WorkReadinessDashboard: React.FC = React.memo(() => {
           </Grid>
           <Grid item xs={6} sm={6} md={3}>
             <Card sx={{ 
-              background: 'rgba(255, 255, 255, 0.95)',
-              backdropFilter: 'blur(20px)',
-              borderRadius: { xs: 3, md: 4 },
-              border: '1px solid rgba(45, 90, 135, 0.1)',
-              boxShadow: { xs: '0 4px 12px rgba(45, 90, 135, 0.08)', md: '0 8px 32px rgba(45, 90, 135, 0.15)' },
-              transition: 'all 0.3s ease',
+              background: '#ffffff',
+              borderRadius: 2,
+              border: '1px solid #f1f5f9',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+              transition: 'all 0.2s ease',
               '&:hover': {
-                transform: { xs: 'scale(0.98)', md: 'translateY(-5px)' },
-                boxShadow: { xs: '0 8px 25px rgba(45, 90, 135, 0.2)', md: '0 12px 40px rgba(45, 90, 135, 0.25)' },
-                background: 'rgba(255, 255, 255, 1)'
+                boxShadow: '0 4px 12px rgba(0,0,0,0.12)',
+                transform: 'translateY(-2px)',
+                borderColor: '#e2e8f0'
               }
             }}>
-              <CardContent sx={{ textAlign: 'center', p: { xs: 2, md: 3 } }}>
+              <CardContent sx={{ textAlign: 'center', p: { xs: 3, md: 4 } }}>
                 <Box sx={{ 
-                  width: { xs: 45, md: 60 }, 
-                  height: { xs: 45, md: 60 }, 
-                  borderRadius: 3, 
-                  background: 'linear-gradient(135deg, #2d5a87 0%, #1e3a52 100%)',
+                  width: 56,
+                  height: 56,
+                  borderRadius: 2,
+                  background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                   margin: '0 auto 16px',
-                  boxShadow: '0 4px 20px rgba(45, 90, 135, 0.3)'
+                  boxShadow: '0 4px 12px rgba(245, 158, 11, 0.3)'
                 }}>
-                  <Warning sx={{ fontSize: { xs: 24, md: 30 }, color: 'white' }} />
+                  <Warning sx={{ fontSize: 32, color: 'white' }} />
                 </Box>
-                <Typography variant="h4" sx={{ 
-                  fontWeight: 700, 
-                  color: '#2d5a87', 
-                  mb: 1,
-                  fontSize: { xs: '1.25rem', md: '2rem' }
+                <Typography variant="h3" sx={{ 
+                  fontWeight: 700,
+                  color: '#0f172a',
+                  fontSize: { xs: '2rem', md: '2.5rem' },
+                  mb: 0.5,
+                  lineHeight: 1
                 }}>
                   {data.compliance.nonCompliantCount}
                 </Typography>
@@ -909,6 +817,7 @@ const WorkReadinessDashboard: React.FC = React.memo(() => {
             mb: 3,
             fontSize: { xs: '1.25rem', md: '1.5rem' },
             letterSpacing: '-0.025em',
+            fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
             borderBottom: '2px solid rgba(45, 90, 135, 0.1)',
             paddingBottom: 1
           }}>
@@ -933,7 +842,8 @@ const WorkReadinessDashboard: React.FC = React.memo(() => {
                   fontWeight: 600, 
                   color: '#1a202c',
                   textShadow: '0 2px 4px rgba(0,0,0,0.1)',
-                  fontSize: { xs: '1rem', md: '1.25rem' }
+                  fontSize: { xs: '1rem', md: '1.25rem' },
+                  fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
                 }}>
                   Work Readiness Status
                 </Typography>
@@ -1022,6 +932,708 @@ const WorkReadinessDashboard: React.FC = React.memo(() => {
         </Grid>
         </Box>
 
+        {/* Enhanced Fatigue Analysis */}
+        <Box className="stagger-animation">
+        <Card sx={{ 
+          background: 'rgba(255, 255, 255, 0.9)',
+          backdropFilter: 'blur(10px)',
+          borderRadius: 4,
+          border: '1px solid rgba(34, 197, 94, 0.1)',
+          boxShadow: '0 8px 32px 0 rgba(34, 197, 94, 0.1)',
+          position: 'relative',
+          zIndex: 1,
+          mb: 3
+        }}>
+          <CardContent sx={{ p: 3 }}>
+            <Box sx={{ mb: 3 }}>
+              <Typography variant="h6" sx={{ 
+                fontWeight: 700, 
+                color: '#374151',
+                mb: 2,
+                fontSize: { xs: '1.1rem', md: '1.25rem' },
+                letterSpacing: '-0.025em',
+                fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+                borderBottom: '2px solid rgba(45, 90, 135, 0.1)',
+                paddingBottom: 1
+              }}>
+                Fatigue Analysis
+              </Typography>
+              <Typography variant="body2" sx={{ 
+                color: '#6b7280',
+                mb: 3
+              }}>
+                Analyzing fatigue distribution across your team
+              </Typography>
+              <Box display="flex" gap={2}>
+                <Chip
+                  label={`Total: ${data.fatigueStats.low + data.fatigueStats.high}`}
+                  sx={{ 
+                    backgroundColor: '#f3f4f6',
+                    color: '#374151',
+                    fontWeight: 600
+                  }}
+                  size="small"
+                />
+                <Chip
+                  label={`Low Fatigue: ${data.fatigueStats.low}`}
+                  sx={{ 
+                    backgroundColor: '#22c55e',
+                    color: 'white',
+                    fontWeight: 600
+                  }}
+                  size="small"
+                />
+                <Chip
+                  label={`High Fatigue: ${data.fatigueStats.high}`}
+                  sx={{ 
+                    backgroundColor: '#ef4444',
+                    color: 'white',
+                    fontWeight: 600
+                  }}
+                  size="small"
+                />
+              </Box>
+            </Box>
+
+            {data.compliance.totalTeamMembers === 0 ? (
+              <Box sx={{ textAlign: 'center', py: 4 }}>
+                <Typography variant="body2" sx={{ color: '#6b7280' }}>
+                  No fatigue data available yet. Data will appear once team members submit assessments.
+                </Typography>
+              </Box>
+            ) : (
+              <Grid container spacing={3}>
+                {/* Low Fatigue Range (0-5) */}
+                <Grid item xs={12} md={6}>
+                  <Box>
+                    <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 600, color: '#1a202c' }}>
+                      Low Fatigue Range (0-5)
+                    </Typography>
+                    <Box sx={{ mb: 1 }}>
+                      <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mb: 0.5 }}>
+                        <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                          Workers with low fatigue
+                        </Typography>
+                        <Typography variant="body2" sx={{ fontWeight: 600, color: '#22c55e' }}>
+                          {data.fatigueStats.low}
+                        </Typography>
+                      </Box>
+                      <LinearProgress
+                        variant="determinate"
+                        value={data.fatigueStats.low + data.fatigueStats.high > 0 ? (data.fatigueStats.low / (data.fatigueStats.low + data.fatigueStats.high)) * 100 : 0}
+                        sx={{
+                          height: 12,
+                          borderRadius: 1,
+                          backgroundColor: '#f3f4f6',
+                          '& .MuiLinearProgress-bar': {
+                            backgroundColor: '#22c55e',
+                            borderRadius: 1
+                          }
+                        }}
+                      />
+                    </Box>
+                    <Typography variant="caption" sx={{ color: '#6b7280' }}>
+                      {data.fatigueStats.low + data.fatigueStats.high > 0 ? 
+                        `${Math.round((data.fatigueStats.low / (data.fatigueStats.low + data.fatigueStats.high)) * 100)}% of submitted assessments` : 
+                        'No data available'}
+                    </Typography>
+                  </Box>
+                </Grid>
+
+                {/* High Fatigue Range (6-10) */}
+                <Grid item xs={12} md={6}>
+                  <Box>
+                    <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 600, color: '#1a202c' }}>
+                      High Fatigue Range (6-10)
+                    </Typography>
+                    <Box sx={{ mb: 1 }}>
+                      <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mb: 0.5 }}>
+                        <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                          Workers with high fatigue
+                        </Typography>
+                        <Typography variant="body2" sx={{ fontWeight: 600, color: '#ef4444' }}>
+                          {data.fatigueStats.high}
+                        </Typography>
+                      </Box>
+                      <LinearProgress
+                        variant="determinate"
+                        value={data.fatigueStats.low + data.fatigueStats.high > 0 ? (data.fatigueStats.high / (data.fatigueStats.low + data.fatigueStats.high)) * 100 : 0}
+                        sx={{
+                          height: 12,
+                          borderRadius: 1,
+                          backgroundColor: '#f3f4f6',
+                          '& .MuiLinearProgress-bar': {
+                            backgroundColor: '#ef4444',
+                            borderRadius: 1
+                          }
+                        }}
+                      />
+                    </Box>
+                    <Typography variant="caption" sx={{ color: '#6b7280' }}>
+                      {data.fatigueStats.low + data.fatigueStats.high > 0 ? 
+                        `${Math.round((data.fatigueStats.high / (data.fatigueStats.low + data.fatigueStats.high)) * 100)}% of submitted assessments` : 
+                        'No data available'}
+                    </Typography>
+                  </Box>
+                </Grid>
+              </Grid>
+            )}
+          </CardContent>
+        </Card>
+        </Box>
+
+        {/* Enhanced Submitted Assessments */}
+        <Box className="stagger-animation">
+
+        {/* Submitted Assessments */}
+        <Card sx={{ 
+          width: '100%',
+          background: 'rgba(255, 255, 255, 0.9)',
+          backdropFilter: 'blur(10px)',
+          borderRadius: 4,
+          border: '1px solid rgba(34, 197, 94, 0.1)',
+          boxShadow: '0 8px 32px 0 rgba(34, 197, 94, 0.1)',
+          position: 'relative',
+          zIndex: 1,
+          overflow: 'hidden',
+          mb: 3,
+          '@media (max-width: 768px)': {
+            borderRadius: 2,
+            margin: '0 -8px'
+          }
+        }}>
+          <CardContent sx={{ 
+            p: { xs: 2, md: 3 },
+            '@media (max-width: 768px)': {
+              padding: '16px 8px'
+            }
+          }}>
+            <Box sx={{ mb: 3 }}>
+              <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
+                <Typography variant="h6" sx={{ 
+                  fontWeight: 700, 
+                  color: '#374151',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1,
+                  fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
+                }}>
+                  Today's Assessments
+                  <Chip 
+                    label={filteredAssessments.length} 
+                    size="small" 
+                    sx={{ 
+                      backgroundColor: '#2d5a87',
+                      color: 'white',
+                      fontWeight: 600,
+                      fontSize: '0.75rem',
+                      borderRadius: 2
+                    }} 
+                  />
+                </Typography>
+              </Box>
+              <Typography variant="body2" sx={{ 
+                color: '#6b7280',
+                mb: 2
+              }}>
+                Real-time assessment data from your team members
+              </Typography>
+              <Box display="flex" alignItems="center" gap={1}>
+                {data.compliance.totalTeamMembers > 0 && (
+                  <Box sx={{ 
+                    width: 'calc(200px * 0.75)', 
+                    height: 'calc(200px * 0.75)', 
+                    borderRadius: '50%', 
+                    mx: 'auto',
+                    overflow: 'visible',
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    justifyContent: 'center',
+                    position: 'relative',
+                    '@media (max-width: 768px)': {
+                      width: 'calc(150px)',
+                      height: 'calc(150px)',
+                    }
+                  }}>
+                    <svg 
+                      width="100%" 
+                      height="100%" 
+                      style={{
+                        transform: 'rotate(-90deg)',
+                        filter: 'drop-shadow(0 2px 4px rgba(34, 197, 94, 0.2))',
+                      }}
+                    >
+                      <circle
+                        cx="50%" 
+                        cy="50%" 
+                        r="calc(50% - 15px)" 
+                        fill="none" 
+                        stroke="rgba(34, 197, 94, 0.1)" 
+                        strokeWidth="10" 
+                      />
+                      <circle
+                        cx="50%" 
+                        cy="50%" 
+                        r="calc(50% - 15px)" 
+                        fill="none" 
+                        stroke="#22c55e" 
+                        strokeWidth="10" 
+                        strokeLinecap="round"
+                        strokeDasharray={`${2 * Math.PI * (parseInt('calc(50% - 15px)'.replace(/[^\d]/g, '')) || 80) * 0.1}`}
+                        strokeDashoffset="calc(100% - "
+                        style={{
+                          strokeDasharray: `${data.compliance.complianceRate * 5} ${100 - data.compliance.complianceRate * 5}`,
+                          strokeDashoffset: `${100 - data.compliance.complianceRate}%`
+                        }}
+                      />
+                    </svg>
+                    <Typography sx={{ 
+                      position: 'absolute',
+                      fontWeight: 700,
+                      color: '#2d5a87',
+                      fontSize: { xs: '0.75rem', md: '1rem' }
+                    }}>
+                      {data.compliance.complianceRate}%
+                    </Typography>
+                  </Box>
+                )}
+                <Typography variant="body2" sx={{ 
+                  ml: 2,
+                  fontWeight: 500,
+                  fontSize: { xs: '0.8rem', md: '0.875rem' },
+                  color: '#374151',
+                  lineHeight: 1.3
+                }}>
+                  Today's completion rate
+                  <br />
+                  {data.compliance.submittedAssessments}/{data.compliance.totalTeamMembers} assessed
+                </Typography>
+              </Box>
+            </Box>
+
+            {data.compliance.totalTeamMembers === 0 ? (
+              <Box sx={{ textAlign: 'center', py: 4 }}>
+                <Typography variant="body2" sx={{ color: '#6b7280' }}>
+                  No team members found. Data will appear once team members are assigned.
+                </Typography>
+              </Box>
+            ) : (
+              <>
+                <Typography variant="body2" sx={{ 
+                  color: '#6b7280', 
+                  mb: 1,
+                  fontWeight: 500,
+                  '@media (max-width: 768px)': {
+                    padding: '0 16px',
+                    marginBottom: '8px'
+                  }
+                }}>
+                  {filteredAssessments.length === 0 ? 'No assessments found ' : `Showing ${filteredAssessments.length} assessment${filteredAssessments.length !== 1 ? 's' : ''} `}
+                  {fatigueFilter !== 'all' && `(filtered${fatigueFilter})`}
+                </Typography>
+                {filteredAssessments.length > 0 ? (
+                  <Typography variant="body2" sx={{ 
+                    color: '#6b7280',
+                    mb: 2,
+                    fontSize: { xs: '0.75rem', md: '0.875rem' },
+                    '@media (max-width: 768px)': {
+                      padding: '0 16px',
+                      marginBottom: '16px'
+                    }
+                  }}>
+                    Submit your assessment daily to remain compliant
+                  </Typography>
+                ) : null}
+                
+                {/* Mobile Card Layout */}
+                <Box sx={{ 
+                  '@media (max-width: 768px)': { 
+                    display: 'block',
+                    padding: '0 16px'
+                  },
+                  '@media (min-width: 769px)': { 
+                    display: 'none' 
+                  }
+                }}>
+                  {filteredAssessments.map((assessment) => (
+                    <Box key={`mobile-${assessment._id}`} sx={{
+                      background: 'white',
+                      borderRadius: '16px',
+                      padding: '20px',
+                      marginBottom: '12px',
+                      border: '1px solid rgba(0,0,0,0.06)',
+                      boxShadow: '0 2px 12px rgba(0,0,0,0.08)',
+                      transition: 'all 0.2s ease',
+                      '&:active': {
+                        transform: 'scale(0.98)',
+                        boxShadow: '0 4px 20px rgba(0,0,0,0.15)'
+                      }
+                    }}>
+                      {/* Worker Info */}
+                      <Box sx={{ marginBottom: '16px', borderBottom: '1px solid rgba(0,0,0,0.06)', paddingBottom: '12px' }}>
+                        <Typography variant="subtitle1" sx={{ fontWeight: 600, color: '#1a202c', fontSize: '1rem' }}>
+                          {assessment.worker.firstName} {assessment.worker.lastName}
+                        </Typography>
+                        <Typography variant="body2" sx={{ color: '#6b7280', fontSize: '0.875rem' }}>
+                          {assessment.worker.email}
+                        </Typography>
+                        <Typography variant="caption" sx={{ color: '#9ca3af', fontSize: '0.75rem' }}>
+                          Team: {assessment.worker.team}
+                        </Typography>
+                      </Box>
+                      
+                      {/* Assessment Details */}
+                      <Box sx={{ marginBottom: '16px' }}>
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                          <Typography variant="body2" sx={{ fontWeight: 500, color: '#374151' }}>Work Readiness</Typography>
+                          <Chip
+                            label={getReadinessLabel(assessment.readinessLevel)}
+                            sx={{ 
+                              backgroundColor: getReadinessColor(assessment.readinessLevel), 
+                              color: 'white',
+                              fontWeight: 600,
+                              borderRadius: '20px',
+                              fontSize: '0.75rem',
+                              height: '24px'
+                            }}
+                            size="small"
+                          />
+                        </Box>
+                        
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                          <Typography variant="body2" sx={{ fontWeight: 500, color: '#374151' }}>Fatigue Level</Typography>
+                          <Typography variant="body2" sx={{ fontWeight: 600, color: '#1a202c' }}>
+                            Level {assessment.fatigueLevel}/10
+                          </Typography>
+                        </Box>
+                        
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                          <Typography variant="body2" sx={{ fontWeight: 500, color: '#374151' }}>Mood</Typography>
+                          <Typography variant="body2" sx={{ fontWeight: 500, color: '#1a202c', textTransform: 'capitalize' }}>
+                            {assessment.mood}
+                          </Typography>
+                        </Box>
+                        
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                          <Typography variant="body2" sx={{ fontWeight: 500, color: '#374151' }}>Pain/Discomfort</Typography>
+                          {assessment.painDiscomfort === 'yes' ? (
+                            <Chip 
+                              label={`Yes (${assessment.painAreas} areas)`} 
+                              sx={{ 
+                                backgroundColor: '#f59e0b',
+                                color: 'white',
+                                fontWeight: 600,
+                                borderRadius: '20px',
+                                fontSize: '0.75rem',
+                                height: '24px'
+                              }} 
+                              size="small" 
+                            />
+                          ) : (
+                            <Chip 
+                              label="No" 
+                              sx={{ 
+                                backgroundColor: '#2d5a87', 
+                                color: 'white',
+                                fontWeight: 600,
+                                borderRadius: '20px',
+                                fontSize: '0.75rem',
+                                height: '24px'
+                              }} 
+                              size="small" 
+                            />
+                          )}
+                        </Box>
+                        
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <Typography variant="body2" sx={{ fontWeight: 500, color: '#374151' }}>Submitted</Typography>
+                          <Typography variant="body2" sx={{ fontWeight: 500, color: '#6b7280', fontSize: '0.875rem' }}>
+                            {new Date(assessment.submittedAt).toLocaleTimeString()}
+                          </Typography>
+                        </Box>
+                      </Box>
+                      
+                      {/* Actions */}
+                      <Box sx={{ display: 'flex', gap: '12px' }}>
+                        <Button
+                          variant="contained"
+                          fullWidth
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            handleViewDetails(assessment);
+                          }}
+                          sx={{ 
+                            background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)',
+                            color: 'white',
+                            borderRadius: 1.5,
+                            py: 1.5,
+                            fontSize: '0.875rem',
+                            fontWeight: 600,
+                            textTransform: 'none',
+                            minHeight: '44px',
+                            boxShadow: 'none',
+                            '&:hover': {
+                              background: 'linear-gradient(135deg, #4f46e5 0%, #4338ca 100%)',
+                              boxShadow: '0 4px 12px rgba(99, 102, 241, 0.3)'
+                            },
+                            '&:active': {
+                              transform: 'scale(0.98)'
+                            }
+                          }}
+                        >
+                          View Full Details
+                        </Button>
+                      </Box>
+                    </Box>
+                  ))}
+                </Box>
+
+                <TableContainer sx={{ 
+                  borderRadius: 3,
+                  border: '1px solid rgba(45, 90, 135, 0.1)' ,
+                  background: 'rgba(255, 255, 255, 0.9)',
+                  backdropFilter: 'blur(15px)',
+                  '@media (max-width: 768px)': {
+                    display: 'none'
+                  },
+                  '@media (min-width: 769px)': {
+                    display: 'block'
+                  }
+                }}>
+                  <Table sx={{ '& .MuiTableHead-root': { '@media (max-width: 768px)': { display: 'none' } } }}>
+                    <TableHead sx={{ '@media (max-width: 768px)': { display: 'none' } }}>
+                      <TableRow sx={{ background: 'rgba(45, 90, 135, 0.05)' }}>
+                        <TableCell sx={{ fontWeight: 600, color: '#1a202c' }}>Worker</TableCell>
+                        <TableCell sx={{ fontWeight: 600, color: '#1a202c' }}>Readiness Level</TableCell>
+                        <TableCell sx={{ fontWeight: 600, color: '#1a202c' }}>Fatigue Level</TableCell>
+                        <TableCell sx={{ fontWeight: 600, color: '#1a202c', '@media (max-width: 768px)': { display: 'none' } }}>Mood</TableCell>
+                        <TableCell sx={{ fontWeight: 600, color: '#1a202c', '@media (max-width: 768px)': { display: 'none' } }}>Pain/Discomfort</TableCell>
+                        <TableCell sx={{ fontWeight: 600, color: '#1a202c', '@media (max-width: 768px)': { display: 'none' } }}>Time</TableCell>
+                        <TableCell sx={{ fontWeight: 600, color: '#1a202c' }}>Actions</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody sx={{
+                      '@media (max-width: 768px)': {
+                        '& tr': { display: 'block', mb: 2, border: '1px solid rgba(45, 90, 135, 0.1)', borderRadius: '8px', overflow: 'hidden' },
+                        '& td': { display: 'block', border: 'none', py: 1 }
+                      }
+                    }}>
+                      {filteredAssessments.map((assessment) => (
+                        <TableRow key={assessment._id} sx={{ 
+                          '&:hover': { 
+                            background: 'rgba(45, 90, 135, 0.03)' 
+                          } 
+                        }}>
+                          <TableCell sx={{ 
+                            fontWeight: 500, 
+                            color: '#1a202c',
+                            fontSize: { xs: '0.875rem', md: '0.875rem' },
+                            py: { xs: 1, md: 1.5 },
+                            '@media (max-width: 768px)': { 
+                              borderBottom: '1px solid rgba(45, 90, 135, 0.05)', 
+                              fontWeight: 600,
+                              background: 'rgba(45, 90, 135, 0.03)',
+                              px: 2
+                            }
+                          }}>
+                            <Typography variant="body2" sx={{ fontWeight: 500, color: '#1a202c', fontSize: { xs: '0.875rem', md: '0.875rem' } }}>
+                              {assessment.worker.firstName} {assessment.worker.lastName}
+                            </Typography>
+                            <Typography variant="caption" sx={{ color: '#6b7280', fontSize: { xs: '0.75rem' }, '@media (max-width: 768px)': { display: 'block' } }}>
+                              {assessment.worker.team}
+                            </Typography>
+                            <Typography variant="caption" sx={{ color: '#6b7280', fontSize: { xs: '0.75rem' }, '@media (max-width: 768px)': { display: 'block' } }}>
+                              {assessment.worker.email}
+                            </Typography>
+                          </TableCell>
+                          <TableCell sx={{ 
+                            fontWeight: 500, 
+                            color: '#1a202c',
+                            fontSize: { xs: '0.875rem', md: '0.875rem' },
+                            py: { xs: 1, md: 1.5 },
+                            '@media (max-width: 768px)': { px: 2 }
+                          }}>
+                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, alignItems: 'center', width: '100%' }}>
+                              <Chip
+                                label={getReadinessLabel(assessment.readinessLevel)}
+                                sx={{ 
+                                  backgroundColor: getReadinessColor(assessment.readinessLevel), 
+                                  color: 'white',
+                                  fontWeight: 600,
+                                  borderRadius: 2,
+                                  fontSize: { xs: '0.75rem', md: '0.875rem' },
+                                  margin: '0 auto'
+                                }}
+                                size="small"
+                              />
+                              <Typography variant="caption" sx={{ 
+                                color: '#6b7280', 
+                                fontSize: { xs: '0.75rem' }, 
+                                fontWeight: 500,
+                                textAlign: 'center',
+                                width: '100%',
+                                '@media (max-width: 768px)': { display: 'block', mt: 0.5 } 
+                              }}>
+                                Work Readiness
+                              </Typography>
+                            </Box>
+                          </TableCell>
+                          <TableCell sx={{ 
+                            fontWeight: 500, 
+                            color: '#1a202c',
+                            fontSize: { xs: '0.75rem', md: '0.875rem' },
+                            py: { xs: 1, md: 1.5 },
+                            '@media (max-width: 768px)': { px: 2 }
+                          }}>
+                            <Typography variant="body2" sx={{ fontSize: { xs: '0.75rem', md: '0.875rem' }, fontWeight: 600 }}>
+                              Level {assessment.fatigueLevel}/10
+                            </Typography>
+                            <Typography variant="caption" sx={{ color: '#6b7280', fontSize: { xs: '0.75rem' }, '@media (max-width: 768px)': { display: 'block', mt: 0.5 } }}>
+                              Fatigue Level
+                            </Typography>
+                          </TableCell>
+                          <TableCell sx={{ display: { xs: 'none', md: 'table-cell' }, '@media (max-width: 768px)': { display: 'block', px: 2 } }}>
+                            <Box sx={{ '@media (max-width: 768px)': { display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 } }}>
+                              <Typography variant="body2" sx={{ 
+                                textTransform: 'capitalize',
+                                fontWeight: 500,
+                                color: '#1a202c'
+                              }}>
+                                {assessment.mood}
+                              </Typography>
+                              <Typography variant="caption" sx={{ color: '#6b7280', fontSize: { xs: '0.75rem' }, '@media (max-width: 768px)': { display: 'none' } }}>
+                                Mood
+                              </Typography>
+                            </Box>
+                          </TableCell>
+                          <TableCell sx={{ display: { xs: 'none', md: 'table-cell' }, '@media (max-width: 768px)': { display: 'block', px: 2 } }}>
+                            <Box sx={{ 
+                              display: 'flex', 
+                              flexDirection: 'column', 
+                              gap: 1, 
+                              alignItems: 'center',
+                              width: '100%',
+                              '@media (max-width: 768px)': { mt: 0.5 } 
+                            }}>
+                              {assessment.painDiscomfort === 'yes' ? (
+                                <Chip 
+                                  label={`Yes (${assessment.painAreas} areas)`} 
+                                  sx={{ 
+                                    backgroundColor: '#f59e0b',
+                                    color: 'white',
+                                    fontWeight: 600,
+                                    borderRadius: 2,
+                                    fontSize: { xs: '0.75rem', md: '0.875rem' },
+                                    margin: '0 auto'
+                                  }} 
+                                  size="small" 
+                                />
+                              ) : (
+                                <Chip 
+                                  label="No" 
+                                  sx={{ 
+                                    backgroundColor: '#2d5a87', 
+                                    color: 'white',
+                                    fontWeight: 600,
+                                    borderRadius: 2,
+                                    fontSize: { xs: '0.75rem', md: '0.875rem' },
+                                    margin: '0 auto'
+                                  }} 
+                                  size="small" 
+                                />
+                              )}
+                              <Typography variant="caption" sx={{ 
+                                color: '#6b7280', 
+                                fontSize: { xs: '0.75rem' }, 
+                                fontWeight: 500,
+                                textAlign: 'center',
+                                width: '100%',
+                                '@media (max-width: 768px)': { display: 'none' } 
+                              }}>
+                                Pain/Discomfort
+                              </Typography>
+                            </Box>
+                          </TableCell>
+                          <TableCell sx={{ 
+                            color: '#6b7280',
+                            fontSize: { xs: '0.75rem', md: '0.875rem' },
+                            py: { xs: 1, md: 1.5 },
+                            display: { xs: 'none', sm: 'table-cell' },
+                            whiteSpace: 'nowrap',
+                            '@media (max-width: 768px)': { display: 'block', px: 2 }
+                          }}>
+                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, alignItems: 'center', textAlign: 'center' }}>
+                              <Typography variant="body2" sx={{ 
+                                fontSize: { xs: '0.75rem', md: '0.875rem' },
+                                fontWeight: 500,
+                                color: '#374151'
+                              }}>
+                              {new Date(assessment.submittedAt).toLocaleTimeString()}
+                            </Typography>
+                            <Typography variant="caption" sx={{ 
+                              color: '#6b7280', 
+                              fontSize: { xs: '0.625rem', md: '0.75rem' },
+                              fontWeight: 500
+                            }}>
+                              Submitted
+                            </Typography>
+                            </Box>
+                          </TableCell>
+                          <TableCell sx={{ '@media (max-width: 768px)': { px: 2 } }}>
+                            <Box sx={{ 
+                              display: 'flex', 
+                              gap: { xs: '0.25rem', md: '0.5rem' }, 
+                              flexDirection: { xs: 'column', sm: 'row' },
+                              alignItems: { xs: 'flex-start', sm: 'center' }
+                            }}>
+                              <Button
+                                variant="contained"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  console.log('View Details clicked for assessment:', assessment);
+                                  handleViewDetails(assessment);
+                                }}
+                                sx={{ 
+                                  background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)',
+                                  color: 'white',
+                                  borderRadius: 1.5,
+                                  py: 1,
+                                  px: 2,
+                                  fontSize: '0.875rem',
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                  transition: 'all 0.2s ease',
+                                  minWidth: '100px',
+                                  minHeight: '36px',
+                                  textTransform: 'none',
+                                  boxShadow: 'none',
+                                  '&:hover': {
+                                    background: 'linear-gradient(135deg, #4f46e5 0%, #4338ca 100%)',
+                                    transform: 'translateY(-1px)',
+                                    boxShadow: '0 4px 12px rgba(99, 102, 241, 0.3)'
+                                  },
+                                  '&:active': {
+                                    transform: 'scale(0.98)'
+                                  }
+                                }}
+                              >
+                                View Details
+                              </Button>
+                            </Box>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              </>
+            )}
+          </CardContent>
+        </Card>
+        </Box>
+
         {/* Enhanced Non-Compliant Workers */}
         <Box className="stagger-animation">
         {data.nonCompliantWorkers.length > 0 && (
@@ -1042,7 +1654,8 @@ const WorkReadinessDashboard: React.FC = React.memo(() => {
                   fontWeight: 700,
                   display: 'flex',
                   alignItems: 'center',
-                  gap: 1
+                  gap: 1,
+                  fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
                 }}>
                   Non-Compliant Team Members
                   <Chip 
@@ -1205,7 +1818,8 @@ const WorkReadinessDashboard: React.FC = React.memo(() => {
                   color: '#374151',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: 1
+                  gap: 1,
+                  fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
                 }}>
                   Today's Assessments
                   <Chip 
@@ -1535,158 +2149,9 @@ const WorkReadinessDashboard: React.FC = React.memo(() => {
             )}
           </CardContent>
         </Card>
-        </Box>
+      </Box>
 
-        {/* Enhanced Fatigue Analysis */}
-        <Box className="stagger-animation">
-        <Card sx={{ 
-          background: 'rgba(255, 255, 255, 0.9)',
-          backdropFilter: 'blur(10px)',
-          borderRadius: 4,
-          border: '1px solid rgba(34, 197, 94, 0.1)',
-          boxShadow: '0 8px 32px 0 rgba(34, 197, 94, 0.1)',
-          position: 'relative',
-          zIndex: 1,
-          mb: 3
-        }}>
-          <CardContent sx={{ p: 3 }}>
-            <Box sx={{ mb: 3 }}>
-              <Typography variant="h6" sx={{ 
-                fontWeight: 700, 
-                color: '#374151',
-                mb: 2,
-                fontSize: { xs: '1.1rem', md: '1.25rem' },
-                letterSpacing: '-0.025em',
-                borderBottom: '2px solid rgba(45, 90, 135, 0.1)',
-                paddingBottom: 1
-              }}>
-                Fatigue Analysis
-              </Typography>
-              <Typography variant="body2" sx={{ 
-                color: '#6b7280',
-                mb: 3
-              }}>
-                Analyzing fatigue distribution across your team
-              </Typography>
-              <Box display="flex" gap={2}>
-                <Chip
-                  label={`Total: ${data.fatigueStats.low + data.fatigueStats.high}`}
-                  sx={{ 
-                    backgroundColor: '#f3f4f6',
-                    color: '#374151',
-                    fontWeight: 600
-                  }}
-                  size="small"
-                />
-                <Chip
-                  label={`Low Fatigue: ${data.fatigueStats.low}`}
-                  sx={{ 
-                    backgroundColor: '#22c55e',
-                    color: 'white',
-                    fontWeight: 600
-                  }}
-                  size="small"
-                />
-                <Chip
-                  label={`High Fatigue: ${data.fatigueStats.high}`}
-                  sx={{ 
-                    backgroundColor: '#ef4444',
-                    color: 'white',
-                    fontWeight: 600
-                  }}
-                  size="small"
-                />
-              </Box>
-            </Box>
-
-            {data.compliance.totalTeamMembers === 0 ? (
-              <Box sx={{ textAlign: 'center', py: 4 }}>
-                <Typography variant="body2" sx={{ color: '#6b7280' }}>
-                  No fatigue data available yet. Data will appear once team members submit assessments.
-                </Typography>
-              </Box>
-            ) : (
-              <Grid container spacing={3}>
-                {/* Low Fatigue Range (0-5) */}
-                <Grid item xs={12} md={6}>
-                  <Box>
-                    <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 600, color: '#1a202c' }}>
-                      Low Fatigue Range (0-5)
-                    </Typography>
-                    <Box sx={{ mb: 1 }}>
-                      <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mb: 0.5 }}>
-                        <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                          Workers with low fatigue
-                        </Typography>
-                        <Typography variant="body2" sx={{ fontWeight: 600, color: '#22c55e' }}>
-                          {data.fatigueStats.low}
-                        </Typography>
-                      </Box>
-                      <LinearProgress
-                        variant="determinate"
-                        value={data.fatigueStats.low + data.fatigueStats.high > 0 ? (data.fatigueStats.low / (data.fatigueStats.low + data.fatigueStats.high)) * 100 : 0}
-                        sx={{
-                          height: 12,
-                          borderRadius: 1,
-                          backgroundColor: '#f3f4f6',
-                          '& .MuiLinearProgress-bar': {
-                            backgroundColor: '#22c55e',
-                            borderRadius: 1
-                          }
-                        }}
-                      />
-                    </Box>
-                    <Typography variant="caption" sx={{ color: '#6b7280' }}>
-                      {data.fatigueStats.low + data.fatigueStats.high > 0 ? 
-                        `${Math.round((data.fatigueStats.low / (data.fatigueStats.low + data.fatigueStats.high)) * 100)}% of submitted assessments` : 
-                        'No data available'}
-                    </Typography>
-                  </Box>
-                </Grid>
-
-                {/* High Fatigue Range (6-10) */}
-                <Grid item xs={12} md={6}>
-                  <Box>
-                    <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 600, color: '#1a202c' }}>
-                      High Fatigue Range (6-10)
-                    </Typography>
-                    <Box sx={{ mb: 1 }}>
-                      <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mb: 0.5 }}>
-                        <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                          Workers with high fatigue
-                        </Typography>
-                        <Typography variant="body2" sx={{ fontWeight: 600, color: '#ef4444' }}>
-                          {data.fatigueStats.high}
-                        </Typography>
-                      </Box>
-                      <LinearProgress
-                        variant="determinate"
-                        value={data.fatigueStats.low + data.fatigueStats.high > 0 ? (data.fatigueStats.high / (data.fatigueStats.low + data.fatigueStats.high)) * 100 : 0}
-                        sx={{
-                          height: 12,
-                          borderRadius: 1,
-                          backgroundColor: '#f3f4f6',
-                          '& .MuiLinearProgress-bar': {
-                            backgroundColor: '#ef4444',
-                            borderRadius: 1
-                          }
-                        }}
-                      />
-                    </Box>
-                    <Typography variant="caption" sx={{ color: '#6b7280' }}>
-                      {data.fatigueStats.low + data.fatigueStats.high > 0 ? 
-                        `${Math.round((data.fatigueStats.high / (data.fatigueStats.low + data.fatigueStats.high)) * 100)}% of submitted assessments` : 
-                        'No data available'}
-                    </Typography>
-                  </Box>
-                </Grid>
-              </Grid>
-            )}
-          </CardContent>
-        </Card>
-        </Box>
-
-        {/* Follow Up Dialog */}
+      {/* Follow Up Dialog */}
         <Dialog open={followUp.open} onClose={() => setFollowUp(prev => ({ ...prev, open: false }))} maxWidth="md" fullWidth>
           <DialogTitle>Follow Up with Worker</DialogTitle>
           <DialogContent>
@@ -1747,7 +2212,9 @@ const WorkReadinessDashboard: React.FC = React.memo(() => {
               <Box>
                 {/* Worker Information */}
                 <Box mb={3}>
-                  <Typography variant="h6" gutterBottom>Worker Information</Typography>
+                  <Typography variant="h6" gutterBottom sx={{ 
+                    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
+                  }}>Worker Information</Typography>
                   <Box sx={{ p: 2, bgcolor: 'grey.50', borderRadius: 1 }}>
                     <Typography><strong>Name:</strong> {viewDetails.assessment.worker.firstName} {viewDetails.assessment.worker.lastName}</Typography>
                     <Typography><strong>Email:</strong> {viewDetails.assessment.worker.email}</Typography>
@@ -1757,7 +2224,9 @@ const WorkReadinessDashboard: React.FC = React.memo(() => {
 
                 {/* Assessment Details */}
                 <Box mb={3}>
-                  <Typography variant="h6" gutterBottom>Assessment Details</Typography>
+                  <Typography variant="h6" gutterBottom sx={{ 
+                    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
+                  }}>Assessment Details</Typography>
                   <Grid container spacing={2}>
                     <Grid item xs={12} sm={6}>
                       <Box sx={{ p: 2, bgcolor: 'grey.50', borderRadius: 1 }}>
@@ -1771,7 +2240,10 @@ const WorkReadinessDashboard: React.FC = React.memo(() => {
                     <Grid item xs={12} sm={6}>
                       <Box sx={{ p: 2, bgcolor: 'grey.50', borderRadius: 1 }}>
                         <Typography variant="subtitle2" color="text.secondary">Fatigue Level</Typography>
-                        <Typography variant="h6" sx={{ mt: 1 }}>Level {viewDetails.assessment.fatigueLevel}/10</Typography>
+                        <Typography variant="h6" sx={{ 
+                          mt: 1,
+                          fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
+                        }}>Level {viewDetails.assessment.fatigueLevel}/10</Typography>
                       </Box>
                     </Grid>
                     <Grid item xs={12} sm={6}>
@@ -1812,7 +2284,9 @@ const WorkReadinessDashboard: React.FC = React.memo(() => {
                 {/* Notes */}
                 {viewDetails.assessment.notes && (
                   <Box mb={3}>
-                    <Typography variant="h6" gutterBottom>Notes</Typography>
+                    <Typography variant="h6" gutterBottom sx={{ 
+                      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
+                    }}>Notes</Typography>
                     <Box sx={{ p: 2, bgcolor: 'grey.50', borderRadius: 1 }}>
                       <Typography>{viewDetails.assessment.notes}</Typography>
                     </Box>
@@ -1821,7 +2295,9 @@ const WorkReadinessDashboard: React.FC = React.memo(() => {
 
                 {/* Submission Info */}
                 <Box>
-                  <Typography variant="h6" gutterBottom>Submission Information</Typography>
+                  <Typography variant="h6" gutterBottom sx={{ 
+                    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
+                  }}>Submission Information</Typography>
                   <Box sx={{ p: 2, bgcolor: 'grey.50', borderRadius: 1 }}>
                     <Typography><strong>Submitted:</strong> {new Date(viewDetails.assessment.submittedAt).toLocaleString()}</Typography>
                     <Typography><strong>Assessment ID:</strong> {viewDetails.assessment._id}</Typography>

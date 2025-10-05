@@ -13,7 +13,7 @@ import {
   Visibility,
   VisibilityOff,
 } from '@mui/icons-material';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuth } from '../contexts/AuthContext.supabase';
 import { useNavigate } from 'react-router-dom';
 import PhotoUpload from '../components/PhotoUpload';
 import ErrorPopup from '../components/ErrorPopup';

@@ -1,7 +1,6 @@
-const WorkReadiness = require('../models/WorkReadiness');
-const User = require('../models/User');
-const Notification = require('../models/Notification');
+const { db, supabase } = require('../config/supabase');
 const { validationResult } = require('express-validator');
+const { invalidateCache } = require('../middleware/cache');
 
 // Submit Work Readiness Assessment
 const submitWorkReadiness = async (req, res) => {
@@ -15,91 +14,107 @@ const submitWorkReadiness = async (req, res) => {
     }
 
     const { fatigueLevel, painDiscomfort, painAreas, readinessLevel, mood, notes } = req.body;
-    const workerId = req.user._id;
+    const workerId = req.user.id; // Use Supabase user ID
 
     // Check if worker has already submitted today's assessment
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
+    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
 
-    const existingAssessment = await WorkReadiness.findOne({
-      worker: workerId,
-      submittedAt: {
-        $gte: today,
-        $lt: tomorrow
-      }
+    const { data: existingAssessment } = await db.work_readiness.findMany({
+      worker_id: workerId,
+      submitted_at: today
     });
 
-    if (existingAssessment) {
+    if (existingAssessment && existingAssessment.length > 0) {
       return res.status(400).json({
         message: 'You have already submitted your work readiness assessment for today',
         alreadySubmitted: true,
-        submittedAt: existingAssessment.submittedAt
+        submittedAt: existingAssessment[0].submitted_at
       });
     }
 
-    // Get worker details
-    const worker = await User.findById(workerId).select('firstName lastName email team teamLeader');
-    if (!worker) {
+    // Get worker details from Supabase
+    const { data: worker, error: workerError } = await db.users.findMany({
+      id: workerId
+    });
+
+    if (workerError || !worker || worker.length === 0) {
       return res.status(404).json({ message: 'Worker not found' });
     }
 
-    // Create work readiness record
+    const workerData = worker[0];
+
+    // Create work readiness record in Supabase
     const workReadinessData = {
-      worker: workerId,
-      teamLeader: worker.teamLeader,
-      team: worker.team,
-      fatigueLevel: parseInt(fatigueLevel),
-      painDiscomfort,
-      painAreas: painAreas || [],
-      readinessLevel,
-      mood,
+      worker_id: workerId,
+      team_leader_id: workerData.team_leader_id,
+      team: workerData.team,
+      fatigue_level: parseInt(fatigueLevel),
+      pain_discomfort: painDiscomfort,
+      pain_areas: painAreas || [],
+      readiness_level: readinessLevel,
+      mood: mood,
       notes: notes || '',
-      submittedAt: new Date(),
+      submitted_at: new Date().toISOString(),
       status: 'submitted'
     };
 
-    const workReadiness = new WorkReadiness(workReadinessData);
-    await workReadiness.save();
+    const { data: workReadiness, error: createError } = await db.work_readiness.create(workReadinessData);
+    
+    if (createError) {
+      console.error('❌ Failed to create work readiness assessment:', createError);
+      return res.status(500).json({ message: 'Error submitting assessment', error: createError.message });
+    }
 
-    // Send notification to team leader
-    if (worker.teamLeader) {
+    console.log('✅ Work readiness assessment saved to Supabase:', workReadiness.id);
+
+    // Invalidate team leader dashboard cache to reflect new submission immediately
+    if (workerData.team_leader_id) {
       try {
-        await Notification.create({
-          recipient: worker.teamLeader,
-          sender: workerId,
+        invalidateCache(`team-leader-dashboard-${workerData.team_leader_id}`);
+        console.log(`Cache invalidated for team leader: ${workerData.team_leader_id}`);
+      } catch (cacheError) {
+        console.log('Cache invalidation failed, but assessment was saved:', cacheError);
+      }
+    }
+
+    // Send notification to team leader (using Supabase notifications)
+    if (workerData.team_leader_id) {
+      try {
+        await db.notifications.create({
+          recipient_id: workerData.team_leader_id,
+          sender_id: workerId,
           type: 'work_readiness_submitted',
           title: 'Work Readiness Assessment Submitted',
-          message: `${worker.firstName} ${worker.lastName} has submitted their work readiness assessment.`,
+          message: `${workerData.first_name} ${workerData.last_name} has submitted their work readiness assessment.`,
           priority: 'medium',
-          actionUrl: '/team-leader',
+          action_url: '/team-leader',
           metadata: {
-            workerId: workerId,
-            workerName: `${worker.firstName} ${worker.lastName}`,
-            team: worker.team,
-            assessmentId: workReadiness._id,
-            readinessLevel,
-            fatigueLevel,
-            mood
+            worker_id: workerId,
+            worker_name: `${workerData.first_name} ${workerData.last_name}`,
+            team: workerData.team,
+            assessment_id: workReadiness.id,
+            readiness_level: readinessLevel,
+            fatigue_level: fatigueLevel,
+            mood: mood
           }
         });
+        console.log('✅ Notification sent to team leader');
       } catch (notificationError) {
-        console.log('Notification creation failed, but assessment was saved');
+        console.log('Notification creation failed, but assessment was saved:', notificationError);
       }
     }
 
     res.status(201).json({
       message: 'Work readiness assessment submitted successfully',
       assessment: {
-        id: workReadiness._id,
-        fatigueLevel: workReadiness.fatigueLevel,
-        painDiscomfort: workReadiness.painDiscomfort,
-        painAreas: workReadiness.painAreas,
-        readinessLevel: workReadiness.readinessLevel,
+        id: workReadiness.id,
+        fatigueLevel: workReadiness.fatigue_level,
+        painDiscomfort: workReadiness.pain_discomfort,
+        painAreas: workReadiness.pain_areas,
+        readinessLevel: workReadiness.readiness_level,
         mood: workReadiness.mood,
         notes: workReadiness.notes,
-        submittedAt: workReadiness.submittedAt
+        submittedAt: workReadiness.submitted_at
       }
     });
 
@@ -112,48 +127,106 @@ const submitWorkReadiness = async (req, res) => {
 // Get Work Readiness Assessments for Team Leader
 const getTeamWorkReadiness = async (req, res) => {
   try {
-    const teamLeaderId = req.user._id;
+    const teamLeaderId = req.user.id; // Use Supabase user ID
+    
+    console.log('🔍 getTeamWorkReadiness called with teamLeaderId:', teamLeaderId);
+    console.log('🔍 User object:', req.user);
     
     // Extract date range parameters
     const { startDate, endDate } = req.query;
     
-    // Get team members
-    const teamMembers = await User.find({ 
-      teamLeader: teamLeaderId,
-      role: 'worker',
-      isActive: true 
-    }).select('_id firstName lastName email team');
+    // Get team members from Supabase - try multiple approaches
+    let teamMembers = [];
+    let teamMemberIds = [];
 
-    const teamMemberIds = teamMembers.map(member => member._id);
+    // First, try to get team members by team_leader_id
+    const { data: teamMembersByLeader, error: teamMembersError } = await supabase
+      .from('users')
+      .select('*')
+      .eq('team_leader_id', teamLeaderId)
+      .eq('role', 'worker')
+      .eq('is_active', true);
 
-    // Determine date range for assessments
-    let dateFilter = {};
-    if (startDate && endDate) {
-      const start = new Date(startDate);
-      const end = new Date(endDate);
-      end.setHours(23, 59, 59, 999); // Include the entire end date
-      dateFilter = {
-        submittedAt: {
-          $gte: start,
-          $lte: end
-        }
-      };
+    if (teamMembersError) {
+      console.error('Error fetching team members by leader:', teamMembersError);
+    } else if (teamMembersByLeader && teamMembersByLeader.length > 0) {
+      teamMembers = teamMembersByLeader;
+      teamMemberIds = teamMembers.map(member => member.id);
     } else {
-      // Default to today if no date range provided
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const tomorrow = new Date(today);
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      dateFilter = {
-        submittedAt: { $gte: today, $lt: tomorrow }
-      };
+      // If no team members found by team_leader_id, try to get by team
+      const { data: currentUser, error: userError } = await supabase
+        .from('users')
+        .select('team')
+        .eq('id', teamLeaderId)
+        .single();
+
+      if (!userError && currentUser?.team) {
+        const { data: teamMembersByTeam, error: teamError } = await supabase
+          .from('users')
+          .select('*')
+          .eq('team', currentUser.team)
+          .eq('role', 'worker')
+          .eq('is_active', true);
+
+        if (!teamError && teamMembersByTeam) {
+          teamMembers = teamMembersByTeam;
+          teamMemberIds = teamMembers.map(member => member.id);
+        }
+      }
     }
 
-    const assessments = await WorkReadiness.find({
-      worker: { $in: teamMemberIds },
-      ...dateFilter
-    }).populate('worker', 'firstName lastName email team')
-      .sort({ submittedAt: -1 });
+    console.log('🔍 Team members found:', teamMembers.length);
+    console.log('🔍 Team member IDs:', teamMemberIds);
+    console.log('🔍 Team members data:', teamMembers);
+
+    // Determine date range for assessments
+    let query = supabase
+      .from('work_readiness')
+      .select(`
+        *,
+        worker:users!work_readiness_worker_id_fkey(*)
+      `);
+
+    // If we have team member IDs, filter by them, otherwise get all work readiness data for this team leader
+    if (teamMemberIds.length > 0) {
+      query = query.in('worker_id', teamMemberIds);
+    } else {
+      // Fallback: get work readiness data where team_leader_id matches
+      query = query.eq('team_leader_id', teamLeaderId);
+    }
+
+    if (startDate && endDate) {
+      query = query
+        .gte('submitted_at', startDate)
+        .lte('submitted_at', endDate);
+    } else {
+      // Default to today if no date range provided
+      const today = new Date().toISOString().split('T')[0];
+      query = query
+        .gte('submitted_at', `${today}T00:00:00.000Z`)
+        .lte('submitted_at', `${today}T23:59:59.999Z`);
+    }
+
+    // Get assessments from Supabase
+    const { data: assessments, error: assessmentsError } = await query
+      .order('submitted_at', { ascending: false });
+
+    if (assessmentsError) {
+      console.error('Error fetching assessments:', assessmentsError);
+      return res.status(500).json({ message: 'Error fetching assessments', error: assessmentsError.message });
+    }
+
+    console.log('🔍 Assessments found:', assessments?.length || 0);
+    console.log('🔍 Assessment data:', assessments);
+    
+    // Also check if there are any work readiness records at all
+    const { data: allWorkReadiness, error: allError } = await supabase
+      .from('work_readiness')
+      .select('*')
+      .limit(5);
+    
+    console.log('🔍 All work readiness records (first 5):', allWorkReadiness);
+    console.log('🔍 All work readiness error:', allError);
 
     // Calculate compliance
     const totalTeamMembers = teamMembers.length;
@@ -161,26 +234,54 @@ const getTeamWorkReadiness = async (req, res) => {
     const complianceRate = totalTeamMembers > 0 ? Math.round((submittedAssessments / totalTeamMembers) * 100) : 0;
 
     // Get non-compliant workers
-    const submittedWorkerIds = assessments.map(assessment => assessment.worker._id.toString());
+    const submittedWorkerIds = assessments.map(assessment => assessment.worker_id);
     const nonCompliantWorkers = teamMembers.filter(member => 
-      !submittedWorkerIds.includes(member._id.toString())
+      !submittedWorkerIds.includes(member.id)
     );
 
     // Group assessments by readiness level
     const readinessStats = {
-      fit: assessments.filter(a => a.readinessLevel === 'fit').length,
-      minor: assessments.filter(a => a.readinessLevel === 'minor').length,
-      not_fit: assessments.filter(a => a.readinessLevel === 'not_fit').length
+      fit: assessments.filter(a => a.readiness_level === 'fit').length,
+      minor: assessments.filter(a => a.readiness_level === 'minor').length,
+      not_fit: assessments.filter(a => a.readiness_level === 'not_fit').length
     };
 
     // Group assessments by fatigue level
     const fatigueStats = {
-      1: assessments.filter(a => a.fatigueLevel === 1).length,
-      2: assessments.filter(a => a.fatigueLevel === 2).length,
-      3: assessments.filter(a => a.fatigueLevel === 3).length,
-      4: assessments.filter(a => a.fatigueLevel === 4).length,
-      5: assessments.filter(a => a.fatigueLevel === 5).length
+      1: assessments.filter(a => a.fatigue_level === 1).length,
+      2: assessments.filter(a => a.fatigue_level === 2).length,
+      3: assessments.filter(a => a.fatigue_level === 3).length,
+      4: assessments.filter(a => a.fatigue_level === 4).length,
+      5: assessments.filter(a => a.fatigue_level === 5).length
     };
+
+    // Format assessments to match expected structure
+    const formattedAssessments = assessments.map(assessment => ({
+      _id: assessment.id,
+      worker: {
+        _id: assessment.worker_id,
+        firstName: assessment.worker?.first_name || '',
+        lastName: assessment.worker?.last_name || '',
+        email: assessment.worker?.email || '',
+        team: assessment.team || assessment.worker?.team || ''
+      },
+      fatigueLevel: assessment.fatigue_level,
+      painDiscomfort: assessment.pain_discomfort,
+      painAreas: assessment.pain_areas || [],
+      readinessLevel: assessment.readiness_level,
+      mood: assessment.mood,
+      notes: assessment.notes || '',
+      submittedAt: assessment.submitted_at
+    }));
+
+    // Format non-compliant workers
+    const formattedNonCompliantWorkers = nonCompliantWorkers.map(worker => ({
+      _id: worker.id,
+      firstName: worker.first_name,
+      lastName: worker.last_name,
+      email: worker.email,
+      team: worker.team
+    }));
 
     res.json({
       message: 'Team work readiness data retrieved successfully',
@@ -191,11 +292,17 @@ const getTeamWorkReadiness = async (req, res) => {
           complianceRate,
           nonCompliantCount: nonCompliantWorkers.length
         },
-        assessments,
-        nonCompliantWorkers,
+        assessments: formattedAssessments,
+        nonCompliantWorkers: formattedNonCompliantWorkers,
         readinessStats,
         fatigueStats,
-        teamMembers
+        teamMembers: teamMembers.map(member => ({
+          _id: member.id,
+          firstName: member.first_name,
+          lastName: member.last_name,
+          email: member.email,
+          team: member.team
+        }))
       }
     });
 

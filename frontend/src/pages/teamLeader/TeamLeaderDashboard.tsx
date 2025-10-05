@@ -1,11 +1,27 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { useAuth } from '../../contexts/AuthContext';
-import api from '../../utils/api';
+import { useAuth } from '../../contexts/AuthContext.supabase';
+import { useTeamLeaderAnalytics, useWorkReadinessTrend } from '../../hooks/useWorkReadiness';
+import { useWorkReadinessRealtime, useTeamRealtime } from '../../hooks/useRealtime';
+import { SupabaseAPI } from '../../utils/supabaseApi';
+import { useQueryClient } from '@tanstack/react-query';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import Toast from '../../components/Toast';
 import LayoutWithSidebar from '../../components/LayoutWithSidebar';
-import { createImageProps } from '../../utils/imageUtils';
+import { getProfileImageProps } from '../../utils/imageUtils';
+import { dataClient } from '../../lib/supabase';
 import { Line } from 'react-chartjs-2';
+import { Box, Typography, Button, Card, CardContent, Grid, Fade } from '@mui/material';
+import { 
+  People, 
+  TrendingUp, 
+  Assignment, 
+  CheckCircle 
+} from '@mui/icons-material';
+import StatCard from '../../components/StatCard';
+import TrendChart from '../../components/TrendChart';
+import RecentActivityItem from '../../components/RecentActivityItem';
+import TeamKPIDashboard from '../../components/TeamKPIDashboard';
+import MonthlyPerformanceSection from '../../components/MonthlyPerformanceSection';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -53,6 +69,10 @@ interface DashboardData {
     activeCases: number;
     monthlyIncidents: number;
     incidentTrend: string;
+    highFatigueCount?: number;
+    notFitForWorkCount?: number;
+    painReportedCount?: number;
+    poorMoodCount?: number;
   };
   complianceMetrics: {
     todayCheckIns: number;
@@ -61,15 +81,23 @@ interface DashboardData {
     weeklyCompletionRate: number;
   };
   teamPerformance: Array<{
-    workerName: string;
-    totalCheckIns: number;
-    avgPainLevel: number;
-    avgFunctionalStatus: number;
-  }>;
-  recentActivity: Array<{
-    description: string;
-    timestamp: string;
-    type: string;
+    memberName: string;
+    email: string;
+    role: string;
+    team: string;
+    lastLogin: string;
+    loginTime?: string;
+    isActive: boolean;
+    workReadinessStatus: string;
+    activityLevel: number;
+    loggedInToday: boolean;
+    recentCheckIns: number;
+    recentAssessments: number;
+    completedAssessments: number;
+    lastAssessment: string;
+    fatigueLevel?: number;
+    readinessLevel?: string;
+    mood?: string;
   }>;
   activeCases: Array<{
     caseNumber: string;
@@ -90,6 +118,8 @@ interface ReadinessTrendData {
   date: string;
   notFitForWork: number;
   minorConcernsFitForWork: number;
+  fitForWork: number;
+  total: number;
 }
 
 interface AnalyticsData {
@@ -104,12 +134,73 @@ interface TeamData {
   managedTeams: string[];
 }
 
+interface Notification {
+  id: string;
+  recipient_id: string;
+  sender_id: string;
+  type: string;
+  title: string;
+  message: string;
+  is_read: boolean;
+  created_at: string;
+  priority?: string;
+}
+
+// Modern SaaS Color Palette - High-end design system
+const COLORS = {
+  primary: {
+    main: '#6366f1', // Indigo
+    light: '#818cf8',
+    dark: '#4f46e5',
+    bg: 'rgba(99, 102, 241, 0.08)',
+  },
+  success: {
+    main: '#10b981', // Emerald
+    light: '#34d399',
+    dark: '#059669',
+    bg: 'rgba(16, 185, 129, 0.08)',
+  },
+  warning: {
+    main: '#f59e0b', // Amber
+    light: '#fbbf24',
+    dark: '#d97706',
+    bg: 'rgba(245, 158, 11, 0.08)',
+  },
+  error: {
+    main: '#ef4444', // Red
+    light: '#f87171',
+    dark: '#dc2626',
+    bg: 'rgba(239, 68, 68, 0.08)',
+  },
+  purple: {
+    main: '#8b5cf6', // Violet
+    light: '#a78bfa',
+    dark: '#7c3aed',
+    bg: 'rgba(139, 92, 246, 0.08)',
+  },
+  neutral: {
+    white: '#ffffff',
+    50: '#fafafa',
+    100: '#f5f5f5',
+    200: '#e5e5e5',
+    300: '#d4d4d4',
+    400: '#a3a3a3',
+    500: '#737373',
+    600: '#525252',
+    700: '#404040',
+    800: '#262626',
+    900: '#171717',
+  },
+  gradient: {
+    primary: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+    success: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+    header: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
+  }
+};
+
 const TeamLeaderDashboard: React.FC = () => {
   const { user } = useAuth();
-  const [loading, setLoading] = useState(true);
-  const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
-  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
-  const [teamData, setTeamData] = useState<TeamData | null>(null);
+  const queryClient = useQueryClient();
   const [showCreateUser, setShowCreateUser] = useState(false);
   const [showCreateTeam, setShowCreateTeam] = useState(false);
   const [createUserLoading, setCreateUserLoading] = useState(false);
@@ -117,17 +208,314 @@ const TeamLeaderDashboard: React.FC = () => {
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [createdUser, setCreatedUser] = useState<any>(null);
-  const [lastFetchTime, setLastFetchTime] = useState<number>(0);
   
-  // Pagination state for Recent Activity
-  const [recentActivityPage, setRecentActivityPage] = useState(1);
-  const [recentActivityPageSize] = useState(5); // Show 5 items per page
 
   // Pagination state for Team Members
   const [teamMembersPage, setTeamMembersPage] = useState(1);
   const [teamMembersPageSize, setTeamMembersPageSize] = useState(10); // Show 10 items per page
-  const [teamMembersTotal, setTeamMembersTotal] = useState(0);
-  const [teamMembersLoading, setTeamMembersLoading] = useState(false);
+
+  // Pagination state for Active Cases
+  const [activeCasesPage, setActiveCasesPage] = useState(1);
+  const [activeCasesPageSize, setActiveCasesPageSize] = useState(5); // Show 5 items per page
+
+  // Pagination state for Notifications
+  const [notificationsPage, setNotificationsPage] = useState(1);
+  const [notificationsPageSize, setNotificationsPageSize] = useState(10); // Show 10 items per page
+
+  // Date range states for charts
+  const [readinessDateRange, setReadinessDateRange] = useState<'week' | 'month' | 'year' | 'custom'>('week');
+  const [readinessStartDate, setReadinessStartDate] = useState<Date>(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
+  const [readinessEndDate, setReadinessEndDate] = useState<Date>(new Date());
+
+  // Notifications state
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
+
+  // Active Cases state (Not Fit workers)
+  const [activeCases, setActiveCases] = useState<any[]>([]);
+  const [activeCasesLoading, setActiveCasesLoading] = useState(false);
+
+  // View Details state for Active Cases
+  const [viewDetails, setViewDetails] = useState({
+    open: false,
+    case: null as any,
+  });
+
+  // Search and filter states
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterStatus, setFilterStatus] = useState('all');
+
+  // React Query hooks
+  const { 
+    data: analyticsData, 
+    isLoading: analyticsLoading, 
+    error: analyticsError 
+  } = useTeamLeaderAnalytics(user?.id || '');
+
+  const { 
+    data: trendData, 
+    isLoading: trendLoading, 
+    error: trendError 
+  } = useWorkReadinessTrend(user?.id || '', readinessDateRange, readinessStartDate, readinessEndDate);
+
+  // Debug logging
+  console.log('🔍 TeamLeaderDashboard: user?.id:', user?.id);
+
+  // Handle View Details for Active Cases
+  const handleViewDetails = async (case_: any) => {
+    console.log('handleViewDetails called with case:', case_);
+    
+    // Get team leader information if available
+    let teamLeaderInfo = null;
+    if (case_.team_leader_id) {
+      try {
+        const { data: teamLeader, error } = await dataClient
+          .from('users')
+          .select('first_name, last_name, email')
+          .eq('id', case_.team_leader_id)
+          .single();
+        
+        if (!error && teamLeader) {
+          teamLeaderInfo = teamLeader;
+        }
+      } catch (error) {
+        console.error('Error fetching team leader info:', error);
+      }
+    }
+    
+    setViewDetails({
+      open: true,
+      case: { ...case_, teamLeaderInfo },
+    });
+  };
+
+  // Handle Print Case Details
+  const handlePrintCase = () => {
+    if (!viewDetails.case) return;
+    
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) return;
+
+    const case_ = viewDetails.case;
+    const printContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Case Details - ${case_.worker?.first_name} ${case_.worker?.last_name}</title>
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            color: #333;
+          }
+          .header {
+            text-align: center;
+            border-bottom: 2px solid #dc2626;
+            padding-bottom: 20px;
+            margin-bottom: 30px;
+          }
+          .header h1 {
+            color: #dc2626;
+            margin: 0;
+            font-size: 24px;
+          }
+          .header p {
+            color: #666;
+            margin: 5px 0 0 0;
+            font-size: 14px;
+          }
+          .section {
+            margin-bottom: 25px;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            overflow: hidden;
+          }
+          .section-header {
+            background-color: #f9fafb;
+            padding: 12px 16px;
+            border-bottom: 1px solid #e5e7eb;
+            font-weight: 600;
+            color: #374151;
+          }
+          .section-content {
+            padding: 16px;
+            background-color: white;
+          }
+          .assessment-details {
+            background-color: #fef2f2;
+            border-color: #fecaca;
+          }
+          .assessment-details .section-header {
+            background-color: #fef2f2;
+            color: #991b1b;
+          }
+          .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+          }
+          .info-item {
+            margin-bottom: 12px;
+          }
+          .info-label {
+            font-size: 12px;
+            color: #6b7280;
+            font-weight: 600;
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+          }
+          .info-value {
+            font-size: 14px;
+            color: #1f2937;
+            font-weight: 500;
+          }
+          .status-badge {
+            display: inline-block;
+            background-color: #dc2626;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+          }
+          .fatigue-high {
+            color: #dc2626;
+            font-weight: 700;
+            font-size: 16px;
+          }
+          .notes {
+            background-color: #f9fafb;
+            padding: 12px;
+            border-radius: 4px;
+            border-left: 4px solid #3b82f6;
+            font-style: italic;
+            color: #1f2937;
+          }
+          .footer {
+            margin-top: 30px;
+            text-align: center;
+            font-size: 12px;
+            color: #6b7280;
+            border-top: 1px solid #e5e7eb;
+            padding-top: 20px;
+          }
+          @media print {
+            body { margin: 0; }
+            .section { break-inside: avoid; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <h1>Case Details Report</h1>
+          <p>Generated on ${new Date().toLocaleString()}</p>
+        </div>
+
+        <div class="section">
+          <div class="section-header">Worker Information</div>
+          <div class="section-content">
+            <div class="info-grid">
+              <div class="info-item">
+                <div class="info-label">Name</div>
+                <div class="info-value">${case_.worker?.first_name} ${case_.worker?.last_name}</div>
+              </div>
+              <div class="info-item">
+                <div class="info-label">Email</div>
+                <div class="info-value">${case_.worker?.email}</div>
+              </div>
+              <div class="info-item">
+                <div class="info-label">Team</div>
+                <div class="info-value">${case_.worker?.team || case_.team}</div>
+              </div>
+              ${case_.teamLeaderInfo ? `
+              <div class="info-item">
+                <div class="info-label">Team Leader</div>
+                <div class="info-value">${case_.teamLeaderInfo.first_name} ${case_.teamLeaderInfo.last_name}</div>
+              </div>
+              ` : ''}
+            </div>
+          </div>
+        </div>
+
+        <div class="section assessment-details">
+          <div class="section-header">Assessment Details</div>
+          <div class="section-content">
+            <div class="info-grid">
+              <div class="info-item">
+                <div class="info-label">Work Readiness</div>
+                <div class="info-value">
+                  <span class="status-badge">NOT FIT</span>
+                </div>
+              </div>
+              <div class="info-item">
+                <div class="info-label">Fatigue Level</div>
+                <div class="info-value fatigue-high">${case_.fatigue_level}/10</div>
+              </div>
+              <div class="info-item">
+                <div class="info-label">Mood</div>
+                <div class="info-value">${case_.mood ? case_.mood.charAt(0).toUpperCase() + case_.mood.slice(1) : 'N/A'}</div>
+              </div>
+              <div class="info-item">
+                <div class="info-label">Pain/Discomfort</div>
+                <div class="info-value">${case_.pain_discomfort ? case_.pain_discomfort.charAt(0).toUpperCase() + case_.pain_discomfort.slice(1) : 'N/A'}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        ${case_.notes ? `
+        <div class="section">
+          <div class="section-header">Notes</div>
+          <div class="section-content">
+            <div class="notes">"${case_.notes}"</div>
+          </div>
+        </div>
+        ` : ''}
+
+        <div class="section">
+          <div class="section-header">Submission Information</div>
+          <div class="section-content">
+            <div class="info-grid">
+              <div class="info-item">
+                <div class="info-label">Submitted</div>
+                <div class="info-value">${new Date(case_.submitted_at).toLocaleString()}</div>
+              </div>
+              <div class="info-item">
+                <div class="info-label">Assessment ID</div>
+                <div class="info-value" style="font-family: monospace; font-size: 12px;">${case_.id}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="footer">
+          <p>This report was generated from the Work Readiness Management System</p>
+          <p>For questions or concerns, please contact your team leader or system administrator</p>
+        </div>
+      </body>
+      </html>
+    `;
+
+    printWindow.document.write(printContent);
+    printWindow.document.close();
+    
+    // Wait for content to load then print
+    printWindow.onload = () => {
+      printWindow.print();
+      printWindow.close();
+    };
+  };
+  console.log('🔍 TeamLeaderDashboard: readinessDateRange:', readinessDateRange);
+  console.log('🔍 TeamLeaderDashboard: readinessStartDate:', readinessStartDate);
+  console.log('🔍 TeamLeaderDashboard: readinessEndDate:', readinessEndDate);
+  console.log('🔍 TeamLeaderDashboard: trendLoading:', trendLoading);
+  console.log('🔍 TeamLeaderDashboard: trendError:', trendError);
+
+  // Real-time subscriptions
+  useWorkReadinessRealtime(user?.id || '');
+  useTeamRealtime(user?.id || '');
 
   // Create user form state
   const [createUserForm, setCreateUserForm] = useState({
@@ -138,131 +526,433 @@ const TeamLeaderDashboard: React.FC = () => {
     phone: '',
     team: ''
   });
+  const [emailValidation, setEmailValidation] = useState<{
+    isValid: boolean;
+    message: string;
+    checking: boolean;
+  }>({ isValid: true, message: '', checking: false });
 
   // Create team form state
   const [createTeamForm, setCreateTeamForm] = useState({
     teamName: ''
   });
 
-  // Work Readiness Activity chart state
-  const [analyticsData, setAnalyticsData] = useState<AnalyticsData | null>(null);
-  const [readinessDateRange, setReadinessDateRange] = useState<'week' | 'month' | 'year' | 'custom'>('month');
-  const [readinessStartDate, setReadinessStartDate] = useState<Date>(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000));
-  const [readinessEndDate, setReadinessEndDate] = useState<Date>(new Date());
-  const [readinessChartLoading, setReadinessChartLoading] = useState(false);
+  // Work Readiness Activity modal state
+  const [showWorkReadinessModal, setShowWorkReadinessModal] = useState(false);
 
-  // Pagination logic for Recent Activity
-  const paginatedRecentActivity = useMemo(() => {
-    if (!dashboardData?.recentActivity) return { items: [], totalPages: 0, totalItems: 0 };
-    
-    const totalItems = dashboardData.recentActivity.length;
-    const totalPages = Math.ceil(totalItems / recentActivityPageSize);
-    const startIndex = (recentActivityPage - 1) * recentActivityPageSize;
-    const endIndex = startIndex + recentActivityPageSize;
-    const items = dashboardData.recentActivity.slice(startIndex, endIndex);
-    
-    return { items, totalPages, totalItems };
-  }, [dashboardData?.recentActivity, recentActivityPage, recentActivityPageSize]);
+  // Work Readiness Activity chart state - removed duplicate declarations
 
-  // Optimized data fetching with caching
-  const fetchDashboardData = useCallback(async (forceRefresh = false) => {
-    const now = Date.now();
-    const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes cache
+  // Transform analytics data to dashboard format
+  const dashboardData = useMemo(() => {
+    if (!analyticsData) return null;
+
+    return {
+        teamOverview: {
+        totalMembers: analyticsData.analytics.totalTeamMembers,
+        activeMembers: analyticsData.analytics.activeTeamMembers,
+        teamName: analyticsData.teamLeader.team || 'Team'
+        },
+        safetyMetrics: {
+          activeCases: 0, // Will be implemented when cases are connected
+          monthlyIncidents: 0, // Will be implemented when incidents are connected
+          incidentTrend: 'stable',
+        highFatigueCount: analyticsData.analytics.safetyMetrics?.highFatigueCount || 0,
+        notFitForWorkCount: analyticsData.analytics.safetyMetrics?.notFitForWorkCount || 0,
+        painReportedCount: analyticsData.analytics.safetyMetrics?.painReportedCount || 0,
+        poorMoodCount: analyticsData.analytics.safetyMetrics?.poorMoodCount || 0
+        },
+        complianceMetrics: {
+        todayCheckIns: analyticsData.analytics.todayWorkReadinessStats.completed,
+        todayCompletionRate: analyticsData.analytics.complianceRate,
+        weeklyCheckIns: analyticsData.analytics.todayWorkReadinessStats.completed,
+        weeklyCompletionRate: analyticsData.analytics.complianceRate
+      },
+      teamPerformance: analyticsData.analytics.teamPerformance,
+        activeCases: [], // Will be implemented when cases are connected
+      todaysCheckIns: analyticsData.analytics.teamPerformance.filter((member: any) => 
+          member.workReadinessStatus === 'Completed'
+      ).map((member: any) => ({
+          workerName: member.memberName,
+          type: 'work_readiness',
+          status: member.workReadinessStatus,
+          timestamp: member.lastAssessment
+        }))
+    };
+  }, [analyticsData]);
+
+
+  // Team members from analytics data with pagination
+  const teamMembers = useMemo(() => {
+    const allMembers = analyticsData?.analytics.teamPerformance || [];
+      const startIndex = (teamMembersPage - 1) * teamMembersPageSize;
+      const endIndex = startIndex + teamMembersPageSize;
+    return allMembers.slice(startIndex, endIndex);
+  }, [analyticsData, teamMembersPage, teamMembersPageSize]);
+
+  const teamMembersTotal = useMemo(() => {
+    return analyticsData?.analytics.teamPerformance?.length || 0;
+  }, [analyticsData]);
+
+  // Team data from analytics data
+  const teamData = useMemo(() => {
+    if (!analyticsData) return null;
     
-    if (!forceRefresh && (now - lastFetchTime) < CACHE_DURATION && dashboardData) {
-      return; // Use cached data
+    return {
+      currentTeam: analyticsData.teamLeader.team || '',
+      defaultTeam: analyticsData.teamLeader.team || '',
+      managedTeams: analyticsData.teamLeader.managedTeams || []
+    };
+  }, [analyticsData]);
+
+  // Chart data from trend data - Connected to database
+  const chartData = useMemo(() => {
+    console.log('🔍 TeamLeaderDashboard: trendData:', trendData);
+    console.log('🔍 TeamLeaderDashboard: readinessTrendData:', trendData?.analytics?.readinessTrendData);
+    const data = trendData?.analytics?.readinessTrendData || [];
+    console.log('🔍 TeamLeaderDashboard: chartData:', data);
+    
+    // Log data breakdown for debugging
+    if (data.length > 0) {
+      const latestData = data[data.length - 1];
+      console.log('📊 Latest Work Readiness Data:', {
+        date: latestData.date,
+        fitForWork: latestData.fitForWork,
+        minorConcerns: latestData.minorConcernsFitForWork,
+        notFitForWork: latestData.notFitForWork,
+        total: latestData.total
+      });
     }
+    
+    return data;
+  }, [trendData]);
 
+  // Chart configuration
+  const chartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: window.innerWidth <= 768 ? 'bottom' as const : 'top' as const,
+        labels: {
+          padding: window.innerWidth <= 768 ? 10 : 20,
+          font: {
+            size: window.innerWidth <= 768 ? 12 : 14
+          }
+        }
+      },
+      title: {
+        display: true,
+        text: 'Work Readiness Trend',
+        font: {
+          size: window.innerWidth <= 768 ? 14 : 16
+        }
+      },
+    },
+    scales: {
+      x: {
+        ticks: {
+          font: {
+            size: window.innerWidth <= 768 ? 10 : 12
+          }
+        }
+      },
+      y: {
+        beginAtZero: true,
+        ticks: {
+          stepSize: 1,
+          font: {
+            size: window.innerWidth <= 768 ? 10 : 12
+          }
+        },
+      },
+    },
+  };
+
+  const chartDataConfig = {
+    labels: chartData.map(item => {
+      const date = new Date(item.date);
+      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    }),
+    datasets: [
+      {
+        label: 'Not Fit for Work',
+        data: chartData.map(item => item.notFitForWork),
+        borderColor: 'rgb(239, 68, 68)',
+        backgroundColor: 'rgba(239, 68, 68, 0.1)',
+        tension: 0.1,
+      },
+      {
+        label: 'Minor Concerns (Fit)',
+        data: chartData.map(item => item.minorConcernsFitForWork),
+        borderColor: 'rgb(245, 158, 11)',
+        backgroundColor: 'rgba(245, 158, 11, 0.1)',
+        tension: 0.1,
+      },
+      {
+        label: 'Fit for Work',
+        data: chartData.map(item => item.fitForWork),
+        borderColor: 'rgb(34, 197, 94)',
+        backgroundColor: 'rgba(34, 197, 94, 0.1)',
+        tension: 0.1,
+      },
+    ],
+  };
+
+  // Loading state
+  const loading = analyticsLoading || trendLoading;
+  const readinessChartLoading = trendLoading;
+
+  // Show toast when data updates
+  useEffect(() => {
+    if (analyticsData && !analyticsLoading) {
+      setToast({ message: '🔄 Data updated!', type: 'success' });
+      setTimeout(() => setToast(null), 2000);
+    }
+  }, [analyticsData, analyticsLoading]);
+
+  // Fetch notifications
+  const fetchNotifications = useCallback(async () => {
+    if (!user?.id) return;
+    
     try {
-      setLoading(true);
-      const response = await api.get('/team-leader/dashboard');
-      setDashboardData(response.data.data);
-      setLastFetchTime(now);
+      setNotificationsLoading(true);
+      const { data, error } = await dataClient
+        .from('notifications')
+        .select('*')
+        .eq('recipient_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(5);
+
+      if (error) {
+        console.error('Error fetching notifications:', error);
+        return;
+      }
+
+      setNotifications(data || []);
     } catch (error) {
-      setToast({ message: 'Error loading dashboard data', type: 'error' });
+      console.error('Error fetching notifications:', error);
     } finally {
-      setLoading(false);
+      setNotificationsLoading(false);
     }
-  }, [dashboardData, lastFetchTime]);
+  }, [user?.id]);
 
-  const fetchTeamMembers = useCallback(async () => {
+  // Fetch notifications on mount and when user changes
+  useEffect(() => {
+    fetchNotifications();
+  }, [fetchNotifications]);
+
+  // Real-time subscription for notifications
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const subscription = dataClient
+      .channel('team-leader-notifications')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'notifications',
+          filter: `recipient_id=eq.${user.id}`
+        },
+        (payload) => {
+          console.log('New notification received:', payload);
+          fetchNotifications();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [user?.id, fetchNotifications]);
+
+  // Fetch active cases (Not Fit workers)
+  const fetchActiveCases = useCallback(async () => {
+    if (!user?.id) return;
+    
     try {
-      setTeamMembersLoading(true);
-      const response = await api.get(`/team-leader/team-members?page=${teamMembersPage}&limit=${teamMembersPageSize}`);
-      setTeamMembers(response.data.data.teamMembers);
-      setTeamMembersTotal(response.data.data.pagination.total);
+      setActiveCasesLoading(true);
+      
+      // Get team leader's managed teams
+      const { data: teamLeader, error: leaderError } = await dataClient
+        .from('users')
+        .select('managed_teams, team')
+        .eq('id', user.id)
+        .single();
+      
+      if (leaderError) {
+        console.error('Error fetching team leader:', leaderError);
+        return;
+      }
+      
+      const managedTeams = teamLeader?.managed_teams || [];
+      if (teamLeader?.team && !managedTeams.includes(teamLeader.team)) {
+        managedTeams.push(teamLeader.team);
+      }
+      
+      if (managedTeams.length === 0) {
+        setActiveCases([]);
+        return;
+      }
+      
+      // Get today's work readiness submissions that are "not_fit"
+      const today = new Date().toISOString().split('T')[0];
+      
+      const { data: workReadinessData, error: workReadinessError } = await dataClient
+        .from('work_readiness')
+        .select(`
+          *,
+          worker:users!work_readiness_worker_id_fkey(
+            id,
+            first_name,
+            last_name,
+            email,
+            team
+          )
+        `)
+        .eq('team_leader_id', user.id)
+        .eq('readiness_level', 'not_fit')
+        .gte('submitted_at', `${today}T00:00:00.000Z`)
+        .lte('submitted_at', `${today}T23:59:59.999Z`)
+        .order('submitted_at', { ascending: false });
+      
+      if (workReadinessError) {
+        console.error('Error fetching work readiness data:', workReadinessError);
+        return;
+      }
+      
+      setActiveCases(workReadinessData || []);
     } catch (error) {
-      setToast({ message: 'Error loading team members', type: 'error' });
+      console.error('Error fetching active cases:', error);
     } finally {
-      setTeamMembersLoading(false);
+      setActiveCasesLoading(false);
     }
-  }, [teamMembersPage, teamMembersPageSize]);
+  }, [user?.id]);
 
-  const fetchTeamData = useCallback(async () => {
+  // Fetch active cases on mount and when user changes
+  useEffect(() => {
+    fetchActiveCases();
+  }, [fetchActiveCases]);
+
+  // Real-time subscription for work readiness updates
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const subscription = dataClient
+      .channel('team-leader-dashboard-updates')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'work_readiness',
+          filter: `team_leader_id=eq.${user.id}`
+        },
+        (payload) => {
+          console.log('📊 New work readiness submission received - refreshing chart data:', payload);
+          fetchActiveCases();
+          
+          // Trigger chart data refresh by invalidating the trend query
+          queryClient.invalidateQueries({ queryKey: ['work-readiness-trend'] });
+          queryClient.invalidateQueries({ queryKey: ['analytics'] });
+          console.log('🔄 Chart data invalidated - chart will refresh with new data');
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'work_readiness',
+          filter: `team_leader_id=eq.${user.id}`
+        },
+        (payload) => {
+          console.log('📊 Work readiness assessment updated - refreshing data:', payload);
+          fetchActiveCases();
+          
+          // Trigger chart data refresh
+          queryClient.invalidateQueries({ queryKey: ['work-readiness-trend'] });
+          queryClient.invalidateQueries({ queryKey: ['analytics'] });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [user?.id, fetchActiveCases]);
+
+  // Mark notification as read
+  const markAsRead = useCallback(async (notificationId: string) => {
     try {
-      const response = await api.get('/team-leader/teams');
-      setTeamData(response.data.data);
+      const { error } = await dataClient
+        .from('notifications')
+        .update({ is_read: true })
+        .eq('id', notificationId);
+
+      if (error) {
+        console.error('Error marking notification as read:', error);
+        return;
+      }
+
+      // Update local state
+      setNotifications(prev => 
+        prev.map(notification => 
+          notification.id === notificationId 
+            ? { ...notification, is_read: true }
+            : notification
+        )
+      );
     } catch (error) {
-      setToast({ message: 'Error loading team data', type: 'error' });
+      console.error('Error marking notification as read:', error);
     }
   }, []);
 
-  const fetchAnalyticsData = useCallback(async () => {
-    try {
-      setReadinessChartLoading(true);
-      let url = '/team-leader/analytics';
-      const params = new URLSearchParams();
-      
-      if (readinessDateRange === 'custom') {
-        params.append('startDate', readinessStartDate.toISOString());
-        params.append('endDate', readinessEndDate.toISOString());
-      } else {
-        params.append('range', readinessDateRange);
-      }
-      
-      const response = await api.get(`${url}?${params.toString()}`);
-      setAnalyticsData(response.data);
-    } catch (error) {
-      console.error('Error fetching analytics data:', error);
-    } finally {
-      setReadinessChartLoading(false);
+  // Email validation function
+  const validateEmail = useCallback(async (email: string) => {
+    if (!email || !email.includes('@')) {
+      setEmailValidation({ isValid: true, message: '', checking: false });
+      return;
     }
-  }, [readinessDateRange, readinessStartDate, readinessEndDate]);
 
-  // Auto-refresh every 5 minutes
-  useEffect(() => {
-    fetchDashboardData();
-    fetchTeamMembers();
-    fetchTeamData();
-    fetchAnalyticsData();
+    setEmailValidation({ isValid: true, message: '', checking: true });
 
-    const interval = setInterval(() => {
-      fetchDashboardData(true); // Force refresh
-    }, 5 * 60 * 1000); // 5 minutes
+    try {
+      const emailExists = await SupabaseAPI.checkEmailExists(email);
+      if (emailExists) {
+        setEmailValidation({
+          isValid: false,
+          message: 'Email already registered',
+          checking: false
+        });
+              } else {
+        setEmailValidation({
+          isValid: true,
+          message: 'Email is available',
+          checking: false
+        });
+      }
+        } catch (error) {
+      setEmailValidation({
+        isValid: true,
+        message: '',
+        checking: false
+      });
+    }
+  }, []);
 
-    return () => clearInterval(interval);
-  }, [fetchDashboardData, fetchTeamMembers, fetchTeamData, fetchAnalyticsData]);
-
-  // Fetch analytics data when readiness chart filters change
-  useEffect(() => {
-    fetchAnalyticsData();
-  }, [fetchAnalyticsData]);
-
-  // Reset pagination when data changes
-  useEffect(() => {
-    setRecentActivityPage(1);
-  }, [dashboardData?.recentActivity]);
-
-  // Refetch team members when pagination changes
-  useEffect(() => {
-    fetchTeamMembers();
-  }, [fetchTeamMembers]);
 
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!createUserForm.firstName || !createUserForm.lastName || !createUserForm.email || !createUserForm.password) {
       setToast({ message: 'Please fill in all required fields', type: 'error' });
+      return;
+    }
+
+    if (!emailValidation.isValid) {
+      setToast({ message: 'Please use a different email address', type: 'error' });
       return;
     }
 
@@ -275,11 +965,20 @@ const TeamLeaderDashboard: React.FC = () => {
         team: createUserForm.team || teamData?.defaultTeam || teamData?.managedTeams?.[0] || ''
       };
       
-      const response = await api.post('/team-leader/create-user', userData);
-      console.log('User creation response:', response.data);
+      console.log('Creating user with data:', userData);
       
-      // Show success modal with user data
-      setCreatedUser(response.data.user);
+      // Create user in Supabase
+      const result = await SupabaseAPI.createUser(userData);
+      console.log('User created successfully:', result);
+      
+      // Show success modal with created user data
+      setCreatedUser({ 
+        id: result.user.id, 
+        email: result.user.email, 
+        firstName: result.user.first_name, 
+        lastName: result.user.last_name,
+        team: result.user.team
+      });
       setShowSuccessModal(true);
       setShowCreateUser(false);
       setCreateUserForm({
@@ -291,12 +990,24 @@ const TeamLeaderDashboard: React.FC = () => {
         team: ''
       });
       
-      // Refresh data
-      await fetchTeamMembers();
+      // React Query will automatically refetch data due to real-time updates
     } catch (error: any) {
-      console.error('Error creating user:', error.response?.data);
+      console.error('Error creating user:', error);
+      
+      // Handle specific error messages
+      let errorMessage = 'Error creating user';
+      if (error.message) {
+        if (error.message.includes('Email already registered')) {
+          errorMessage = 'Email already registered. Please use a different email address.';
+        } else if (error.message.includes('duplicate key value violates unique constraint')) {
+          errorMessage = 'Email already registered. Please use a different email address.';
+        } else {
+          errorMessage = error.message;
+        }
+      }
+      
       setToast({ 
-        message: error.response?.data?.message || 'Error creating worker', 
+        message: errorMessage, 
         type: 'error' 
       });
     } finally {
@@ -312,19 +1023,27 @@ const TeamLeaderDashboard: React.FC = () => {
       return;
     }
 
+    if (!user?.id) {
+      setToast({ message: 'User not authenticated', type: 'error' });
+      return;
+    }
+
     try {
       setCreateTeamLoading(true);
-      await api.post('/team-leader/teams', { teamName: createTeamForm.teamName });
+      console.log('Creating team:', createTeamForm.teamName, 'for user:', user.id);
+      
+      const result = await SupabaseAPI.createTeam(createTeamForm.teamName, user.id);
+      console.log('Team created successfully:', result);
       
       setToast({ message: 'Team created successfully!', type: 'success' });
       setShowCreateTeam(false);
       setCreateTeamForm({ teamName: '' });
       
-      // Refresh team data
-      await fetchTeamData();
+      // React Query will automatically refetch data due to real-time updates
     } catch (error: any) {
+      console.error('Error creating team:', error);
       setToast({ 
-        message: error.response?.data?.message || 'Error creating team', 
+        message: error.message || 'Error creating team', 
         type: 'error' 
       });
     } finally {
@@ -334,12 +1053,20 @@ const TeamLeaderDashboard: React.FC = () => {
 
   const handleSetDefaultTeam = async (teamName: string) => {
     try {
-      await api.put('/team-leader/teams/default', { teamName });
+      if (!user?.id) {
+        setToast({ message: 'User not authenticated', type: 'error' });
+        return;
+      }
+
+      console.log('Setting default team:', teamName, 'for user:', user.id);
+      await SupabaseAPI.updateUserTeam(user.id, teamName);
+      
       setToast({ message: 'Default team updated successfully!', type: 'success' });
-      await fetchTeamData();
+      // React Query will automatically refetch data due to real-time updates
     } catch (error: any) {
+      console.error('Error updating default team:', error);
       setToast({ 
-        message: error.response?.data?.message || 'Error updating default team', 
+        message: error.message || 'Error updating default team', 
         type: 'error' 
       });
     }
@@ -366,10 +1093,21 @@ const TeamLeaderDashboard: React.FC = () => {
 
   return (
     <LayoutWithSidebar>
-      {/* Main Dashboard Content */}
-      <>
           {/* CSS Animations */}
           <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+        
+        body {
+          font-family: 'Inter', system-ui, sans-serif;
+          overflow-x: hidden;
+          margin: 0;
+          padding: 0;
+        }
+        
+        html {
+          overflow-x: hidden;
+        }
+        
         @keyframes modalSlideIn {
           from {
             opacity: 0;
@@ -414,791 +1152,1195 @@ const TeamLeaderDashboard: React.FC = () => {
             transform: rotate(360deg);
           }
         }
+
+        @keyframes pulseRed {
+          0% {
+            box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+            transform: scale(1);
+          }
+          50% {
+            box-shadow: 0 0 0 10px rgba(239, 68, 68, 0);
+            transform: scale(1.02);
+          }
+          100% {
+            box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+            transform: scale(1);
+          }
+        }
+
+        @keyframes pulseBorder {
+          0% {
+            background-position: 0% 50%;
+          }
+          50% {
+            background-position: 100% 50%;
+          }
+          100% {
+            background-position: 0% 50%;
+          }
+        }
+
+        @keyframes pulseDot {
+          0% {
+            transform: scale(1);
+            opacity: 1;
+          }
+          50% {
+            transform: scale(1.3);
+            opacity: 0.7;
+          }
+          100% {
+            transform: scale(1);
+            opacity: 1;
+          }
+        }
+
+        @keyframes slideInRight {
+          from {
+            opacity: 0;
+            transform: translateX(100%);
+          }
+          to {
+            opacity: 1;
+            transform: translateX(0);
+          }
+        }
+        
+        /* Desktop maximization and overflow prevention */
+        @media (min-width: 769px) {
+          .dashboard-container {
+            max-width: none !important;
+            width: 100% !important;
+            overflow-x: hidden !important;
+          }
+          
+          .header-section {
+            max-width: 100% !important;
+          }
+          
+          .overview-cards {
+            max-width: 100% !important;
+          }
+          
+          * {
+            box-sizing: border-box !important;
+          }
+        }
+        
+        @media (max-width: 768px) {
+          .dashboard-container {
+            padding: 12px !important;
+            max-width: 100vw !important;
+            overflow-x: hidden !important;
+            background: transparent !important;
+            border-radius: 0 !important;
+            margin: 0 !important;
+            min-height: 100vh !important;
+            position: relative !important;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+            -webkit-font-smoothing: antialiased !important;
+            -moz-osx-font-smoothing: grayscale !important;
+          }
+          
+          /* Prevent horizontal overflow globally */
+          * {
+            box-sizing: border-box !important;
+            max-width: 100% !important;
+          }
+          
+          body, html {
+            overflow-x: hidden !important;
+            max-width: 100vw !important;
+          }
+          
+          .mobile-app-container {
+            background: white !important;
+            border-radius: 0 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            overflow: hidden !important;
+          }
+          
+          .mobile-app-header {
+            background: transparent !important;
+            color: #1a202c !important;
+            padding: 20px 16px !important;
+            margin: 0 0 12px 0 !important;
+            border-radius: 0 !important;
+            position: relative !important;
+            box-shadow: none !important;
+          }
+          
+          .overview-cards {
+            grid-template-columns: 1fr !important;
+            gap: 0.75rem !important;
+            padding: 0 !important;
+            margin-bottom: 1rem !important;
+            clear: both !important;
+          }
+          
+          .card-item {
+            padding: 20px 16px !important;
+            border-radius: 16px !important;
+            margin-bottom: 12px !important;
+            border: none !important;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08), 0 2px 6px rgba(0,0,0,0.04) !important;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+            background: white !important;
+            backdrop-filter: none !important;
+            display: flex !important;
+            align-items: center !important;
+            gap: 16px !important;
+            cursor: pointer !important;
+            position: relative !important;
+            overflow: hidden !important;
+            clear: both !important;
+          }
+          
+          .card-item::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: transparent;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+          }
+          
+          .card-item:hover::before {
+            opacity: 1;
+          }
+          
+          .card-item:active {
+            transform: scale(0.96) !important;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.15) !important;
+            background: #f8fafc !important;
+          }
+          
+          .card-item:hover {
+            box-shadow: 0 6px 20px rgba(0,0,0,0.12) !important;
+            transform: translateY(-2px) !important;
+          }
+          
+          .header-section {
+            flex-direction: column !important;
+            align-items: flex-start !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            gap: 1rem !important;
+          }
+          
+          .button-group {
+            flex-direction: row !important;
+            width: 100% !important;
+            gap: 0.75rem !important;
+            padding: 0 !important;
+          }
+          
+          .button-group button {
+            flex: 1 !important;
+            padding: 0.875rem !important;
+            border-radius: 8px !important;
+            font-weight: 600 !important;
+            font-size: 0.875rem !important;
+            border: 2px solid rgba(255,255,255,0.3) !important;
+            backdrop-filter: blur(10px) !important;
+            transition: all 0.2s ease !important;
+          }
+          
+          .button-group button:active {
+            transform: scale(0.95) !important;
+          }
+          
+          /* Mobile App Card Styling */
+          .mobile-card {
+            background: white !important;
+            border-radius: 16px !important;
+            padding: 1.25rem !important;
+            margin-bottom: 1rem !important;
+            border: 1px solid rgba(0,0,0,0.06) !important;
+            box-shadow: 0 1px 10px rgba(0,0,0,0.1) !important;
+            transition: all 0.2s ease !important;
+          }
+          
+          .mobile-card:active {
+            transform: scale(0.98) !important;
+            box-shadow: 0 2px 20px rgba(0,0,0,0.15) !important;
+          }
+          
+          /* Mobile List Items */
+          .mobile-list-item {
+            display: flex !important;
+            align-items: flex-start !important;
+            padding: 16px !important;
+            background: white !important;
+            border-radius: 12px !important;
+            margin-bottom: 8px !important;
+            border: 1px solid rgba(0,0,0,0.08) !important;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.05) !important;
+            transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1) !important;
+            min-height: 80px !important;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+            position: relative !important;
+          }
+          
+          .mobile-list-item:active {
+            transform: scale(0.98) !important;
+            background: #f8fafc !important;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.15) !important;
+          }
+          
+          .mobile-list-item:hover {
+            background: white !important;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.12), 0 2px 4px rgba(0,0,0,0.08) !important;
+          }
+          
+          /* Mobile Typography */
+          h1, h2, h3, h4, h5, h6 {
+            font-weight: 700 !important;
+            letter-spacing: -0.025em !important;
+          }
+          
+          /* Mobile Icon Styling */
+          .mobile-icon {
+            width: 52px !important;
+            height: 52px !important;
+            border-radius: 16px !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            font-size: 18px !important;
+            font-weight: 700 !important;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+            letter-spacing: 0.025em !important;
+            text-transform: uppercase !important;
+            color: white !important;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.15), 0 2px 8px rgba(0,0,0,0.08) !important;
+            position: relative !important;
+            overflow: hidden !important;
+            margin-right: 0 !important;
+            flex-shrink: 0 !important;
+            background: transparent !important;
+          }
+          
+          .mobile-icon::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            right: 0;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            border: 2px solid white;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+          }
+          
+          /* Mobile Touch Targets */
+          button, [role="button"], .clickable {
+            min-height: 44px !important;
+            padding: 12px 16px !important;
+            font-size: 16px !important;
+            -webkit-tap-highlight-color: rgba(0,0,0,0.1) !important;
+          }
+          
+          /* Hide scrollbars but keep functionality */
+          * {
+            -webkit-overflow-scrolling: touch !important;
+          }
+          
+          /* Mobile Safe Area */
+          body {
+            padding-bottom: env(safe-area-inset-bottom) !important;
+          }
+        }
       `}</style>
       
-      <div style={{ 
-        padding: '2rem',
-        background: '#f8fafc',
-        minHeight: '100vh',
-        position: 'relative'
-      }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
-          <div>
-            <h1 style={{ 
-              fontSize: '2rem', 
-              fontWeight: 'bold', 
-              color: '#1a202c', 
-              marginBottom: '0.5rem',
-              textShadow: '0 2px 4px rgba(0,0,0,0.1)'
+      <Box 
+        className="dashboard-modern-container"
+        sx={{ 
+          padding: { xs: 2, sm: 2.5, md: 3 },
+          background: COLORS.neutral[50],
+          minHeight: '100vh',
+          position: 'relative',
+          maxWidth: 'none',
+          width: '100%',
+          overflowX: 'hidden',
+          boxSizing: 'border-box',
+          fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+        }}
+      >
+        
+        <Box sx={{ 
+          display: 'flex', 
+          justifyContent: 'space-between', 
+          alignItems: 'center',
+          marginBottom: { xs: 3, md: 4 },
+          flexDirection: { xs: 'column', md: 'row' },
+          background: COLORS.gradient.header,
+          padding: { xs: '24px 20px', md: '32px 24px' },
+          borderRadius: { xs: '16px', md: '20px' },
+          boxShadow: '0 10px 40px -10px rgba(99, 102, 241, 0.3)',
+          position: 'relative',
+          gap: { xs: 2, md: 3 },
+        }}>
+          <Box sx={{ 
+            textAlign: { xs: 'center', md: 'left' },
+            flex: 1,
+          }}>
+            <Typography variant="h4" sx={{ 
+              fontSize: { xs: '1.5rem', sm: '1.75rem', md: '2rem' },
+              fontWeight: 700, 
+              color: COLORS.neutral.white,
+              mb: 0.5,
+              letterSpacing: '-0.02em',
             }}>
               Team Leader Dashboard
-            </h1>
-            <p style={{ 
-              color: '#4a5568', 
-              marginBottom: '0.25rem',
-              textShadow: '0 1px 2px rgba(0,0,0,0.05)'
+            </Typography>
+            <Typography variant="body1" sx={{ 
+              fontSize: { xs: '0.875rem', md: '0.9375rem' },
+              fontWeight: 400,
+              color: 'rgba(255, 255, 255, 0.9)', 
+              mb: 1,
             }}>
-              Welcome back, {user?.firstName}!
-            </p>
-            <p style={{ 
-              fontSize: '0.875rem', 
-              color: '#718096',
-              textShadow: '0 1px 2px rgba(0,0,0,0.05)'
-            }}>
-              Team: {dashboardData.teamOverview.teamName}
-            </p>
-            <p style={{ 
-              fontSize: '0.75rem', 
-              color: '#a0aec0',
-              textShadow: '0 1px 2px rgba(0,0,0,0.05)'
-            }}>
-              Last updated: {lastFetchTime ? new Date(lastFetchTime).toLocaleTimeString() : 'Never'}
-            </p>
-          </div>
-          <div style={{ display: 'flex', gap: '0.75rem' }}>
-            <button
-              onClick={() => fetchDashboardData(true)}
-              style={{
-                backgroundColor: 'rgba(255, 255, 255, 0.8)',
-                backdropFilter: 'blur(10px)',
-                color: '#1a202c',
-                padding: '0.5rem 1rem',
-                borderRadius: '0.5rem',
-                border: '1px solid rgba(255, 255, 255, 0.2)',
-                cursor: 'pointer',
+              Welcome back, {user?.firstName}! Here's what's happening with your team today
+            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap', justifyContent: { xs: 'center', md: 'flex-start' } }}>
+              <Box sx={{ 
                 display: 'flex',
                 alignItems: 'center',
-                gap: '0.5rem',
-                boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
-                transition: 'all 0.2s ease-in-out'
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.9)';
-                e.currentTarget.style.transform = 'translateY(-1px)';
-                e.currentTarget.style.boxShadow = '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.8)';
-                e.currentTarget.style.transform = 'translateY(0)';
-                e.currentTarget.style.boxShadow = '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)';
-              }}
-            >
-              <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-              <span>Refresh</span>
-            </button>
-            <button
-              onClick={() => setShowCreateUser(true)}
-              style={{
-                backgroundColor: 'rgba(37, 99, 235, 0.8)',
-                backdropFilter: 'blur(10px)',
-                color: 'white',
-                padding: '0.5rem 1rem',
-                borderRadius: '0.5rem',
-                border: '1px solid rgba(37, 99, 235, 0.3)',
-                cursor: 'pointer',
-                boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
-                transition: 'all 0.2s ease-in-out'
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.backgroundColor = 'rgba(37, 99, 235, 0.9)';
-                e.currentTarget.style.transform = 'translateY(-1px)';
-                e.currentTarget.style.boxShadow = '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.backgroundColor = 'rgba(37, 99, 235, 0.8)';
-                e.currentTarget.style.transform = 'translateY(0)';
-                e.currentTarget.style.boxShadow = '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)';
-              }}
-            >
-              Create New User
-            </button>
-        </div>
-      </div>
+                gap: 1,
+                fontSize: '0.8125rem', 
+                color: 'rgba(255, 255, 255, 0.85)',
+              }}>
+                <Box sx={{ 
+                  width: '8px', 
+                  height: '8px', 
+                  borderRadius: '50%', 
+                  backgroundColor: COLORS.success.light,
+                  boxShadow: `0 0 0 3px rgba(16, 185, 129, 0.2)`,
+                }} />
+                Team: {dashboardData?.teamOverview?.teamName || 'Team'}
+              </Box>
+              <Box sx={{ 
+                fontSize: '0.8125rem', 
+                color: 'rgba(255, 255, 255, 0.7)',
+              }}>
+                •
+              </Box>
+              <Box sx={{ 
+                fontSize: '0.8125rem', 
+                color: 'rgba(255, 255, 255, 0.7)',
+              }}>
+                {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+              </Box>
+            </Box>
+          </Box>
+          <Button
+            variant="contained"
+            onClick={() => setShowCreateUser(true)}
+            startIcon={
+              <Box component="span" sx={{ fontSize: '1.25rem', marginRight: '-4px' }}>+</Box>
+            }
+            sx={{
+              background: 'rgba(255,255,255,0.2)',
+              backdropFilter: 'blur(10px)',
+              color: COLORS.neutral.white,
+              padding: { xs: '10px 20px', md: '12px 28px' },
+              borderRadius: '12px',
+              border: '1px solid rgba(255,255,255,0.3)',
+              boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+              transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+              width: { xs: '100%', md: 'auto' },
+              fontSize: { xs: '0.8125rem', md: '0.875rem' },
+              fontWeight: 600,
+              textTransform: 'none',
+              minWidth: { xs: '140px', md: '160px' },
+              '&:hover': {
+                background: 'rgba(255,255,255,0.25)',
+                transform: 'translateY(-2px)',
+                boxShadow: '0 6px 20px rgba(0,0,0,0.15)',
+                border: '1px solid rgba(255,255,255,0.4)',
+              },
+              '&:active': {
+                transform: 'translateY(0)',
+              }
+            }}
+          >
+            Create New User
+          </Button>
+        </Box>
 
       {/* Team Management Section */}
-      {teamData && (
-        <div style={{ 
-          backgroundColor: 'white', 
-          padding: '1.5rem', 
-          borderRadius: '0.5rem', 
-          boxShadow: '0 1px 3px rgba(0,0,0,0.1)', 
-          marginBottom: '2rem' 
+      <Box sx={{ 
+        backgroundColor: 'white', 
+        padding: { xs: '20px', md: '1.5rem' },
+        borderRadius: { xs: '12px', md: '0.5rem' },
+        boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+        marginBottom: { xs: '16px', md: '2rem' },
+        margin: { xs: '0 16px 16px 16px', md: '0 0 2rem 0' }
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+          <h3 style={{ 
+            fontSize: '1.25rem', 
+            fontWeight: '600', 
+            color: '#1f2937',
+            fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
+          }}>
+            Team Management
+          </h3>
+          <button
+            type="button"
+            onClick={() => setShowCreateTeam(true)}
+            style={{
+              backgroundColor: '#16a34a',
+              color: 'white',
+              padding: '0.5rem 1rem',
+              borderRadius: '0.375rem',
+              border: 'none',
+              cursor: 'pointer'
+            }}
+          >
+            Create New Team
+          </button>
+        </div>
+        
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
+          <div style={{ padding: '1rem', backgroundColor: '#f9fafb', borderRadius: '0.5rem' }}>
+            <h4 style={{ fontSize: '0.875rem', fontWeight: '500', color: '#6b7280', marginBottom: '0.5rem' }}>
+              Current Team
+            </h4>
+            <p style={{ fontSize: '1.125rem', fontWeight: '600', color: '#1f2937' }}>
+              {teamData?.currentTeam || 'Not Set'}
+            </p>
+          </div>
+          
+          <div style={{ padding: '1rem', backgroundColor: '#f9fafb', borderRadius: '0.5rem' }}>
+            <h4 style={{ fontSize: '0.875rem', fontWeight: '500', color: '#6b7280', marginBottom: '0.5rem' }}>
+              Default Team
+            </h4>
+            <p style={{ fontSize: '1.125rem', fontWeight: '600', color: '#1f2937' }}>
+              {teamData?.defaultTeam || 'Not Set'}
+            </p>
+          </div>
+          
+          <div style={{ padding: '1rem', backgroundColor: '#f9fafb', borderRadius: '0.5rem' }}>
+            <h4 style={{ fontSize: '0.875rem', fontWeight: '500', color: '#6b7280', marginBottom: '0.5rem' }}>
+              Managed Teams
+            </h4>
+            <p style={{ fontSize: '1.125rem', fontWeight: '600', color: '#1f2937' }}>
+              {teamData?.managedTeams?.length || 0}
+            </p>
+          </div>
+        </div>
+        
+        {teamData?.managedTeams && teamData.managedTeams.length > 0 && (
+          <div style={{ marginTop: '1rem' }}>
+            <h4 style={{ fontSize: '0.875rem', fontWeight: '500', color: '#6b7280', marginBottom: '0.5rem' }}>
+              Your Teams
+            </h4>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+              {teamData?.managedTeams?.map((team: string, index: number) => (
+                <div key={index} style={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '0.5rem',
+                  padding: '0.5rem 0.75rem',
+                  backgroundColor: team === teamData?.defaultTeam ? '#dbeafe' : '#f3f4f6',
+                  borderRadius: '0.375rem',
+                  border: team === teamData?.defaultTeam ? '1px solid #3b82f6' : '1px solid #d1d5db'
+                }}>
+                  <span style={{ 
+                    fontSize: '0.875rem', 
+                    fontWeight: '500',
+                    color: team === teamData?.defaultTeam ? '#1e40af' : '#374151'
+                  }}>
+                    {team}
+                  </span>
+                  {team === teamData?.defaultTeam && teamData?.defaultTeam && (
+                    <span style={{ 
+                      fontSize: '0.75rem', 
+                      fontWeight: '600',
+                      backgroundColor: '#4f94cd',
+                      color: 'white',
+                      padding: '0.125rem 0.375rem',
+                      borderRadius: '0.25rem'
+                    }}>
+                      DEFAULT
+                    </span>
+                  )}
+                  {team !== teamData?.defaultTeam && (
+                    <button
+                      type="button"
+                      onClick={() => handleSetDefaultTeam(team)}
+                      style={{
+                        fontSize: '0.75rem',
+                        color: '#6b7280',
+                        backgroundColor: 'transparent',
+                        border: 'none',
+                        cursor: 'pointer',
+                        textDecoration: 'underline'
+                      }}
+                    >
+                      Set Default
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        </Box>
+
+      {/* Weekly Goals & KPI Dashboard */}
+      <Box sx={{ mb: 4 }}>
+        <TeamKPIDashboard teamLeaderId={user?.id || ''} />
+      </Box>
+
+
+      {/* Floating Notifications Popup */}
+      {notifications.filter(n => !n.is_read).length > 0 && (
+        <div style={{
+          position: 'fixed',
+          top: '10px', // Position at very top
+          right: '20px',
+          zIndex: 9999, // Higher z-index to appear above everything including navbar
+          maxWidth: '400px',
+          width: '100%'
         }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-            <h3 style={{ fontSize: '1.25rem', fontWeight: '600', color: '#1f2937' }}>
-              Team Management
-            </h3>
-            <button
-              onClick={() => setShowCreateTeam(true)}
+          {notifications.filter(n => !n.is_read).slice(0, 3).map((notification, index) => (
+            <div
+              key={notification.id}
               style={{
-                backgroundColor: '#16a34a',
-                color: 'white',
-                padding: '0.5rem 1rem',
-                borderRadius: '0.375rem',
-                border: 'none',
-                cursor: 'pointer'
+                backgroundColor: notification.title.includes('NOT FIT') || notification.message.includes('NOT FIT') ? '#fef2f2' : '#ffffff',
+                border: `2px solid ${notification.title.includes('NOT FIT') || notification.message.includes('NOT FIT') ? '#ef4444' : '#e5e7eb'}`,
+                borderRadius: '12px',
+                padding: '16px',
+                marginBottom: '12px',
+                boxShadow: '0 10px 25px rgba(0, 0, 0, 0.15)',
+                backdropFilter: 'blur(10px)',
+                position: 'relative',
+                animation: notification.title.includes('NOT FIT') || notification.message.includes('NOT FIT') ? 'pulseRed 2s infinite' : 'slideInRight 0.5s ease-out',
+                transform: `translateY(${index * 10}px)`,
+                transition: 'all 0.3s ease'
               }}
             >
-              Create New Team
-            </button>
-          </div>
-          
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
-            <div style={{ padding: '1rem', backgroundColor: '#f9fafb', borderRadius: '0.5rem' }}>
-              <h4 style={{ fontSize: '0.875rem', fontWeight: '500', color: '#6b7280', marginBottom: '0.5rem' }}>
-                Current Team
-              </h4>
-              <p style={{ fontSize: '1.125rem', fontWeight: '600', color: '#1f2937' }}>
-                {teamData.currentTeam || 'Not Set'}
-              </p>
-            </div>
-            
-            <div style={{ padding: '1rem', backgroundColor: '#f9fafb', borderRadius: '0.5rem' }}>
-              <h4 style={{ fontSize: '0.875rem', fontWeight: '500', color: '#6b7280', marginBottom: '0.5rem' }}>
-                Default Team
-              </h4>
-              <p style={{ fontSize: '1.125rem', fontWeight: '600', color: '#1f2937' }}>
-                {teamData.defaultTeam || 'Not Set'}
-              </p>
-            </div>
-            
-            <div style={{ padding: '1rem', backgroundColor: '#f9fafb', borderRadius: '0.5rem' }}>
-              <h4 style={{ fontSize: '0.875rem', fontWeight: '500', color: '#6b7280', marginBottom: '0.5rem' }}>
-                Managed Teams
-              </h4>
-              <p style={{ fontSize: '1.125rem', fontWeight: '600', color: '#1f2937' }}>
-                {teamData.managedTeams.length}
-              </p>
-            </div>
-          </div>
-          
-          {teamData.managedTeams.length > 0 && (
-            <div style={{ marginTop: '1rem' }}>
-              <h4 style={{ fontSize: '0.875rem', fontWeight: '500', color: '#6b7280', marginBottom: '0.5rem' }}>
-                Your Teams
-              </h4>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-                {teamData.managedTeams.map((team, index) => (
-                  <div key={index} style={{ 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    gap: '0.5rem',
-                    padding: '0.5rem 0.75rem',
-                    backgroundColor: team === teamData.defaultTeam ? '#dbeafe' : '#f3f4f6',
-                    borderRadius: '0.375rem',
-                    border: team === teamData.defaultTeam ? '1px solid #3b82f6' : '1px solid #d1d5db'
+              {/* Pulse Animation for NOT FIT notifications */}
+              {notification.title.includes('NOT FIT') || notification.message.includes('NOT FIT') && (
+                <div style={{
+                  position: 'absolute',
+                  top: '-2px',
+                  left: '-2px',
+                  right: '-2px',
+                  bottom: '-2px',
+                  borderRadius: '12px',
+                  background: 'linear-gradient(45deg, #ef4444, #dc2626, #ef4444)',
+                  backgroundSize: '200% 200%',
+                  animation: 'pulseBorder 2s infinite',
+                  zIndex: -1
+                }} />
+              )}
+              
+              {/* Close button */}
+              <button
+                onClick={() => markAsRead(notification.id)}
+                style={{
+                  position: 'absolute',
+                  top: '8px',
+                  right: '8px',
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '18px',
+                  cursor: 'pointer',
+                  color: '#6b7280',
+                  width: '24px',
+                  height: '24px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  borderRadius: '50%',
+                  transition: 'all 0.2s ease'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = '#f3f4f6';
+                  e.currentTarget.style.color = '#374151';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = 'transparent';
+                  e.currentTarget.style.color = '#6b7280';
+                }}
+              >
+                ×
+              </button>
+
+              {/* Notification content */}
+              <div style={{ paddingRight: '32px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px' }}>
+                  <div style={{
+                    width: '8px',
+                    height: '8px',
+                    borderRadius: '50%',
+                    backgroundColor: notification.title.includes('NOT FIT') || notification.message.includes('NOT FIT') ? '#ef4444' : '#3b82f6',
+                    marginRight: '8px',
+                    animation: notification.title.includes('NOT FIT') || notification.message.includes('NOT FIT') ? 'pulseDot 1.5s infinite' : 'none'
+                  }} />
+                  <h4 style={{
+                    fontSize: '14px',
+                    fontWeight: '700',
+                    color: notification.title.includes('NOT FIT') || notification.message.includes('NOT FIT') ? '#dc2626' : '#1f2937',
+                    margin: '0',
+                    lineHeight: '1.2'
                   }}>
-                    <span style={{ 
-                      fontSize: '0.875rem', 
-                      fontWeight: '500',
-                      color: team === teamData.defaultTeam ? '#1e40af' : '#374151'
-                    }}>
-                      {team}
-                    </span>
-                    {team === teamData.defaultTeam && teamData.defaultTeam && (
-                      <span style={{ 
-                        fontSize: '0.75rem', 
-                        fontWeight: '600',
-                        backgroundColor: '#3b82f6',
-                        color: 'white',
-                        padding: '0.125rem 0.375rem',
-                        borderRadius: '0.25rem'
-                      }}>
-                        DEFAULT
-                      </span>
-                    )}
-                    {team !== teamData.defaultTeam && (
-                      <button
-                        onClick={() => handleSetDefaultTeam(team)}
-                        style={{
-                          fontSize: '0.75rem',
-                          color: '#6b7280',
-                          backgroundColor: 'transparent',
-                          border: 'none',
-                          cursor: 'pointer',
-                          textDecoration: 'underline'
-                        }}
-                      >
-                        Set Default
-                      </button>
-                    )}
-                  </div>
-                ))}
+                    {notification.title}
+                  </h4>
+                </div>
+                
+                <p style={{
+                  fontSize: '12px',
+                  color: '#6b7280',
+                  margin: '0 0 8px 0',
+                  lineHeight: '1.4'
+                }}>
+                  {notification.message}
+                </p>
+                
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{
+                    fontSize: '10px',
+                    color: '#9ca3af'
+                  }}>
+                    {new Date(notification.created_at).toLocaleTimeString()}
+                  </span>
+                  
+                  <button
+                    onClick={() => markAsRead(notification.id)}
+                    style={{
+                      background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '6px',
+                      padding: '4px 12px',
+                      fontSize: '10px',
+                      fontWeight: '600',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.transform = 'translateY(-1px)';
+                      e.currentTarget.style.boxShadow = '0 4px 8px rgba(59, 130, 246, 0.3)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.boxShadow = 'none';
+                    }}
+                  >
+                    Mark as Read
+                  </button>
+                </div>
               </div>
+            </div>
+          ))}
+          
+          {/* View All Button */}
+          {notifications.filter(n => !n.is_read).length > 3 && (
+            <div style={{
+              textAlign: 'center',
+              marginTop: '8px'
+            }}>
+              <button
+                onClick={() => window.location.href = '/notifications'}
+                style={{
+                  background: 'linear-gradient(135deg, #6b7280, #4b5563)',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '8px',
+                  padding: '8px 16px',
+                  fontSize: '12px',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s ease'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = 'translateY(-1px)';
+                  e.currentTarget.style.boxShadow = '0 4px 8px rgba(107, 114, 128, 0.3)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = 'translateY(0)';
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
+              >
+                View All ({notifications.filter(n => !n.is_read).length})
+              </button>
             </div>
           )}
         </div>
       )}
 
-      {/* Overview Cards */}
-      <div style={{ 
-        display: 'grid', 
-        gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', 
-        gap: '1.5rem', 
-        marginBottom: '2rem',
-        position: 'relative',
-        zIndex: 1
-      }}>
-        <div style={{ 
-          background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.9) 0%, rgba(59, 130, 246, 0.05) 100%)',
-          backdropFilter: 'blur(10px)',
-          padding: '1.5rem', 
-          borderRadius: '1rem', 
-          border: '1px solid rgba(59, 130, 246, 0.1)',
-          boxShadow: '0 8px 32px 0 rgba(31, 38, 135, 0.37)',
-          transition: 'all 0.3s ease-in-out',
-          cursor: 'pointer',
-          position: 'relative',
-          overflow: 'hidden'
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.transform = 'translateY(-2px)';
-          e.currentTarget.style.boxShadow = '0 12px 40px 0 rgba(31, 38, 135, 0.5)';
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.transform = 'translateY(0)';
-          e.currentTarget.style.boxShadow = '0 8px 32px 0 rgba(31, 38, 135, 0.37)';
+      {/* Active Cases Section - Not Fit Workers */}
+      {activeCases.length > 0 && (
+        <Box sx={{ 
+          backgroundColor: 'white', 
+          padding: { xs: '20px', md: '1.5rem' },
+          borderRadius: { xs: '12px', md: '0.5rem' },
+          boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+          marginBottom: { xs: '16px', md: '2rem' },
+          margin: { xs: '0 16px 16px 16px', md: '0 0 2rem 0' },
+          border: '2px solid #ef4444'
         }}>
-          {/* Icon */}
-          <div style={{
-            position: 'absolute',
-            top: '1rem',
-            left: '1rem',
-            width: '48px',
-            height: '48px',
-            backgroundColor: '#3b82f6',
-            borderRadius: '50%',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            boxShadow: '0 4px 12px rgba(59, 130, 246, 0.3)'
-          }}>
-            <svg width="24" height="24" fill="white" viewBox="0 0 24 24">
-              <path d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
-            </svg>
-          </div>
-
-          {/* Progress Indicator */}
-          <div style={{
-            position: 'absolute',
-            top: '1rem',
-            right: '1rem',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'flex-end'
-          }}>
-            <div style={{
-              width: '40px',
-              height: '4px',
-              backgroundColor: 'rgba(59, 130, 246, 0.2)',
-              borderRadius: '2px',
-              marginBottom: '4px'
-            }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <div style={{
-                width: '30%',
-                height: '100%',
-                backgroundColor: '#3b82f6',
-                borderRadius: '2px'
-              }}></div>
+                width: '12px',
+                height: '12px',
+                borderRadius: '50%',
+                backgroundColor: '#ef4444',
+                animation: 'pulseDot 1.5s infinite'
+              }} />
+               <h2 style={{ 
+                 fontSize: '1.375rem', 
+                 fontWeight: '700', 
+                 color: '#dc2626',
+                 letterSpacing: '-0.0125em',
+                 margin: '0'
+               }}>
+                  Active Cases - Not Ready for Work
+                </h2>
             </div>
-            <span style={{
+            <span style={{ 
+              backgroundColor: '#ef4444', 
+              color: 'white', 
+              padding: '0.25rem 0.5rem', 
+              borderRadius: '0.25rem', 
               fontSize: '0.75rem',
-              fontWeight: '600',
-              color: '#3b82f6'
-            }}>7%</span>
-          </div>
-
-          {/* Content */}
-          <div style={{ marginTop: '2rem' }}>
-            <p style={{ 
-              fontSize: '2.5rem', 
-              fontWeight: 'bold', 
-              color: '#1a202c',
-              margin: '0 0 0.5rem 0',
-              textShadow: '0 2px 4px rgba(0,0,0,0.1)'
+              fontWeight: '600'
             }}>
-            {dashboardData.teamOverview.totalMembers}
-          </p>
-            <h3 style={{ 
-              fontSize: '1rem', 
-              fontWeight: '600', 
-              color: '#1a202c', 
-              margin: '0 0 0.25rem 0',
-              textShadow: '0 1px 2px rgba(0,0,0,0.1)'
-            }}>
-              Team Members
-            </h3>
-            <p style={{ 
-              fontSize: '0.875rem', 
-              color: '#6b7280',
-              margin: '0',
-              textShadow: '0 1px 2px rgba(0,0,0,0.05)'
-            }}>
-            {dashboardData.teamOverview.activeMembers} active today
-          </p>
+              {activeCases.length} Cases
+            </span>
           </div>
-        </div>
-
-        <div style={{ 
-          background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.9) 0%, rgba(234, 88, 12, 0.05) 100%)',
-          backdropFilter: 'blur(10px)',
-          padding: '1.5rem', 
-          borderRadius: '1rem', 
-          border: '1px solid rgba(234, 88, 12, 0.1)',
-          boxShadow: '0 8px 32px 0 rgba(31, 38, 135, 0.37)',
-          transition: 'all 0.3s ease-in-out',
-          cursor: 'pointer',
-          position: 'relative',
-          overflow: 'hidden'
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.transform = 'translateY(-2px)';
-          e.currentTarget.style.boxShadow = '0 12px 40px 0 rgba(31, 38, 135, 0.5)';
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.transform = 'translateY(0)';
-          e.currentTarget.style.boxShadow = '0 8px 32px 0 rgba(31, 38, 135, 0.37)';
-        }}>
-          {/* Icon */}
-          <div style={{
-            position: 'absolute',
-            top: '1rem',
-            left: '1rem',
-            width: '48px',
-            height: '48px',
-            backgroundColor: '#ea580c',
-            borderRadius: '50%',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            boxShadow: '0 4px 12px rgba(234, 88, 12, 0.3)'
-          }}>
-            <svg width="24" height="24" fill="white" viewBox="0 0 24 24">
-              <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
-            </svg>
-          </div>
-
-          {/* Progress Indicator */}
-          <div style={{
-            position: 'absolute',
-            top: '1rem',
-            right: '1rem',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'flex-end'
-          }}>
+          
+          {/* Active Cases Pagination Controls */}
+          {activeCases.length > activeCasesPageSize && (
             <div style={{
-              width: '32px',
-              height: '32px',
-              borderRadius: '50%',
-              border: '3px solid rgba(234, 88, 12, 0.2)',
-              borderTop: '3px solid #ea580c',
-              transform: 'rotate(-90deg)',
-              marginBottom: '4px'
-            }}></div>
-            <span style={{
-              fontSize: '0.75rem',
-              fontWeight: '600',
-              color: '#ea580c'
-            }}>0%</span>
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: '1rem',
+              padding: '0.75rem',
+              backgroundColor: '#f9fafb',
+              borderRadius: '0.5rem',
+              border: '1px solid #e5e7eb'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                <span style={{ fontSize: '0.875rem', color: '#6b7280', fontWeight: '500' }}>
+                  Show:
+                </span>
+                <select
+                  value={activeCasesPageSize}
+                  onChange={(e) => {
+                    setActiveCasesPageSize(parseInt(e.target.value));
+                    setActiveCasesPage(1);
+                  }}
+                  style={{
+                    padding: '0.375rem 0.75rem',
+                    borderRadius: '0.25rem',
+                    border: '1px solid #d1d5db',
+                    backgroundColor: 'white',
+                    fontSize: '0.875rem',
+                    fontWeight: '500',
+                    color: '#374151',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <option value={3}>3 cases</option>
+                  <option value={5}>5 cases</option>
+                  <option value={10}>10 cases</option>
+                </select>
+              </div>
+              
+              <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
+                Showing {Math.min((activeCasesPage - 1) * activeCasesPageSize + 1, activeCases.length)} to {Math.min(activeCasesPage * activeCasesPageSize, activeCases.length)} of {activeCases.length} cases
+              </div>
+            </div>
+          )}
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            {activeCases
+              .slice((activeCasesPage - 1) * activeCasesPageSize, activeCasesPage * activeCasesPageSize)
+              .map((case_, index) => (
+              <div 
+                key={case_.id}
+                style={{
+                  padding: '1rem',
+                  borderRadius: '0.5rem',
+                  border: '1px solid #fecaca',
+                  backgroundColor: '#fef2f2',
+                  position: 'relative',
+                  animation: 'slideInRight 0.5s ease-out',
+                  animationDelay: `${index * 0.1}s`
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                      <div style={{
+                        width: '8px',
+                        height: '8px',
+                        borderRadius: '50%',
+                        backgroundColor: '#ef4444',
+                        animation: 'pulseDot 1.5s infinite'
+                      }} />
+                      <h4 style={{ 
+                        fontSize: '1rem', 
+                        fontWeight: '700', 
+                        color: '#dc2626',
+                        margin: '0'
+                      }}>
+                        {case_.worker?.first_name} {case_.worker?.last_name}
+                      </h4>
+                      <span style={{
+                        backgroundColor: '#dc2626',
+                        color: 'white',
+                        padding: '0.125rem 0.375rem',
+                        borderRadius: '0.25rem',
+                        fontSize: '0.625rem',
+                        fontWeight: '600'
+                      }}>
+                        NOT FIT
+                      </span>
+                    </div>
+                    
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.75rem', marginBottom: '0.75rem' }}>
+                      <div>
+                        <p style={{ fontSize: '0.75rem', color: '#6b7280', margin: '0 0 0.25rem 0' }}>
+                          Email
+                        </p>
+                        <p style={{ fontSize: '0.875rem', fontWeight: '500', color: '#1f2937', margin: '0' }}>
+                          {case_.worker?.email}
+                        </p>
+                      </div>
+                      
+                      <div>
+                        <p style={{ fontSize: '0.75rem', color: '#6b7280', margin: '0 0 0.25rem 0' }}>
+                          Team
+                        </p>
+                        <p style={{ fontSize: '0.875rem', fontWeight: '500', color: '#1f2937', margin: '0' }}>
+                          {case_.worker?.team || case_.team}
+                        </p>
+                      </div>
+                      
+                      <div>
+                        <p style={{ fontSize: '0.75rem', color: '#6b7280', margin: '0 0 0.25rem 0' }}>
+                          Fatigue Level
+                        </p>
+                        <p style={{ fontSize: '0.875rem', fontWeight: '500', color: '#1f2937', margin: '0' }}>
+                          {case_.fatigue_level}/10
+                        </p>
+                      </div>
+                      
+                      <div>
+                        <p style={{ fontSize: '0.75rem', color: '#6b7280', margin: '0 0 0.25rem 0' }}>
+                          Mood
+                        </p>
+                        <p style={{ fontSize: '0.875rem', fontWeight: '500', color: '#1f2937', margin: '0' }}>
+                          {case_.mood}
+                        </p>
+                      </div>
+                    </div>
+                    
+                    {case_.notes && (
+                      <div style={{ marginBottom: '0.75rem' }}>
+                        <p style={{ fontSize: '0.75rem', color: '#6b7280', margin: '0 0 0.25rem 0' }}>
+                          Notes
+                        </p>
+                        <p style={{ fontSize: '0.875rem', color: '#1f2937', margin: '0', fontStyle: 'italic' }}>
+                          "{case_.notes}"
+                        </p>
+                      </div>
+                    )}
+                    
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{
+                        fontSize: '0.75rem',
+                        color: '#9ca3af'
+                      }}>
+                        Submitted: {new Date(case_.submitted_at).toLocaleString()}
+                      </span>
+                      
+                      <div style={{ display: 'flex', gap: '0.5rem' }}>
+                        <button
+                          style={{
+                            background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '0.375rem',
+                            padding: '0.375rem 0.75rem',
+                            fontSize: '0.75rem',
+                            fontWeight: '600',
+                            cursor: 'pointer',
+                            transition: 'all 0.2s ease'
+                          }}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            console.log('View Details clicked for case:', case_);
+                            handleViewDetails(case_);
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.transform = 'translateY(-1px)';
+                            e.currentTarget.style.boxShadow = '0 4px 8px rgba(59, 130, 246, 0.3)';
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.transform = 'translateY(0)';
+                            e.currentTarget.style.boxShadow = 'none';
+                          }}
+                        >
+                          View Details
+                        </button>
+                        
+                        <button
+                          style={{
+                            background: 'linear-gradient(135deg, #16a34a, #15803d)',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '0.375rem',
+                            padding: '0.375rem 0.75rem',
+                            fontSize: '0.75rem',
+                            fontWeight: '600',
+                            cursor: 'pointer',
+                            transition: 'all 0.2s ease'
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.transform = 'translateY(-1px)';
+                            e.currentTarget.style.boxShadow = '0 4px 8px rgba(22, 163, 74, 0.3)';
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.transform = 'translateY(0)';
+                            e.currentTarget.style.boxShadow = 'none';
+                          }}
+                        >
+                          Contact Worker
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
 
-          {/* Content */}
-          <div style={{ marginTop: '2rem' }}>
-            <p style={{ 
-              fontSize: '2.5rem', 
-              fontWeight: 'bold', 
-              color: '#1a202c',
-              margin: '0 0 0.5rem 0',
-              textShadow: '0 2px 4px rgba(0,0,0,0.1)'
-            }}>
-            {dashboardData.safetyMetrics.activeCases}
-          </p>
-            <h3 style={{ 
-              fontSize: '1rem', 
-              fontWeight: '600', 
-              color: '#1a202c', 
-              margin: '0 0 0.25rem 0',
-              textShadow: '0 1px 2px rgba(0,0,0,0.1)'
-            }}>
-              Active Cases
-            </h3>
-            <p style={{ 
-              fontSize: '0.875rem', 
-              color: '#6b7280',
-              margin: '0',
-              textShadow: '0 1px 2px rgba(0,0,0,0.05)'
-            }}>
-            Currently being managed
-          </p>
-          </div>
-        </div>
-
-        <div style={{ 
-          background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.9) 0%, rgba(22, 163, 74, 0.05) 100%)',
-          backdropFilter: 'blur(10px)',
-          padding: '1.5rem', 
-          borderRadius: '1rem', 
-          border: '1px solid rgba(22, 163, 74, 0.1)',
-          boxShadow: '0 8px 32px 0 rgba(31, 38, 135, 0.37)',
-          transition: 'all 0.3s ease-in-out',
-          cursor: 'pointer',
-          position: 'relative',
-          overflow: 'hidden'
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.transform = 'translateY(-2px)';
-          e.currentTarget.style.boxShadow = '0 12px 40px 0 rgba(31, 38, 135, 0.5)';
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.transform = 'translateY(0)';
-          e.currentTarget.style.boxShadow = '0 8px 32px 0 rgba(31, 38, 135, 0.37)';
-        }}>
-          {/* Icon */}
-          <div style={{
-            position: 'absolute',
-            top: '1rem',
-            left: '1rem',
-            width: '48px',
-            height: '48px',
-            backgroundColor: '#16a34a',
-            borderRadius: '50%',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            boxShadow: '0 4px 12px rgba(22, 163, 74, 0.3)'
-          }}>
-            <svg width="24" height="24" fill="white" viewBox="0 0 24 24">
-              <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
-            </svg>
-          </div>
-
-          {/* Progress Indicator */}
-          <div style={{
-            position: 'absolute',
-            top: '1rem',
-            right: '1rem',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'flex-end'
-          }}>
-            <div style={{
-              width: '40px',
-              height: '4px',
-              backgroundColor: 'rgba(22, 163, 74, 0.2)',
-              borderRadius: '2px',
-              marginBottom: '4px'
-            }}>
+          {/* Active Cases Pagination Buttons */}
+          {activeCases.length > activeCasesPageSize && (() => {
+            const totalPages = Math.ceil(activeCases.length / activeCasesPageSize);
+            return (
               <div style={{
-                width: `${dashboardData.complianceMetrics.todayCompletionRate}%`,
-                height: '100%',
-                backgroundColor: '#16a34a',
-                borderRadius: '2px'
-              }}></div>
-            </div>
-            <span style={{
-              fontSize: '0.75rem',
-              fontWeight: '600',
-              color: '#16a34a'
-            }}>{dashboardData.complianceMetrics.todayCompletionRate}%</span>
-          </div>
+                display: 'flex',
+                justifyContent: 'center',
+                alignItems: 'center',
+                gap: '0.5rem',
+                marginTop: '1.5rem',
+                padding: '1rem',
+                backgroundColor: '#f9fafb',
+                borderRadius: '0.5rem',
+                border: '1px solid #e5e7eb'
+              }}>
+                {/* Previous Button */}
+                <button
+                  onClick={() => setActiveCasesPage(Math.max(1, activeCasesPage - 1))}
+                  disabled={activeCasesPage === 1}
+                  style={{
+                    padding: '0.5rem 0.75rem',
+                    borderRadius: '0.375rem',
+                    border: '1px solid #d1d5db',
+                    backgroundColor: activeCasesPage === 1 ? '#f3f4f6' : 'white',
+                    color: activeCasesPage === 1 ? '#9ca3af' : '#374151',
+                    fontSize: '0.875rem',
+                    fontWeight: '500',
+                    cursor: activeCasesPage === 1 ? 'not-allowed' : 'pointer',
+                    transition: 'all 0.2s ease'
+                  }}
+                >
+                  « Previous
+                </button>
 
-          {/* Content */}
-          <div style={{ marginTop: '2rem' }}>
-            <p style={{ 
-              fontSize: '2.5rem', 
-              fontWeight: 'bold', 
-              color: '#1a202c',
-              margin: '0 0 0.5rem 0',
-              textShadow: '0 2px 4px rgba(0,0,0,0.1)'
-            }}>
-            {dashboardData.complianceMetrics.todayCheckIns}
-          </p>
-            <h3 style={{ 
-              fontSize: '1rem', 
-              fontWeight: '600', 
-              color: '#1a202c', 
-              margin: '0 0 0.25rem 0',
-              textShadow: '0 1px 2px rgba(0,0,0,0.1)'
-            }}>
-              Today's Check-ins
-            </h3>
-            <p style={{ 
-              fontSize: '0.875rem', 
-              color: '#6b7280',
-              margin: '0',
-              textShadow: '0 1px 2px rgba(0,0,0,0.05)'
-            }}>
-            {dashboardData.complianceMetrics.todayCompletionRate}% completion rate
-          </p>
-          </div>
-        </div>
+                {/* Page Numbers */}
+                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                  let pageNum: number;
+                  if (totalPages <= 5) {
+                    pageNum = i + 1;
+                  } else if (activeCasesPage <= 3) {
+                    pageNum = i + 1;
+                  } else if (activeCasesPage >= totalPages - 2) {
+                    pageNum = totalPages - 4 + i;
+                  } else {
+                    pageNum = activeCasesPage - 2 + i;
+                  }
 
-        <div style={{ 
-          background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.9) 0%, rgba(220, 38, 38, 0.05) 100%)',
-          backdropFilter: 'blur(10px)',
-          padding: '1.5rem', 
-          borderRadius: '1rem', 
-          border: '1px solid rgba(220, 38, 38, 0.1)',
-          boxShadow: '0 8px 32px 0 rgba(31, 38, 135, 0.37)',
-          transition: 'all 0.3s ease-in-out',
-          cursor: 'pointer',
-          position: 'relative',
-          overflow: 'hidden'
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.transform = 'translateY(-2px)';
-          e.currentTarget.style.boxShadow = '0 12px 40px 0 rgba(31, 38, 135, 0.5)';
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.transform = 'translateY(0)';
-          e.currentTarget.style.boxShadow = '0 8px 32px 0 rgba(31, 38, 135, 0.37)';
-        }}>
-          {/* Icon */}
-          <div style={{
-            position: 'absolute',
-            top: '1rem',
-            left: '1rem',
-            width: '48px',
-            height: '48px',
-            backgroundColor: '#dc2626',
-            borderRadius: '50%',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            boxShadow: '0 4px 12px rgba(220, 38, 38, 0.3)'
-          }}>
-            <svg width="24" height="24" fill="white" viewBox="0 0 24 24">
-              <path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
-            </svg>
-          </div>
+                  return (
+                    <button
+                      key={pageNum}
+                      onClick={() => setActiveCasesPage(pageNum)}
+                      style={{
+                        padding: '0.5rem 0.75rem',
+                        borderRadius: '0.375rem',
+                        border: '1px solid #d1d5db',
+                        backgroundColor: activeCasesPage === pageNum ? '#3b82f6' : 'white',
+                        color: activeCasesPage === pageNum ? 'white' : '#374151',
+                        fontSize: '0.875rem',
+                        fontWeight: '500',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s ease',
+                        minWidth: '2.5rem'
+                      }}
+                    >
+                      {pageNum}
+                    </button>
+                  );
+                })}
 
-          {/* Progress Indicator */}
-          <div style={{
-            position: 'absolute',
-            top: '1rem',
-            right: '1rem',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'flex-end'
-          }}>
-            <div style={{
-              width: '32px',
-              height: '32px',
-              borderRadius: '50%',
-              border: '3px solid rgba(220, 38, 38, 0.2)',
-              borderTop: '3px solid #dc2626',
-              transform: 'rotate(-90deg)',
-              marginBottom: '4px'
-            }}></div>
-            <span style={{
-              fontSize: '0.75rem',
-              fontWeight: '600',
-              color: '#dc2626'
-            }}>0%</span>
-          </div>
+                {/* Next Button */}
+                <button
+                  onClick={() => setActiveCasesPage(Math.min(totalPages, activeCasesPage + 1))}
+                  disabled={activeCasesPage === totalPages}
+                  style={{
+                    padding: '0.5rem 0.75rem',
+                    borderRadius: '0.375rem',
+                    border: '1px solid #d1d5db',
+                    backgroundColor: activeCasesPage === totalPages ? '#f3f4f6' : 'white',
+                    color: activeCasesPage === totalPages ? '#9ca3af' : '#374151',
+                    fontSize: '0.875rem',
+                    fontWeight: '500',
+                    cursor: activeCasesPage === totalPages ? 'not-allowed' : 'pointer',
+                    transition: 'all 0.2s ease'
+                  }}
+                >
+                  Next »
+                </button>
+              </div>
+            );
+          })()}
+        </Box>
+      )}
 
-          {/* Content */}
-          <div style={{ marginTop: '2rem' }}>
-            <p style={{ 
-              fontSize: '2.5rem', 
-              fontWeight: 'bold', 
-              color: '#1a202c',
-              margin: '0 0 0.5rem 0',
-              textShadow: '0 2px 4px rgba(0,0,0,0.1)'
-            }}>
-              {dashboardData.safetyMetrics.monthlyIncidents}
-            </p>
-            <h3 style={{ 
-              fontSize: '1rem', 
-              fontWeight: '600', 
-              color: '#1a202c', 
-              margin: '0 0 0.25rem 0',
-              textShadow: '0 1px 2px rgba(0,0,0,0.1)'
-            }}>
-              Monthly Incidents
-            </h3>
-            <p style={{ 
-              fontSize: '0.875rem', 
-              color: '#6b7280',
-              margin: '0',
-              textShadow: '0 1px 2px rgba(0,0,0,0.05)'
-            }}>
-              Trend: {dashboardData.safetyMetrics.incidentTrend}
-            </p>
-          </div>
-        </div>
-      </div>
+    
 
-      {/* Recent Activity */}
-      <div style={{ 
-        display: 'grid', 
-        gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', 
-        gap: '2rem', 
-        marginBottom: '2rem',
-        position: 'relative',
-        zIndex: 1
-      }}>
-        <div style={{ 
-          background: 'rgba(255, 255, 255, 0.8)',
-          backdropFilter: 'blur(10px)',
-          padding: '1.5rem', 
-          borderRadius: '1rem', 
-          border: '1px solid rgba(255, 255, 255, 0.2)',
-          boxShadow: '0 8px 32px 0 rgba(31, 38, 135, 0.37)',
-          transition: 'all 0.3s ease-in-out'
-        }}>
-          <h3 style={{ 
-            fontSize: '1.25rem', 
-            fontWeight: '600', 
-            color: '#1a202c', 
-            marginBottom: '1rem',
-            textShadow: '0 1px 2px rgba(0,0,0,0.1)'
-          }}>
-            Recent Activity
-          </h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-            <div>
-              <h4 style={{ fontWeight: '500', color: '#374151', marginBottom: '0.5rem' }}>Active Cases</h4>
-              {dashboardData.activeCases && dashboardData.activeCases.length > 0 ? (
-                dashboardData.activeCases.map((case_: any, index: number) => (
-                  <div key={index} style={{ 
-                    fontSize: '0.875rem', 
-                    color: '#6b7280', 
-                    padding: '0.5rem', 
-                    backgroundColor: '#f9fafb', 
-                    borderRadius: '0.25rem',
-                    marginBottom: '0.25rem'
-                  }}>
-                    Case #{case_.caseNumber} - {case_.workerName}
-                  </div>
-                ))
-              ) : (
-                <div style={{ fontSize: '0.875rem', color: '#9ca3af', fontStyle: 'italic' }}>
-                  No active cases
-                </div>
-              )}
-            </div>
-            
-            <div>
-              <h4 style={{ fontWeight: '500', color: '#374151', marginBottom: '0.5rem' }}>Today's Check-ins</h4>
-              {dashboardData.todaysCheckIns && dashboardData.todaysCheckIns.length > 0 ? (
-                dashboardData.todaysCheckIns.map((checkIn: any, index: number) => (
-                  <div key={index} style={{ 
-                    fontSize: '0.875rem', 
-                    color: '#6b7280', 
-                    padding: '0.5rem', 
-                    backgroundColor: '#f9fafb', 
-                    borderRadius: '0.25rem',
-                    marginBottom: '0.25rem'
-                  }}>
-                    {checkIn.workerName} - {checkIn.type}
-                  </div>
-                ))
-              ) : (
-                <div style={{ fontSize: '0.875rem', color: '#9ca3af', fontStyle: 'italic' }}>
-                  No check-ins today
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
 
       {/* Team Members - Modern Card Layout */}
-      <div style={{ 
-        background: 'rgba(255, 255, 255, 0.8)',
-        backdropFilter: 'blur(10px)',
-        borderRadius: '1rem', 
-        border: '1px solid rgba(255, 255, 255, 0.2)',
-        boxShadow: '0 8px 32px 0 rgba(31, 38, 135, 0.37)',
+      <Box sx={{ 
+        background: { xs: 'white', md: 'rgba(255, 255, 255, 0.8)' },
+        backdropFilter: { md: 'blur(10px)' },
+        borderRadius: { xs: '12px', md: '1rem' },
+        border: { xs: 'none', md: '1px solid rgba(255, 255, 255, 0.2)' },
+        boxShadow: { xs: '0 2px 8px rgba(0,0,0,0.08)', md: '0 8px 32px 0 rgba(31, 38, 135, 0.37)' },
         transition: 'all 0.3s ease-in-out',
         position: 'relative',
-        zIndex: 1
+        zIndex: 1,
+        margin: { xs: '0 16px 16px 16px', md: '0 0 2rem 0' },
+        marginBottom: { xs: '16px', md: '2rem' }
       }}>
-        {/* Header with Search and Filter */}
-        <div style={{ 
-          padding: '1.5rem', 
+        {/* Header with Search and Filter - Mobile Optimized */}
+        <Box sx={{ 
+          padding: { xs: '20px', md: '1.5rem' },
           borderBottom: '1px solid #e5e7eb',
           display: 'flex',
+          flexDirection: { xs: 'column', md: 'row' },
           justifyContent: 'space-between',
-          alignItems: 'center'
+          alignItems: { xs: 'flex-start', md: 'center' },
+          gap: { xs: '1rem', md: 0 },
+          background: { xs: '#ffffff', md: 'transparent' }
         }}>
-          <div>
-            <h3 style={{ 
-              fontSize: '1.25rem', 
-              fontWeight: '600', 
+          <Box>
+            <Typography variant="h6" sx={{ 
+              fontSize: { xs: '1.1rem', md: '1.25rem' },
+              fontWeight: 600, 
               color: '#1a202c',
+              fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
               textShadow: '0 1px 2px rgba(0,0,0,0.1)',
               margin: '0 0 0.25rem 0'
             }}>
               Team Members
-            </h3>
-            <p style={{ 
-              fontSize: '0.875rem', 
+            </Typography>
+            <Typography variant="body2" sx={{ 
+              fontSize: { xs: '0.8rem', md: '0.875rem' },
               color: '#6b7280',
-              margin: '0'
+              margin: 0,
+              fontFamily: { xs: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', md: 'inherit' }
             }}>
               Your Team Members Overview
-            </p>
+            </Typography>
+          </Box>
+          
+          
+          <div style={{ 
+            display: 'flex', 
+            gap: window.innerWidth <= 768 ? '0.75rem' : '0.5rem',
+            alignItems: 'center',
+            flexWrap: window.innerWidth <= 768 ? 'wrap' : 'nowrap'
+          }}>
+            {/* Filter Dropdown */}
+            <select
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value)}
+              style={{
+                padding: '0.75rem',
+                border: '1px solid #d1d5db',
+                borderRadius: '8px',
+                fontSize: '0.875rem',
+                backgroundColor: '#ffffff',
+                fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+                outline: 'none',
+                minWidth: '120px',
+                cursor: 'pointer'
+              }}
+            >
+              <option value="all">All Members</option>
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
+              <option value="not_started">Not Started</option>
+              <option value="in_progress">In Progress</option>
+              <option value="completed">Completed</option>
+            </select>
+
+            {/* Mobile Filter Button */}
+            {window.innerWidth <= 768 ? (
+              <button 
+                type="button"
+                style={{
+                padding: '0.5rem 1rem',
+                borderRadius: '12px',
+                border: '1px solid #d1d5db',
+                backgroundColor: '#ffffff',
+                color: '#6b7280',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.25rem',
+                fontSize: '0.875rem',
+                fontWeight: '500',
+                fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+                transition: 'all 0.2s ease',
+                boxShadow: '0 1px 2px rgba(0, 0, 0, 0.05)'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = '#f9fafb';
+                e.currentTarget.style.borderColor = '#9ca3af';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = '#ffffff';
+                e.currentTarget.style.borderColor = '#d1d5db';
+              }}>
+                <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586v.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-4.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+                </svg>
+                Filter
+              </button>
+            ) : null}
           </div>
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            {/* Search Button */}
-            <button style={{
-              width: '40px',
-              height: '40px',
-              borderRadius: '50%',
-              border: 'none',
-              backgroundColor: '#f3f4f6',
-              color: '#6b7280',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              transition: 'all 0.2s ease'
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = '#e5e7eb';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor = '#f3f4f6';
-            }}>
-              <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
-            </button>
-            {/* Filter Button */}
-            <button style={{
-              width: '40px',
-              height: '40px',
-              borderRadius: '50%',
-              border: 'none',
-              backgroundColor: '#f3f4f6',
-              color: '#6b7280',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              transition: 'all 0.2s ease'
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = '#e5e7eb';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor = '#f3f4f6';
-            }}>
-              <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
-              </svg>
-            </button>
-          </div>
-        </div>
+        </Box>
 
         {/* Team Members Cards */}
-        <div style={{ padding: '1.5rem' }}>
-          {teamMembersLoading ? (
+        <div style={{ padding: window.innerWidth <= 768 ? '1.25rem' : '1.5rem' }}>
+          {loading ? (
             <div style={{ 
               display: 'flex', 
               justifyContent: 'center', 
@@ -1222,34 +2364,97 @@ const TeamLeaderDashboard: React.FC = () => {
               </span>
             </div>
           ) : teamMembers.length > 0 ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-              {teamMembers.map((member, index) => (
+            <div style={{ 
+              display: 'flex', 
+              flexDirection: 'column', 
+              gap: window.innerWidth <= 768 ? '1.25rem' : '0.75rem' 
+            }}>
+              {/* Search Results Counter */}
+              {(() => {
+                const filteredMembers = teamMembers.filter((member) => {
+                  const matchesSearch = searchQuery === '' || 
+                    member.memberName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                    member.email.toLowerCase().includes(searchQuery.toLowerCase());
+                  
+                  const memberStatus = member.workReadinessStatus || 'Not Started';
+                  
+                  const matchesStatus = filterStatus === 'all' || 
+                    (filterStatus === 'active' && member.loggedInToday) ||
+                    (filterStatus === 'inactive' && !member.loggedInToday) ||
+                    (filterStatus === 'not_started' && memberStatus === 'Not Started') ||
+                    (filterStatus === 'completed' && memberStatus === 'Completed');
+                  
+                  return matchesSearch && matchesStatus;
+                });
+                
+                return (searchQuery || filterStatus !== 'all') && (
+                  <div style={{ 
+                    fontSize: '0.875rem', 
+                    color: '#6b7280', 
+                    marginBottom: '1rem' 
+                  }}>
+                    {filteredMembers.length} member{filteredMembers.length !== 1 ? 's' : ''} found
+                  </div>
+                );
+              })()}
+              
+              {teamMembers
+                .filter((member) => {
+                  const matchesSearch = searchQuery === '' || 
+                    member.memberName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                    member.email.toLowerCase().includes(searchQuery.toLowerCase());
+                  
+                  const memberStatus = member.workReadinessStatus || 'Not Started';
+                  
+                  const matchesStatus = filterStatus === 'all' || 
+                    (filterStatus === 'active' && member.loggedInToday) ||
+                    (filterStatus === 'inactive' && !member.loggedInToday) ||
+                    (filterStatus === 'not_started' && memberStatus === 'Not Started') ||
+                    (filterStatus === 'completed' && memberStatus === 'Completed');
+                  
+                  return matchesSearch && matchesStatus;
+                })
+                .map((member, index) => {
+                // Find work readiness data for this member
+                const memberWorkReadiness = dashboardData?.teamPerformance?.find(p => p.email === member.email);
+                
+                return (
                 <div 
-                  key={member._id} 
+                  key={member.email} 
+                  className={`mobile-list-item`}
                   style={{ 
                     display: 'flex',
-                    alignItems: 'center',
-                    padding: '1rem',
-                    backgroundColor: index === 0 ? '#f9fafb' : 'transparent',
-                    borderRadius: '0.75rem',
-                    transition: 'all 0.2s ease',
+                    alignItems: window.innerWidth <= 768 ? 'flex-start' : 'center',
+                    padding: window.innerWidth <= 768 ? '28px 24px' : '1rem',
+                    backgroundColor: index === 0 ? '#f9fafb' : window.innerWidth <= 768 ? 'white' : 'transparent',
+                    borderRadius: window.innerWidth <= 768 ? '20px' : '0.75rem',
+                    transition: 'all 0.15s cubic-bezier(0.4, 0, 0.2, 1)',
                     cursor: 'pointer',
-                    border: '1px solid transparent'
+                    border: window.innerWidth <= 768 ? '1px solid rgba(0,0,0,0.08)' : '1px solid rgba(0,0,0,0.06)',
+                    boxShadow: window.innerWidth <= 768 ? '0 6px 20px rgba(0,0,0,0.08), 0 2px 8px rgba(0,0,0,0.04)' : 'none',
+                    marginBottom: window.innerWidth <= 768 ? '0' : '0',
+                    position: 'relative',
+                    minHeight: window.innerWidth <= 768 ? '130px' : 'auto',
+                    fontFamily: window.innerWidth <= 768 ? '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' : 'inherit'
                   }}
                   onMouseEnter={(e) => {
+                    if (window.innerWidth > 768) {
                     e.currentTarget.style.backgroundColor = '#f9fafb';
                     e.currentTarget.style.borderColor = '#e5e7eb';
+                    }
                   }}
                   onMouseLeave={(e) => {
+                    if (window.innerWidth > 768) {
                     e.currentTarget.style.backgroundColor = index === 0 ? '#f9fafb' : 'transparent';
                     e.currentTarget.style.borderColor = 'transparent';
+                    }
                   }}
                 >
                   {/* Profile Picture */}
                   {member.profileImage ? (
                     <img
-                      {...createImageProps(member.profileImage)}
-                      alt={`${member.firstName} ${member.lastName}`}
+                      {...getProfileImageProps(member.profileImage)}
+                      alt={`${member.memberName || 'User'}`}
                       style={{
                         width: '48px',
                         height: '48px',
@@ -1260,93 +2465,278 @@ const TeamLeaderDashboard: React.FC = () => {
                       }}
                     />
                   ) : (
-                    <div style={{
-                      width: '48px',
-                      height: '48px',
+                    <div className="mobile-icon" style={{
+                      width: window.innerWidth <= 768 ? '52px' : '48px',
+                      height: window.innerWidth <= 768 ? '52px' : '48px',
                       borderRadius: '50%',
                       backgroundColor: '#e5e7eb',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
-                      marginRight: '1rem',
-                      fontSize: '1.25rem',
-                      fontWeight: '600',
+                      marginRight: window.innerWidth <= 768 ? '1.25rem' : '1rem',
+                      fontSize: window.innerWidth <= 768 ? '18px' : '1.25rem',
+                      fontWeight: '700',
+                      fontFamily: window.innerWidth <= 768 ? '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' : 'inherit',
+                      letterSpacing: '0.025em',
+                      textTransform: 'uppercase',
                       background: `linear-gradient(135deg, ${
-                        member.loggedInToday ? '#10b981' : '#ef4444'
+                        member.loggedInToday ? '#22c55e' : '#ef4444'
                       } 0%, ${
-                        member.loggedInToday ? '#059669' : '#dc2626'
+                        member.loggedInToday ? '#16a34a' : '#dc2626'
                       } 100%)`,
-                      color: 'white'
+                      color: 'white',
+                      boxShadow: window.innerWidth <= 768 ? '0 4px 16px rgba(0,0,0,0.15), 0 2px 6px rgba(0,0,0,0.1)' : '0 2px 4px rgba(0,0,0,0.1)',
+                      border: window.innerWidth <= 768 ? `3px solid ${member.loggedInToday ? '#16a34a' : '#dc2626'}` : 'none',
+                      position: 'relative',
+                      overflow: 'hidden'
                     }}>
-                      {member.firstName.charAt(0)}{member.lastName.charAt(0)}
+                      {(() => {
+                        const name = member.memberName?.charAt(0);
+                        // Make sure we get proper letter
+                        return name ? name.toUpperCase() : 'U';
+                      })()}
+                      {/* Status indicator dot */}
+                      {window.innerWidth <= 768 && (
+                        <div style={{
+                          position: 'absolute',
+                          bottom: '2px',
+                          right: '2px',
+                          width: '14px',
+                          height: '14px',
+                          borderRadius: '50%',
+                          backgroundColor: member.loggedInToday ? '#22c55e' : '#ef4444',
+                          border: '3px solid white',
+                          boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
+                        }} />
+                      )}
                     </div>
                   )}
 
                   {/* Member Info */}
-                  <div style={{ flex: 1 }}>
+                  <div style={{ 
+                    flex: 1, 
+                    minWidth: 0,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: window.innerWidth <= 768 ? '14px' : '4px',
+                    paddingRight: window.innerWidth <= 768 ? '16px' : '12px',
+                    paddingTop: window.innerWidth <= 768 ? '8px' : '0',
+                    paddingBottom: window.innerWidth <= 768 ? '6px' : '0'
+                  }}>
+                    {/* Name Row with Tags */}
                     <div style={{ 
-                      fontSize: '0.875rem', 
-                      fontWeight: '600', 
-                      color: '#111827',
-                      marginBottom: '0.25rem'
+                      display: 'flex', 
+                      flexDirection: window.innerWidth <= 768 ? 'column' : 'row',
+                      alignItems: window.innerWidth <= 768 ? 'flex-start' : 'center',
+                      gap: window.innerWidth <= 768 ? '12px' : '8px',
+                      marginBottom: window.innerWidth <= 768 ? '0' : '6px'
                     }}>
-                      {member.firstName} {member.lastName}
+                      <div style={{ 
+                        fontSize: window.innerWidth <= 768 ? '17px' : '0.875rem', 
+                        fontWeight: window.innerWidth <= 768 ? '700' : '600', 
+                        color: '#111827',
+                        lineHeight: window.innerWidth <= 768 ? '1.4' : 'inherit',
+                        fontFamily: window.innerWidth <= 768 ? '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' : 'inherit',
+                        flex: 'none',
+                        marginBottom: window.innerWidth <= 768 ? '2px' : '0'
+                      }}>
+                        {member.memberName || 'User'}
+                      </div>
+                      
+                      {/* Work Readiness & Role Tags */}
+                      {window.innerWidth <= 768 && (
+                        <div style={{ 
+                          display: 'flex', 
+                          flexWrap: 'wrap', 
+                          gap: window.innerWidth <= 768 ? '8px' : '6px',
+                          alignItems: 'center',
+                          marginTop: window.innerWidth <= 768 ? '6px' : '4px'
+                        }}>
+                          <span style={{ 
+                            padding: window.innerWidth <= 768 ? '6px 12px' : '4px 8px', 
+                            fontSize: window.innerWidth <= 768 ? '12px' : '11px', 
+                            fontWeight: window.innerWidth <= 768 ? '600' : '500', 
+                            borderRadius: window.innerWidth <= 768 ? '10px' : '8px', 
+                            backgroundColor: memberWorkReadiness?.workReadinessStatus === 'Completed' ? '#dcfce7' : '#fef3c7', 
+                            color: memberWorkReadiness?.workReadinessStatus === 'Completed' ? '#166534' : '#92400e',
+                            border: 'none',
+                            display: 'inline-flex',
+                            whiteSpace: 'nowrap'
+                          }}>
+                            {memberWorkReadiness?.workReadinessStatus || 'Not Started'}
+                          </span>
+                          <span style={{ 
+                            padding: window.innerWidth <= 768 ? '6px 12px' : '4px 8px', 
+                            fontSize: window.innerWidth <= 768 ? '12px' : '11px', 
+                            fontWeight: window.innerWidth <= 768 ? '600' : '500', 
+                            borderRadius: window.innerWidth <= 768 ? '10px' : '8px', 
+                            backgroundColor: '#dbeafe', 
+                            color: '#1e40af',
+                            border: 'none',
+                            display: 'inline-flex',
+                            whiteSpace: 'nowrap'
+                          }}>
+                            {member.role}
+                          </span>
+                        </div>
+                      )}
                     </div>
+
+                    {/* Email */}
+                    <div style={{ 
+                      fontSize: window.innerWidth <= 768 ? '14px' : '0.75rem', 
+                      color: window.innerWidth <= 768 ? '#64748b' : '#6b7280',
+                      lineHeight: window.innerWidth <= 768 ? '1.3' : 'inherit',
+                      fontFamily: window.innerWidth <= 768 ? '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' : 'inherit',
+                      fontWeight: window.innerWidth <= 768 ? '500' : 'inherit'
+                    }}>
+                      {(() => {
+                        if (window.innerWidth <= 768) {
+                          const email = member.email;
+                          if (email && email.length > 20) {
+                            return email.substring(0, 20) + '...';
+                          }
+                          return email;
+                        }
+                        return member.email;
+                      })()}
+                    </div>
+
+                    {/* Status Badge */}
                     <div style={{ 
                       fontSize: '0.75rem', 
-                      color: '#6b7280',
-                      marginBottom: '0.25rem'
+                      fontWeight: '600',
+                      padding: '4px 8px',
+                      borderRadius: '12px',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      width: 'fit-content',
+                      marginTop: '4px',
+                      border: '1px solid',
+                      ...(member.loggedInToday ? {
+                        color: '#22c55e',
+                        backgroundColor: '#f0fdf4',
+                        borderColor: '#bbf7d0',
+                      } : {
+                        color: '#ef4444',
+                        backgroundColor: '#fef2f2',
+                        borderColor: '#fecaca',
+                      })
                     }}>
-                      {member.email}
+                      <div style={{
+                        width: '6px',
+                        height: '6px',
+                        borderRadius: '50%',
+                        backgroundColor: member.loggedInToday ? '#22c55e' : '#ef4444'
+                      }}></div>
+                      {member.loggedInToday ? 'Logged In' : 'Not Logged In'}
                     </div>
-                    <div style={{ 
-                      fontSize: '0.75rem', 
-                      color: member.loggedInToday ? '#059669' : '#dc2626',
-                      fontWeight: member.loggedInToday ? '500' : '600'
-                    }}>
-                      {member.loggedInToday 
-                        ? `Last login: ${member.lastLogin ? new Date(member.lastLogin).toLocaleDateString() : 'Today'}`
-                        : 'Not logged in today'
-                      }
-                    </div>
+                    
+                    {/* Login Time Display - Only show if logged in today */}
+                    {member.loggedInToday && member.loginTime && (
+                      <div style={{
+                        fontSize: '0.7rem',
+                        color: '#6b7280',
+                        marginTop: '2px',
+                        fontStyle: 'italic'
+                      }}>
+                        Last login: {new Date(member.loginTime).toLocaleString('en-PH', {
+                          timeZone: 'Asia/Manila',
+                          year: 'numeric',
+                          month: 'short',
+                          day: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })}
+                      </div>
+                    )}
                   </div>
 
-                  {/* Status and Role */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                    {/* Role Badge */}
-                    <span style={{ 
-                      padding: '0.25rem 0.5rem', 
-                      display: 'inline-flex', 
-                      fontSize: '0.75rem', 
-                      fontWeight: '500', 
-                      borderRadius: '0.375rem', 
-                      backgroundColor: '#dbeafe', 
-                      color: '#1e40af' 
-                    }}>
-                      {member.role}
-                    </span>
-
-                    {/* Status Indicator */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <div style={{
-                        width: '8px',
-                        height: '8px',
-                        borderRadius: '50%',
-                        backgroundColor: member.loggedInToday ? '#10b981' : '#ef4444'
-                      }}></div>
+                  {/* Desktop Work Readiness Status */}
+                  {window.innerWidth > 768 && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', minWidth: 0 }}>
+                      {/* Work Readiness Badge */}
                       <span style={{ 
+                        padding: '4px 8px', 
+                        display: 'inline-flex', 
+                        alignItems: 'center',
+                        gap: '4px',
                         fontSize: '0.75rem', 
-                        fontWeight: '500',
-                        color: member.loggedInToday ? '#059669' : '#dc2626'
+                        fontWeight: '600', 
+                        borderRadius: '12px', 
+                        border: '1px solid',
+                        whiteSpace: 'nowrap',
+                        ...(memberWorkReadiness?.workReadinessStatus === 'Completed' ? {
+                          backgroundColor: '#f0fdf4',
+                          color: '#22c55e',
+                          borderColor: '#bbf7d0',
+                        } : {
+                          backgroundColor: '#f9fafb',
+                          color: '#9ca3af',
+                          borderColor: '#d1d5db',
+                        })
                       }}>
-                        {member.loggedInToday ? 'Active Today' : 'Not Active Today'}
+                        <div style={{
+                          width: '6px',
+                          height: '6px',
+                          borderRadius: '50%',
+                          backgroundColor: memberWorkReadiness?.workReadinessStatus === 'Completed' ? '#22c55e' : '#9ca3af'
+                        }}></div>
+                        {memberWorkReadiness?.workReadinessStatus || 'Not Started'}
                       </span>
-                    </div>
 
-                    {/* Options Button */}
-                    <button style={{
-                      width: '32px',
-                      height: '32px',
+                      {/* Role Badge - Hidden on Desktop */}
+                      {/* <span style={{ 
+                        padding: '0.25rem 0.5rem', 
+                        display: 'inline-flex', 
+                        fontSize: '0.75rem', 
+                        fontWeight: '500', 
+                        borderRadius: '0.375rem', 
+                        backgroundColor: '#dbeafe', 
+                        color: '#1e40af',
+                        whiteSpace: 'nowrap'
+                      }}>
+                        {member.role}
+                      </span> */}
+
+                      {/* Options Button */}
+                      <button 
+                        type="button"
+                        style={{
+                        width: '32px',
+                        height: '32px',
+                        borderRadius: '50%',
+                        border: 'none',
+                        backgroundColor: 'transparent',
+                        color: '#6b7280',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        transition: 'all 0.2s ease',
+                        flex: 'none'
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = '#f3f4f6';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                      }}>
+                        <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24">
+                          <path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/>
+                        </svg>
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Mobile Options Button */}
+                  {window.innerWidth <= 768 && (
+                    <button 
+                      type="button"
+                      style={{
+                      width: '28px',
+                      height: '28px',
                       borderRadius: '50%',
                       border: 'none',
                       backgroundColor: 'transparent',
@@ -1355,7 +2745,9 @@ const TeamLeaderDashboard: React.FC = () => {
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
-                      transition: 'all 0.2s ease'
+                      transition: 'all 0.2s ease',
+                      flex: 'none',
+                      marginLeft: 'auto'
                     }}
                     onMouseEnter={(e) => {
                       e.currentTarget.style.backgroundColor = '#f3f4f6';
@@ -1363,13 +2755,14 @@ const TeamLeaderDashboard: React.FC = () => {
                     onMouseLeave={(e) => {
                       e.currentTarget.style.backgroundColor = 'transparent';
                     }}>
-                      <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24">
+                      <svg width="14" height="14" fill="currentColor" viewBox="0 0 24 24">
                         <path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/>
                       </svg>
                     </button>
-                  </div>
+                  )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           ) : (
             <div style={{ 
@@ -1390,59 +2783,165 @@ const TeamLeaderDashboard: React.FC = () => {
           )}
         </div>
 
-        {/* Pagination Controls */}
+        {/* Pagination Controls - Mobile Optimized */}
         {teamMembers.length > 0 && teamMembersTotal > teamMembersPageSize && (
           <div style={{ 
-            padding: '1rem 1.5rem',
+            padding: window.innerWidth <= 768 ? '0.75rem 1rem' : '1rem 1.5rem',
             borderTop: '1px solid #e5e7eb',
             display: 'flex',
+            flexDirection: window.innerWidth <= 768 ? 'column' : 'row',
             justifyContent: 'space-between',
-            alignItems: 'center',
+            alignItems: window.innerWidth <= 768 ? 'flex-start' : 'center',
+            gap: window.innerWidth <= 768 ? '0.75rem' : '0',
             backgroundColor: '#f9fafb'
           }}>
-            {/* Items per page selector */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>Show:</span>
+            {/* Summary Info */}
+            <div style={{ 
+              fontSize: window.innerWidth <= 768 ? '0.8rem' : '0.875rem', 
+              color: '#6b7280',
+              fontFamily: window.innerWidth <= 768 ? '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' : 'inherit',
+              textAlign: window.innerWidth <= 768 ? 'center' : 'left',
+              width: window.innerWidth <= 768 ? '100%' : 'auto'
+            }}>
+              Showing {((teamMembersPage - 1) * teamMembersPageSize) + 1} to {Math.min(teamMembersPage * teamMembersPageSize, teamMembersTotal)} of {teamMembersTotal} team members
+            </div>
+            {/* Items per page selector - Mobile Optimized */}
+            <div style={{ 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: window.innerWidth <= 768 ? '0.5rem' : '0.5rem',
+              flexWrap: window.innerWidth <= 768 ? 'wrap' : 'nowrap',
+              fontSize: window.innerWidth <= 768 ? '0.8rem' : '0.875rem'
+            }}>
+              <span style={{ 
+                fontSize: window.innerWidth <= 768 ? '0.8rem' : '0.875rem', 
+                color: '#6b7280',
+                fontFamily: window.innerWidth <= 768 ? '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' : 'inherit'
+              }}>Show:</span>
               <select 
                 value={teamMembersPageSize}
                 onChange={(e) => {
-                  setTeamMembersPageSize(Number(e.target.value));
+                  const newPageSize = parseInt(e.target.value);
+                  setTeamMembersPageSize(newPageSize);
                   setTeamMembersPage(1); // Reset to first page when changing page size
                 }}
                 style={{
-                  padding: '0.25rem 0.5rem',
+                  padding: window.innerWidth <= 768 ? '0.4rem 0.5rem' : '0.25rem 0.5rem',
                   border: '1px solid #d1d5db',
-                  borderRadius: '0.375rem',
-                  fontSize: '0.875rem',
+                  borderRadius: window.innerWidth <= 768 ? '8px' : '0.375rem',
+                  fontSize: window.innerWidth <= 768 ? '0.8rem' : '0.875rem',
                   backgroundColor: 'white',
-                  color: '#374151'
+                  color: '#374151',
+                  fontFamily: window.innerWidth <= 768 ? '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' : 'inherit',
+                  minWidth: '60px'
                 }}
               >
                 <option value={5}>5</option>
                 <option value={10}>10</option>
                 <option value={20}>20</option>
                 <option value={50}>50</option>
+                <option value={100}>100</option>
               </select>
-              <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>
+              <span style={{ 
+                fontSize: window.innerWidth <= 768 ? '0.8rem' : '0.875rem', 
+                color: '#6b7280',
+                fontFamily: window.innerWidth <= 768 ? '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' : 'inherit'
+              }}>
                 of {teamMembersTotal} members
               </span>
             </div>
 
-            {/* Pagination buttons */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            {/* Page Info */}
+            <div style={{ 
+              fontSize: window.innerWidth <= 768 ? '0.8rem' : '0.875rem', 
+              color: '#6b7280',
+              fontFamily: window.innerWidth <= 768 ? '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' : 'inherit',
+              textAlign: window.innerWidth <= 768 ? 'center' : 'left'
+            }}>
+              Page {teamMembersPage} of {Math.ceil(teamMembersTotal / teamMembersPageSize)}
+            </div>
+
+            {/* Go to Page Input - Desktop Only */}
+            {window.innerWidth > 768 && (
+              <div style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                gap: '0.5rem',
+                fontSize: '0.875rem',
+                color: '#6b7280'
+              }}>
+                <span>Go to:</span>
+                <input
+                  type="number"
+                  min="1"
+                  max={Math.ceil(teamMembersTotal / teamMembersPageSize)}
+                  value={teamMembersPage}
+                  onChange={(e) => {
+                    const page = parseInt(e.target.value);
+                    if (page >= 1 && page <= Math.ceil(teamMembersTotal / teamMembersPageSize)) {
+                      setTeamMembersPage(page);
+                    }
+                  }}
+                  style={{
+                    width: '60px',
+                    padding: '0.25rem 0.5rem',
+                    border: '1px solid #d1d5db',
+                    borderRadius: '0.375rem',
+                    fontSize: '0.875rem',
+                    textAlign: 'center'
+                  }}
+                />
+              </div>
+            )}
+
+            {/* Pagination buttons - Mobile Optimized */}
+            <div style={{ 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: window.innerWidth <= 768 ? '0.25rem' : '0.5rem',
+              width: window.innerWidth <= 768 ? '100%' : 'auto',
+              justifyContent: window.innerWidth <= 768 ? 'center' : 'flex-end'
+            }}>
+              {/* First page button */}
+              <button
+                type="button"
+                onClick={() => setTeamMembersPage(1)}
+                disabled={teamMembersPage === 1}
+                style={{
+                  padding: window.innerWidth <= 768 ? '0.4rem 0.6rem' : '0.5rem 0.75rem',
+                  border: '1px solid #d1d5db',
+                  borderRadius: window.innerWidth <= 768 ? '8px' : '0.375rem',
+                  backgroundColor: teamMembersPage === 1 ? '#f9fafb' : 'white',
+                  color: teamMembersPage === 1 ? '#9ca3af' : '#374151',
+                  fontSize: window.innerWidth <= 768 ? '0.8rem' : '0.875rem',
+                  cursor: teamMembersPage === 1 ? 'not-allowed' : 'pointer',
+                  transition: 'all 0.2s ease',
+                  fontFamily: window.innerWidth <= 768 ? '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' : 'inherit',
+                  fontWeight: '500',
+                  boxShadow: window.innerWidth <= 768 ? '0 1px 2px rgba(0, 0, 0, 0.05)' : 'none'
+                }}
+                title="First page"
+              >
+                ««
+              </button>
+
               {/* Previous button */}
               <button
+                type="button"
                 onClick={() => setTeamMembersPage(Math.max(1, teamMembersPage - 1))}
                 disabled={teamMembersPage === 1}
                 style={{
-                  padding: '0.5rem 0.75rem',
+                  padding: window.innerWidth <= 768 ? '0.4rem 0.6rem' : '0.5rem 0.75rem',
                   border: '1px solid #d1d5db',
-                  borderRadius: '0.375rem',
+                  borderRadius: window.innerWidth <= 768 ? '8px' : '0.375rem',
                   backgroundColor: teamMembersPage === 1 ? '#f9fafb' : 'white',
                   color: teamMembersPage === 1 ? '#9ca3af' : '#374151',
-                  fontSize: '0.875rem',
+                  fontSize: window.innerWidth <= 768 ? '0.8rem' : '0.875rem',
                   cursor: teamMembersPage === 1 ? 'not-allowed' : 'pointer',
-                  transition: 'all 0.2s ease'
+                  transition: 'all 0.2s ease',
+                  fontFamily: window.innerWidth <= 768 ? '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' : 'inherit',
+                  fontWeight: '500',
+                  boxShadow: window.innerWidth <= 768 ? '0 1px 2px rgba(0, 0, 0, 0.05)' : 'none'
                 }}
                 onMouseEnter={(e) => {
                   if (teamMembersPage !== 1) {
@@ -1455,11 +2954,16 @@ const TeamLeaderDashboard: React.FC = () => {
                   }
                 }}
               >
-                Previous
+                {window.innerWidth <= 768 ? 'Prev' : 'Previous'}
               </button>
 
-              {/* Page numbers */}
-              <div style={{ display: 'flex', gap: '0.25rem' }}>
+              {/* Page numbers - Mobile Optimized */}
+              <div style={{ 
+                display: 'flex', 
+                gap: window.innerWidth <= 768 ? '0.25rem' : '0.25rem',
+                flexWrap: window.innerWidth <= 768 ? 'wrap' : 'nowrap',
+                justifyContent: window.innerWidth <= 768 ? 'center' : 'flex-start'
+              }}>
                 {(() => {
                   const totalPages = Math.ceil(teamMembersTotal / teamMembersPageSize);
                   const pages = [];
@@ -1469,18 +2973,22 @@ const TeamLeaderDashboard: React.FC = () => {
                     pages.push(
                       <button
                         key={1}
+                        type="button"
                         onClick={() => setTeamMembersPage(1)}
-                        style={{
-                          width: '32px',
-                          height: '32px',
-                          border: '1px solid #d1d5db',
-                          borderRadius: '0.375rem',
-                          backgroundColor: teamMembersPage === 1 ? '#3b82f6' : 'white',
-                          color: teamMembersPage === 1 ? 'white' : '#374151',
-                          fontSize: '0.875rem',
-                          cursor: 'pointer',
-                          transition: 'all 0.2s ease'
-                        }}
+                          style={{
+                            width: window.innerWidth <= 768 ? '28px' : '32px',
+                            height: window.innerWidth <= 768 ? '28px' : '32px',
+                            border: '1px solid #d1d5db',
+                            borderRadius: window.innerWidth <= 768 ? '6px' : '0.375rem',
+                            backgroundColor: teamMembersPage === 1 ? '#3b82f6' : 'white',
+                            color: teamMembersPage === 1 ? 'white' : '#374151',
+                            fontSize: window.innerWidth <= 768 ? '0.75rem' : '0.875rem',
+                            cursor: 'pointer',
+                            transition: 'all 0.2s ease',
+                            fontFamily: window.innerWidth <= 768 ? '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' : 'inherit',
+                            fontWeight: '500',
+                            boxShadow: window.innerWidth <= 768 ? '0 1px 2px rgba(0, 0, 0, 0.05)' : 'none'
+                          }}
                         onMouseEnter={(e) => {
                           if (teamMembersPage !== 1) {
                             e.currentTarget.style.backgroundColor = '#f3f4f6';
@@ -1512,6 +3020,7 @@ const TeamLeaderDashboard: React.FC = () => {
                       pages.push(
                         <button
                           key={i}
+                          type="button"
                           onClick={() => setTeamMembersPage(i)}
                           style={{
                             width: '32px',
@@ -1555,6 +3064,7 @@ const TeamLeaderDashboard: React.FC = () => {
                     pages.push(
                       <button
                         key={totalPages}
+                        type="button"
                         onClick={() => setTeamMembersPage(totalPages)}
                         style={{
                           width: '32px',
@@ -1587,19 +3097,23 @@ const TeamLeaderDashboard: React.FC = () => {
                 })()}
               </div>
 
-              {/* Next button */}
+              {/* Next button - Mobile Optimized */}
               <button
+                type="button"
                 onClick={() => setTeamMembersPage(Math.min(Math.ceil(teamMembersTotal / teamMembersPageSize), teamMembersPage + 1))}
                 disabled={teamMembersPage >= Math.ceil(teamMembersTotal / teamMembersPageSize)}
                 style={{
-                  padding: '0.5rem 0.75rem',
+                  padding: window.innerWidth <= 768 ? '0.4rem 0.6rem' : '0.5rem 0.75rem',
                   border: '1px solid #d1d5db',
-                  borderRadius: '0.375rem',
+                  borderRadius: window.innerWidth <= 768 ? '8px' : '0.375rem',
                   backgroundColor: teamMembersPage >= Math.ceil(teamMembersTotal / teamMembersPageSize) ? '#f9fafb' : 'white',
                   color: teamMembersPage >= Math.ceil(teamMembersTotal / teamMembersPageSize) ? '#9ca3af' : '#374151',
-                  fontSize: '0.875rem',
+                  fontSize: window.innerWidth <= 768 ? '0.8rem' : '0.875rem',
                   cursor: teamMembersPage >= Math.ceil(teamMembersTotal / teamMembersPageSize) ? 'not-allowed' : 'pointer',
-                  transition: 'all 0.2s ease'
+                  transition: 'all 0.2s ease',
+                  fontFamily: window.innerWidth <= 768 ? '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' : 'inherit',
+                  fontWeight: '500',
+                  boxShadow: window.innerWidth <= 768 ? '0 1px 2px rgba(0, 0, 0, 0.05)' : 'none'
                 }}
                 onMouseEnter={(e) => {
                   if (teamMembersPage < Math.ceil(teamMembersTotal / teamMembersPageSize)) {
@@ -1614,10 +3128,33 @@ const TeamLeaderDashboard: React.FC = () => {
               >
                 Next
               </button>
+
+              {/* Last page button */}
+              <button
+                type="button"
+                onClick={() => setTeamMembersPage(Math.ceil(teamMembersTotal / teamMembersPageSize))}
+                disabled={teamMembersPage >= Math.ceil(teamMembersTotal / teamMembersPageSize)}
+                style={{
+                  padding: window.innerWidth <= 768 ? '0.4rem 0.6rem' : '0.5rem 0.75rem',
+                  border: '1px solid #d1d5db',
+                  borderRadius: window.innerWidth <= 768 ? '8px' : '0.375rem',
+                  backgroundColor: teamMembersPage >= Math.ceil(teamMembersTotal / teamMembersPageSize) ? '#f9fafb' : 'white',
+                  color: teamMembersPage >= Math.ceil(teamMembersTotal / teamMembersPageSize) ? '#9ca3af' : '#374151',
+                  fontSize: window.innerWidth <= 768 ? '0.8rem' : '0.875rem',
+                  cursor: teamMembersPage >= Math.ceil(teamMembersTotal / teamMembersPageSize) ? 'not-allowed' : 'pointer',
+                  transition: 'all 0.2s ease',
+                  fontFamily: window.innerWidth <= 768 ? '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' : 'inherit',
+                  fontWeight: '500',
+                  boxShadow: window.innerWidth <= 768 ? '0 1px 2px rgba(0, 0, 0, 0.05)' : 'none'
+                }}
+                title="Last page"
+              >
+                »»
+              </button>
             </div>
           </div>
         )}
-      </div>
+      </Box>
 
       {/* Create User Modal */}
       {showCreateUser && (
@@ -1692,17 +3229,50 @@ const TeamLeaderDashboard: React.FC = () => {
                 <input
                   type="email"
                   value={createUserForm.email}
-                  onChange={(e) => setCreateUserForm({ ...createUserForm, email: e.target.value })}
+                  onChange={(e) => {
+                    setCreateUserForm({ ...createUserForm, email: e.target.value });
+                    // Debounce email validation
+                    setTimeout(() => validateEmail(e.target.value), 500);
+                  }}
                   style={{
                     width: '100%',
                     padding: '0.5rem 0.75rem',
-                    border: '1px solid #d1d5db',
+                    border: `1px solid ${emailValidation.isValid ? '#d1d5db' : '#ef4444'}`,
                     borderRadius: '0.375rem',
                     outline: 'none',
                     fontSize: '0.875rem'
                   }}
                   required
                 />
+                {emailValidation.message && (
+                  <div style={{
+                    fontSize: '0.75rem',
+                    color: emailValidation.isValid ? '#059669' : '#ef4444',
+                    marginTop: '0.25rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.25rem'
+                  }}>
+                    {emailValidation.checking ? (
+                      <>
+                        <div style={{
+                          width: '12px',
+                          height: '12px',
+                          border: '2px solid #6b7280',
+                          borderTop: '2px solid transparent',
+                          borderRadius: '50%',
+                          animation: 'spin 1s linear infinite'
+                        }} />
+                        Checking email...
+                      </>
+                    ) : (
+                      <>
+                        {emailValidation.isValid ? '✓' : '✗'}
+                        {emailValidation.message}
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div>
@@ -1744,7 +3314,7 @@ const TeamLeaderDashboard: React.FC = () => {
                   }}
                 >
                   <option value="">Use Default Team ({teamData?.defaultTeam || teamData?.managedTeams?.[0] || 'None'})</option>
-                  {teamData?.managedTeams.map((team, index) => (
+                  {teamData?.managedTeams.map((team: string, index: number) => (
                     <option key={index} value={team}>{team}</option>
                   ))}
                 </select>
@@ -1978,7 +3548,7 @@ const TeamLeaderDashboard: React.FC = () => {
                 <div style={{ marginBottom: '0.75rem' }}>
                   <span style={{ fontWeight: '500', color: '#374151' }}>Name:</span>
                   <span style={{ marginLeft: '0.5rem', color: '#6b7280' }}>
-                    {createdUser.firstName} {createdUser.lastName}
+                    {createdUser.firstName || 'User'} {createdUser.lastName || ''}
                   </span>
                 </div>
                 
@@ -2024,6 +3594,7 @@ const TeamLeaderDashboard: React.FC = () => {
             {/* Action Buttons */}
             <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center' }}>
               <button
+                type="button"
                 onClick={() => {
                   setShowSuccessModal(false);
                   setCreatedUser(null);
@@ -2058,397 +3629,190 @@ const TeamLeaderDashboard: React.FC = () => {
         </div>
       )}
 
-      {/* Recent Activity, Active Cases, Today's Check-ins Section */}
-      <div style={{ 
-        display: 'grid', 
-        gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', 
-        gap: '1.5rem', 
-        marginTop: '2rem' 
-      }}>
-        {/* Recent Activity */}
-        <div style={{
-          backgroundColor: 'white',
-          borderRadius: '0.75rem',
-          padding: '1.5rem',
-          boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)',
-          border: '1px solid #e5e7eb'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', marginBottom: '1rem' }}>
-            <div style={{
-              width: '2rem',
-              height: '2rem',
-              backgroundColor: '#3b82f6',
-              borderRadius: '0.5rem',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              marginRight: '0.75rem'
-            }}>
-              <svg width="16" height="16" fill="white" viewBox="0 0 24 24">
-                <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
-              </svg>
-            </div>
-            <h3 style={{ fontSize: '1.125rem', fontWeight: '600', color: '#1f2937', margin: 0 }}>
-              Recent Activity
-            </h3>
-          </div>
-          
-          <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
-            {paginatedRecentActivity.items.length > 0 ? (
-              <>
-                {paginatedRecentActivity.items.map((activity: any, index: number) => (
-                  <div key={index} style={{
-                    display: 'flex',
-                    alignItems: 'flex-start',
-                    padding: '0.75rem 0',
-                    borderBottom: index < paginatedRecentActivity.items.length - 1 ? '1px solid #f3f4f6' : 'none'
-                  }}>
-                    <div style={{
-                      width: '0.5rem',
-                      height: '0.5rem',
-                      backgroundColor: '#10b981',
-                      borderRadius: '50%',
-                      marginTop: '0.5rem',
-                      marginRight: '0.75rem',
-                      flexShrink: 0
-                    }} />
-                    <div style={{ flex: 1 }}>
-                      <p style={{ 
-                        fontSize: '0.875rem', 
-                        color: '#374151', 
-                        margin: '0 0 0.25rem 0',
-                        lineHeight: '1.4'
-                      }}>
-                        {activity.description}
-                      </p>
-                      <p style={{ 
-                        fontSize: '0.75rem', 
-                        color: '#9ca3af', 
-                        margin: 0 
-                      }}>
-                        {new Date(activity.timestamp).toLocaleString()}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-                
-                {/* Pagination Controls */}
-                {paginatedRecentActivity.totalPages > 1 && (
-                  <div style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    padding: '1rem 0',
-                    borderTop: '1px solid #f3f4f6',
-                    marginTop: '0.5rem'
-                  }}>
-                    <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
-                      Showing {((recentActivityPage - 1) * recentActivityPageSize) + 1} to {Math.min(recentActivityPage * recentActivityPageSize, paginatedRecentActivity.totalItems)} of {paginatedRecentActivity.totalItems} activities
-                    </div>
-                    <div style={{ display: 'flex', gap: '0.5rem' }}>
-                      <button
-                        onClick={() => setRecentActivityPage(prev => Math.max(1, prev - 1))}
-                        disabled={recentActivityPage === 1}
-                        style={{
-                          padding: '0.25rem 0.5rem',
-                          fontSize: '0.75rem',
-                          border: '1px solid #d1d5db',
-                          borderRadius: '0.25rem',
-                          backgroundColor: recentActivityPage === 1 ? '#f9fafb' : 'white',
-                          color: recentActivityPage === 1 ? '#9ca3af' : '#374151',
-                          cursor: recentActivityPage === 1 ? 'not-allowed' : 'pointer'
-                        }}
-                      >
-                        Previous
-                      </button>
-                      <span style={{ 
-                        padding: '0.25rem 0.5rem', 
-                        fontSize: '0.75rem', 
-                        color: '#6b7280',
-                        display: 'flex',
-                        alignItems: 'center'
-                      }}>
-                        {recentActivityPage} of {paginatedRecentActivity.totalPages}
-                      </span>
-                      <button
-                        onClick={() => setRecentActivityPage(prev => Math.min(paginatedRecentActivity.totalPages, prev + 1))}
-                        disabled={recentActivityPage === paginatedRecentActivity.totalPages}
-                        style={{
-                          padding: '0.25rem 0.5rem',
-                          fontSize: '0.75rem',
-                          border: '1px solid #d1d5db',
-                          borderRadius: '0.25rem',
-                          backgroundColor: recentActivityPage === paginatedRecentActivity.totalPages ? '#f9fafb' : 'white',
-                          color: recentActivityPage === paginatedRecentActivity.totalPages ? '#9ca3af' : '#374151',
-                          cursor: recentActivityPage === paginatedRecentActivity.totalPages ? 'not-allowed' : 'pointer'
-                        }}
-                      >
-                        Next
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </>
-            ) : (
-              <div style={{ textAlign: 'center', padding: '2rem', color: '#9ca3af' }}>
-                <svg width="48" height="48" fill="currentColor" viewBox="0 0 24 24" style={{ marginBottom: '1rem', opacity: 0.5 }}>
-                  <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
-                </svg>
-                <p style={{ margin: 0, fontSize: '0.875rem' }}>No recent activity</p>
-              </div>
-            )}
-          </div>
-        </div>
+   
 
-        {/* Active Cases */}
-        <div style={{
-          backgroundColor: 'white',
-          borderRadius: '0.75rem',
-          padding: '1.5rem',
-          boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)',
-          border: '1px solid #e5e7eb'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', marginBottom: '1rem' }}>
+
+      {/* Work Readiness Activity Modal */}
+        {showWorkReadinessModal && (
+          <div style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 99999,
+            padding: window.innerWidth <= 768 ? '0' : '0.5rem'
+          }}>
             <div style={{
-              width: '2rem',
-              height: '2rem',
-              backgroundColor: '#ef4444',
-              borderRadius: '0.5rem',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              marginRight: '0.75rem'
+              backgroundColor: 'white',
+              borderRadius: window.innerWidth <= 768 ? '0' : '0.75rem',
+              padding: window.innerWidth <= 768 ? '1rem' : '2rem',
+              maxWidth: '100vw',
+              maxHeight: '100vh',
+              width: '100%',
+              height: '100%',
+              overflow: 'auto',
+              position: 'relative',
+              animation: 'modalSlideIn 0.3s ease-out',
+              boxShadow: window.innerWidth <= 768 ? 'none' : '0 25px 50px -12px rgba(0, 0, 0, 0.25)'
             }}>
-              <svg width="16" height="16" fill="white" viewBox="0 0 24 24">
-                <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
-              </svg>
-            </div>
-            <h3 style={{ fontSize: '1.125rem', fontWeight: '600', color: '#1f2937', margin: 0 }}>
-              Active Cases
-            </h3>
-          </div>
-          
-          <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
-            {dashboardData.activeCases && dashboardData.activeCases.length > 0 ? (
-              dashboardData.activeCases.map((case_: any, index: number) => (
-                <div key={index} style={{
+            {/* Modal Header */}
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: window.innerWidth <= 768 ? '1rem' : '2rem',
+              paddingBottom: '1rem',
+              borderBottom: '1px solid #e5e7eb'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                <div style={{
+                  width: '2rem',
+                  height: '2rem',
+                  backgroundColor: '#8b5cf6',
+                  borderRadius: '0.5rem',
                   display: 'flex',
-                  alignItems: 'flex-start',
-                  padding: '0.75rem 0',
-                  borderBottom: index < dashboardData.activeCases.length - 1 ? '1px solid #f3f4f6' : 'none'
+                  alignItems: 'center',
+                  justifyContent: 'center'
                 }}>
-                  <div style={{
-                    width: '0.5rem',
-                    height: '0.5rem',
-                    backgroundColor: case_.priority === 'high' ? '#ef4444' : case_.priority === 'medium' ? '#f59e0b' : '#10b981',
-                    borderRadius: '50%',
-                    marginTop: '0.5rem',
-                    marginRight: '0.75rem',
-                    flexShrink: 0
-                  }} />
-                  <div style={{ flex: 1 }}>
-                    <p style={{ 
-                      fontSize: '0.875rem', 
-                      color: '#374151', 
-                      margin: '0 0 0.25rem 0',
-                      fontWeight: '500'
-                    }}>
-                      {case_.caseNumber}
-                    </p>
-                    <p style={{ 
-                      fontSize: '0.75rem', 
-                      color: '#6b7280', 
-                      margin: '0 0 0.25rem 0'
-                    }}>
-                      {case_.workerName}
-                    </p>
-                    <p style={{ 
-                      fontSize: '0.75rem', 
-                      color: '#9ca3af', 
-                      margin: 0 
-                    }}>
-                      {case_.status} • {case_.daysOpen} days
-                    </p>
-                  </div>
+                  <svg width="16" height="16" fill="white" viewBox="0 0 24 24">
+                    <path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+                  </svg>
                 </div>
-              ))
-            ) : (
-              <div style={{ textAlign: 'center', padding: '2rem', color: '#9ca3af' }}>
-                <svg width="48" height="48" fill="currentColor" viewBox="0 0 24 24" style={{ marginBottom: '1rem', opacity: 0.5 }}>
-                  <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                </svg>
-                <p style={{ margin: 0, fontSize: '0.875rem' }}>No active cases</p>
+                <h2 style={{
+                  fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem',
+                  fontWeight: '600',
+                  color: '#1f2937',
+                  margin: 0
+                }}>
+                  Work Readiness Activity - Detailed View
+                </h2>
               </div>
-            )}
-          </div>
-        </div>
-
-        {/* Today's Check-ins */}
-        <div style={{
-          backgroundColor: 'white',
-          borderRadius: '0.75rem',
-          padding: '1.5rem',
-          boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)',
-          border: '1px solid #e5e7eb'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', marginBottom: '1rem' }}>
-            <div style={{
-              width: '2rem',
-              height: '2rem',
-              backgroundColor: '#10b981',
-              borderRadius: '0.5rem',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              marginRight: '0.75rem'
-            }}>
-              <svg width="16" height="16" fill="white" viewBox="0 0 24 24">
-                <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
-              </svg>
-            </div>
-            <h3 style={{ fontSize: '1.125rem', fontWeight: '600', color: '#1f2937', margin: 0 }}>
-              Today's Check-ins
-            </h3>
-          </div>
-          
-          <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
-            {dashboardData.todaysCheckIns && dashboardData.todaysCheckIns.length > 0 ? (
-              dashboardData.todaysCheckIns.map((checkIn: any, index: number) => (
-                <div key={index} style={{
+              <button
+                type="button"
+                onClick={() => setShowWorkReadinessModal(false)}
+                style={{
+                  padding: '0.5rem',
+                  backgroundColor: 'transparent',
+                  border: 'none',
+                  borderRadius: '0.375rem',
+                  color: '#6b7280',
+                  cursor: 'pointer',
                   display: 'flex',
-                  alignItems: 'flex-start',
-                  padding: '0.75rem 0',
-                  borderBottom: index < dashboardData.todaysCheckIns.length - 1 ? '1px solid #f3f4f6' : 'none'
-                }}>
-                  <div style={{
-                    width: '0.5rem',
-                    height: '0.5rem',
-                    backgroundColor: checkIn.status === 'completed' ? '#10b981' : checkIn.status === 'partial' ? '#f59e0b' : '#ef4444',
-                    borderRadius: '50%',
-                    marginTop: '0.5rem',
-                    marginRight: '0.75rem',
-                    flexShrink: 0
-                  }} />
-                  <div style={{ flex: 1 }}>
-                    <p style={{ 
-                      fontSize: '0.875rem', 
-                      color: '#374151', 
-                      margin: '0 0 0.25rem 0',
-                      fontWeight: '500'
-                    }}>
-                      {checkIn.workerName}
-                    </p>
-                    <p style={{ 
-                      fontSize: '0.75rem', 
-                      color: '#6b7280', 
-                      margin: '0 0 0.25rem 0'
-                    }}>
-                      {checkIn.type}
-                    </p>
-                    <p style={{ 
-                      fontSize: '0.75rem', 
-                      color: '#9ca3af', 
-                      margin: 0 
-                    }}>
-                      {checkIn.status} • {new Date(checkIn.timestamp).toLocaleTimeString()}
-                    </p>
-                  </div>
-                </div>
-              ))
-            ) : (
-              <div style={{ textAlign: 'center', padding: '2rem', color: '#9ca3af' }}>
-                <svg width="48" height="48" fill="currentColor" viewBox="0 0 24 24" style={{ marginBottom: '1rem', opacity: 0.5 }}>
-                  <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                </svg>
-                <p style={{ margin: 0, fontSize: '0.875rem' }}>No check-ins today</p>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Work Readiness Activity Chart */}
-      <div style={{ 
-        marginTop: '2rem',
-        backgroundColor: 'white',
-        borderRadius: '0.75rem',
-        padding: '1.5rem',
-        boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)',
-        border: '1px solid #e5e7eb'
-      }}>
-        <div style={{ 
-          display: 'flex', 
-          justifyContent: 'space-between', 
-          alignItems: 'center',
-          marginBottom: '1.5rem'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-            <div style={{
-              width: '2rem',
-              height: '2rem',
-              backgroundColor: '#8b5cf6',
-              borderRadius: '0.5rem',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              marginRight: '0.75rem'
-            }}>
-              <svg width="16" height="16" fill="white" viewBox="0 0 24 24">
-                <path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  transition: 'all 0.2s ease'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = '#f3f4f6';
+                  e.currentTarget.style.color = '#374151';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = 'transparent';
+                  e.currentTarget.style.color = '#6b7280';
+                }}
+              >
+                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
+            </button>
             </div>
-            <h3 style={{ 
-              fontSize: '1.125rem', 
-              fontWeight: '600', 
-              color: '#1f2937', 
-              margin: 0 
+
+            {/* Date Filter Controls */}
+            <div style={{
+              display: 'flex',
+              justifyContent: 'center',
+              alignItems: 'center',
+              gap: window.innerWidth <= 768 ? '0.5rem' : '1rem',
+              marginBottom: window.innerWidth <= 768 ? '1rem' : '2rem',
+              flexWrap: 'wrap'
             }}>
-              Work Readiness Activity
-            </h3>
-          </div>
-          
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-            {/* Legend */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <div style={{
-                width: '12px',
-                height: '12px',
-                borderRadius: '50%',
-                backgroundColor: '#9333ea'
-              }}></div>
-              <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>Not Fit for Work</span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <div style={{
-                width: '12px',
-                height: '12px',
-                borderRadius: '50%',
-                backgroundColor: '#3b82f6'
-              }}></div>
-              <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>Minor Concerns Fit for Work</span>
-            </div>
-            
-            {/* Time Filter Dropdown */}
-            <select 
-              value={readinessDateRange}
-              onChange={(e) => setReadinessDateRange(e.target.value as 'week' | 'month' | 'year' | 'custom')}
-              disabled={readinessChartLoading}
-              style={{
-                padding: '0.5rem 1rem',
-                borderRadius: '0.5rem',
-                border: '1px solid #d1d5db',
-                backgroundColor: readinessChartLoading ? '#f9fafb' : 'white',
-                fontSize: '0.875rem',
-                color: readinessChartLoading ? '#9ca3af' : '#374151',
-                cursor: readinessChartLoading ? 'not-allowed' : 'pointer',
-                opacity: readinessChartLoading ? 0.7 : 1
-              }}
-            >
-              <option value="week">This Week</option>
-              <option value="month">This Month</option>
-              <option value="year">This Year</option>
-              <option value="custom">Custom Range</option>
-            </select>
+              {/* Legend */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <div style={{
+                    width: '12px',
+                    height: '12px',
+                    borderRadius: '50%',
+                    backgroundColor: '#ef4444'
+                  }}></div>
+                  <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>Not Fit for Work</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <div style={{
+                    width: '12px',
+                    height: '12px',
+                    borderRadius: '50%',
+                    backgroundColor: '#f59e0b'
+                  }}></div>
+                  <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>Minor Concerns Fit for Work</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <div style={{
+                    width: '12px',
+                    height: '12px',
+                    borderRadius: '50%',
+                    backgroundColor: '#10b981'
+                  }}></div>
+                  <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>Fit for Work</span>
+                </div>
+              </div>
+              
+              {/* Time Filter Dropdown */}
+              <select 
+                value={readinessDateRange}
+                onChange={(e) => {
+                  e.preventDefault();
+                  console.log('📅 Date range changed to:', e.target.value);
+                  const newRange = e.target.value as 'week' | 'month' | 'year' | 'custom';
+                  setReadinessDateRange(newRange);
+                  
+                  // Auto-update date range based on selection
+                  if (newRange !== 'custom') {
+                    const today = new Date();
+                    let startDate: Date;
+                    
+                    switch (newRange) {
+                      case 'week':
+                        startDate = new Date(today);
+                        startDate.setDate(today.getDate() - 6); // Last 7 days including today
+                        break;
+                      case 'month':
+                        startDate = new Date(today);
+                        startDate.setDate(today.getDate() - 29); // Last 30 days including today
+                        break;
+                      case 'year':
+                        startDate = new Date(today);
+                        startDate.setDate(today.getDate() - 364); // Last 365 days including today
+                        break;
+                      default:
+                        startDate = new Date(today);
+                        startDate.setDate(today.getDate() - 6);
+                    }
+                    
+                    setReadinessStartDate(startDate);
+                    setReadinessEndDate(today);
+                  }
+                }}
+                style={{
+                  padding: '0.5rem 1rem',
+                  borderRadius: '0.5rem',
+                  border: '1px solid #d1d5db',
+                  fontSize: '0.875rem',
+                  backgroundColor: 'white',
+                  color: '#374151',
+                  cursor: 'pointer'
+                }}
+              >
+                <option value="week">Last 7 Days</option>
+                <option value="month">Last 30 Days</option>
+                <option value="year">Last 365 Days</option>
+                <option value="custom">Custom Range</option>
+              </select>
             
             {/* Custom Date Range Inputs */}
             {readinessDateRange === 'custom' && (
@@ -2456,7 +3820,15 @@ const TeamLeaderDashboard: React.FC = () => {
                 <input
                   type="date"
                   value={readinessStartDate.toISOString().split('T')[0]}
-                  onChange={(e) => setReadinessStartDate(new Date(e.target.value))}
+                  onChange={(e) => {
+                      e.preventDefault();
+                    console.log('📅 Start date changed to:', e.target.value);
+                    // Create date at start of day to ensure it's included in the range
+                    const newDate = new Date(e.target.value + 'T00:00:00.000');
+                    console.log('📅 New start date object:', newDate.toISOString());
+                    console.log('📅 Setting start date, will trigger useEffect...');
+                    setReadinessStartDate(newDate);
+                  }}
                   style={{
                     padding: '0.5rem',
                     borderRadius: '0.375rem',
@@ -2469,7 +3841,15 @@ const TeamLeaderDashboard: React.FC = () => {
                 <input
                   type="date"
                   value={readinessEndDate.toISOString().split('T')[0]}
-                  onChange={(e) => setReadinessEndDate(new Date(e.target.value))}
+                  onChange={(e) => {
+                      e.preventDefault();
+                    console.log('📅 End date changed to:', e.target.value);
+                    // Create date at end of day to ensure it's included in the range
+                    const newDate = new Date(e.target.value + 'T23:59:59.999');
+                    console.log('📅 New end date object:', newDate.toISOString());
+                    console.log('📅 Setting end date, will trigger useEffect...');
+                    setReadinessEndDate(newDate);
+                  }}
                   style={{
                     padding: '0.5rem',
                     borderRadius: '0.375rem',
@@ -2480,10 +3860,10 @@ const TeamLeaderDashboard: React.FC = () => {
                 />
               </div>
             )}
-          </div>
         </div>
         
-        <div style={{ height: '300px', position: 'relative' }}>
+            {/* Chart Container */}
+            <div style={{ height: window.innerWidth <= 768 ? '400px' : '600px', position: 'relative' }}>
           {readinessChartLoading ? (
             <div style={{
               display: 'flex',
@@ -2506,127 +3886,12 @@ const TeamLeaderDashboard: React.FC = () => {
                 Loading chart data...
               </p>
             </div>
-          ) : analyticsData?.analytics?.readinessTrendData && 
-             Array.isArray(analyticsData.analytics.readinessTrendData) && 
-             analyticsData.analytics.readinessTrendData.length > 0 ? (
+              ) : chartData && 
+                 Array.isArray(chartData) && 
+                 chartData.length > 0 ? (
             <Line
-              data={{
-                labels: analyticsData.analytics.readinessTrendData.map(item => 
-                  new Date(item.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-                ),
-                datasets: [
-                  {
-                    label: 'Not Fit for Work',
-                    data: analyticsData.analytics.readinessTrendData.map(item => item.notFitForWork),
-                    borderColor: 'rgba(147, 51, 234, 1)',
-                    backgroundColor: 'rgba(147, 51, 234, 0.1)',
-                    fill: true,
-                    tension: 0.4,
-                    pointBackgroundColor: 'rgba(147, 51, 234, 1)',
-                    pointBorderColor: 'rgba(147, 51, 234, 1)',
-                    pointRadius: 3,
-                    pointHoverRadius: 6,
-                    pointHoverBackgroundColor: 'rgba(147, 51, 234, 1)',
-                    pointHoverBorderColor: 'rgba(147, 51, 234, 1)',
-                    pointHoverBorderWidth: 2,
-                    borderWidth: 2
-                  },
-                  {
-                    label: 'Minor Concerns Fit for Work',
-                    data: analyticsData.analytics.readinessTrendData.map(item => item.minorConcernsFitForWork),
-                    borderColor: 'rgba(59, 130, 246, 1)',
-                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                    fill: true,
-                    tension: 0.4,
-                    pointBackgroundColor: 'rgba(59, 130, 246, 1)',
-                    pointBorderColor: 'rgba(59, 130, 246, 1)',
-                    pointRadius: 3,
-                    pointHoverRadius: 6,
-                    pointHoverBackgroundColor: 'rgba(59, 130, 246, 1)',
-                    pointHoverBorderColor: 'rgba(59, 130, 246, 1)',
-                    pointHoverBorderWidth: 2,
-                    borderWidth: 2
-                  }
-                ]
-              }}
-              options={{
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                  legend: {
-                    display: false // We have custom legend above
-                  },
-                  tooltip: {
-                    backgroundColor: 'rgba(0, 0, 0, 0.8)',
-                    titleColor: 'white',
-                    bodyColor: 'white',
-                    borderColor: 'rgba(255, 255, 255, 0.1)',
-                    borderWidth: 1,
-                    cornerRadius: 8,
-                    displayColors: true,
-                    callbacks: {
-                      title: function(context) {
-                        return new Date(context[0].label).toLocaleDateString('en-US', { 
-                          weekday: 'long',
-                          year: 'numeric',
-                          month: 'long',
-                          day: 'numeric'
-                        });
-                      },
-                      label: function(context) {
-                        return `${context.dataset.label}: ${context.parsed.y} assessment${context.parsed.y !== 1 ? 's' : ''}`;
-                      }
-                    }
-                  }
-                },
-                scales: {
-                  x: {
-                    grid: {
-                      display: true,
-                      color: 'rgba(0, 0, 0, 0.05)',
-                      drawTicks: false
-                    },
-                    ticks: {
-                      color: '#6b7280',
-                      font: {
-                        size: 11
-                      },
-                      maxTicksLimit: 8
-                    }
-                  },
-                  y: {
-                    beginAtZero: true,
-                    grid: {
-                      display: true,
-                      color: 'rgba(0, 0, 0, 0.05)',
-                      drawTicks: false
-                    },
-                    ticks: {
-                      color: '#6b7280',
-                      font: {
-                        size: 11
-                      },
-                      stepSize: 1,
-                      callback: function(value) {
-                        return value === 0 ? '0' : value;
-                      }
-                    }
-                  }
-                },
-                interaction: {
-                  intersect: false,
-                  mode: 'index'
-                },
-                elements: {
-                  point: {
-                    radius: 3,
-                    hoverRadius: 6
-                  },
-                  line: {
-                    borderWidth: 2
-                  }
-                }
-              }}
+                  data={chartDataConfig}
+                  options={chartOptions}
             />
           ) : (
             <div style={{
@@ -2649,9 +3914,340 @@ const TeamLeaderDashboard: React.FC = () => {
             </div>
           )}
         </div>
+
+            {/* Summary Cards */}
+            <div style={{
+              marginTop: window.innerWidth <= 768 ? '1rem' : '2rem',
+              display: 'grid',
+              gridTemplateColumns: window.innerWidth <= 768 ? 'repeat(auto-fit, minmax(150px, 1fr))' : 'repeat(auto-fit, minmax(200px, 1fr))',
+              gap: window.innerWidth <= 768 ? '0.5rem' : '1rem'
+            }}>
+          <div style={{
+            backgroundColor: '#f0f9ff',
+            padding: window.innerWidth <= 768 ? '0.75rem' : '1rem',
+            borderRadius: '0.5rem',
+            border: '1px solid #bae6fd'
+          }}>
+            <div style={{ fontSize: window.innerWidth <= 768 ? '0.75rem' : '0.875rem', color: '#0369a1', fontWeight: '600' }}>Total Assessments</div>
+            <div style={{ fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem', color: '#0369a1', fontWeight: '700' }}>
+              {chartData.reduce((sum, item) => sum + item.total, 0)}
       </div>
       </div>
-      </>
+          <div style={{
+            backgroundColor: '#f0fdf4',
+            padding: window.innerWidth <= 768 ? '0.75rem' : '1rem',
+            borderRadius: '0.5rem',
+            border: '1px solid #bbf7d0'
+          }}>
+            <div style={{ fontSize: window.innerWidth <= 768 ? '0.75rem' : '0.875rem', color: '#166534', fontWeight: '600' }}>Fit for Work</div>
+            <div style={{ fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem', color: '#166534', fontWeight: '700' }}>
+              {chartData.reduce((sum, item) => sum + item.fitForWork, 0)}
+            </div>
+          </div>
+          <div style={{
+            backgroundColor: '#fef3c7',
+            padding: window.innerWidth <= 768 ? '0.75rem' : '1rem',
+            borderRadius: '0.5rem',
+            border: '1px solid #fde68a'
+          }}>
+            <div style={{ fontSize: window.innerWidth <= 768 ? '0.75rem' : '0.875rem', color: '#92400e', fontWeight: '600' }}>Minor Concerns</div>
+            <div style={{ fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem', color: '#92400e', fontWeight: '700' }}>
+              {chartData.reduce((sum, item) => sum + item.minorConcernsFitForWork, 0)}
+            </div>
+          </div>
+          <div style={{
+            backgroundColor: '#fef2f2',
+            padding: window.innerWidth <= 768 ? '0.75rem' : '1rem',
+            borderRadius: '0.5rem',
+            border: '1px solid #fecaca'
+          }}>
+            <div style={{ fontSize: window.innerWidth <= 768 ? '0.75rem' : '0.875rem', color: '#dc2626', fontWeight: '600' }}>Not Fit for Work</div>
+            <div style={{ fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem', color: '#dc2626', fontWeight: '700' }}>
+              {chartData.reduce((sum, item) => sum + item.notFitForWork, 0)}
+            </div>
+          </div>
+        </div>
+      </div>
+      </div>
+      )}
+
+      {/* View Details Dialog for Active Cases */}
+      {viewDetails.open && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000
+        }}>
+          <div style={{
+            backgroundColor: 'white',
+            borderRadius: '0.5rem',
+            padding: '2rem',
+            maxWidth: '600px',
+            width: '90%',
+            maxHeight: '80vh',
+            overflow: 'auto',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+              <h2 style={{ fontSize: '1.5rem', fontWeight: '700', color: '#1f2937', margin: 0 }}>
+                Case Details
+              </h2>
+              <button
+                onClick={() => setViewDetails({ open: false, case: null })}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '1.5rem',
+                  cursor: 'pointer',
+                  color: '#6b7280',
+                  padding: '0.25rem'
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            {viewDetails.case && (
+              <div>
+                {/* Worker Information */}
+                <div style={{ marginBottom: '1.5rem' }}>
+                  <h3 style={{ fontSize: '1.125rem', fontWeight: '600', color: '#374151', marginBottom: '0.75rem' }}>
+                    Worker Information
+                  </h3>
+                  <div style={{ 
+                    backgroundColor: '#f9fafb', 
+                    padding: '1rem', 
+                    borderRadius: '0.375rem',
+                    border: '1px solid #e5e7eb'
+                  }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
+                      <div>
+                        <p style={{ fontSize: '0.75rem', color: '#6b7280', margin: '0 0 0.25rem 0', fontWeight: '600' }}>
+                          Name
+                        </p>
+                        <p style={{ fontSize: '0.875rem', color: '#1f2937', margin: 0 }}>
+                          {viewDetails.case.worker?.first_name} {viewDetails.case.worker?.last_name}
+                        </p>
+                      </div>
+                      <div>
+                        <p style={{ fontSize: '0.75rem', color: '#6b7280', margin: '0 0 0.25rem 0', fontWeight: '600' }}>
+                          Email
+                        </p>
+                        <p style={{ fontSize: '0.875rem', color: '#1f2937', margin: 0 }}>
+                          {viewDetails.case.worker?.email}
+                        </p>
+                      </div>
+              <div>
+                <p style={{ fontSize: '0.75rem', color: '#6b7280', margin: '0 0 0.25rem 0', fontWeight: '600' }}>
+                  Team
+                </p>
+                <p style={{ fontSize: '0.875rem', color: '#1f2937', margin: 0 }}>
+                  {viewDetails.case.worker?.team || viewDetails.case.team}
+                </p>
+              </div>
+              {viewDetails.case.teamLeaderInfo && (
+                <div>
+                  <p style={{ fontSize: '0.75rem', color: '#6b7280', margin: '0 0 0.25rem 0', fontWeight: '600' }}>
+                    Team Leader
+                  </p>
+                  <p style={{ fontSize: '0.875rem', color: '#1f2937', margin: 0 }}>
+                    {viewDetails.case.teamLeaderInfo.first_name} {viewDetails.case.teamLeaderInfo.last_name}
+                  </p>
+                </div>
+              )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Assessment Details */}
+                <div style={{ marginBottom: '1.5rem' }}>
+                  <h3 style={{ fontSize: '1.125rem', fontWeight: '600', color: '#374151', marginBottom: '0.75rem' }}>
+                    Assessment Details
+                  </h3>
+                  <div style={{ 
+                    backgroundColor: '#fef2f2', 
+                    padding: '1rem', 
+                    borderRadius: '0.375rem',
+                    border: '1px solid #fecaca'
+                  }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '1rem' }}>
+                      <div>
+                        <p style={{ fontSize: '0.75rem', color: '#991b1b', margin: '0 0 0.25rem 0', fontWeight: '600' }}>
+                          Work Readiness
+                        </p>
+                        <span style={{
+                          backgroundColor: '#dc2626',
+                          color: 'white',
+                          padding: '0.25rem 0.5rem',
+                          borderRadius: '0.25rem',
+                          fontSize: '0.75rem',
+                          fontWeight: '600'
+                        }}>
+                          NOT FIT
+                        </span>
+                      </div>
+                      <div>
+                        <p style={{ fontSize: '0.75rem', color: '#991b1b', margin: '0 0 0.25rem 0', fontWeight: '600' }}>
+                          Fatigue Level
+                        </p>
+                        <p style={{ fontSize: '1rem', fontWeight: '700', color: '#dc2626', margin: 0 }}>
+                          {viewDetails.case.fatigue_level}/10
+                        </p>
+                      </div>
+                      <div>
+                        <p style={{ fontSize: '0.75rem', color: '#991b1b', margin: '0 0 0.25rem 0', fontWeight: '600' }}>
+                          Mood
+                        </p>
+                        <p style={{ fontSize: '0.875rem', color: '#1f2937', margin: 0, textTransform: 'capitalize' }}>
+                          {viewDetails.case.mood}
+                        </p>
+                      </div>
+                      <div>
+                        <p style={{ fontSize: '0.75rem', color: '#991b1b', margin: '0 0 0.25rem 0', fontWeight: '600' }}>
+                          Pain/Discomfort
+                        </p>
+                        <p style={{ fontSize: '0.875rem', color: '#1f2937', margin: 0, textTransform: 'capitalize' }}>
+                          {viewDetails.case.pain_discomfort}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Notes */}
+                {viewDetails.case.notes && (
+                  <div style={{ marginBottom: '1.5rem' }}>
+                    <h3 style={{ fontSize: '1.125rem', fontWeight: '600', color: '#374151', marginBottom: '0.75rem' }}>
+                      Notes
+                    </h3>
+                    <div style={{ 
+                      backgroundColor: '#f9fafb', 
+                      padding: '1rem', 
+                      borderRadius: '0.375rem',
+                      border: '1px solid #e5e7eb'
+                    }}>
+                      <p style={{ fontSize: '0.875rem', color: '#1f2937', margin: 0, fontStyle: 'italic' }}>
+                        "{viewDetails.case.notes}"
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Submission Information */}
+                <div style={{ marginBottom: '1.5rem' }}>
+                  <h3 style={{ fontSize: '1.125rem', fontWeight: '600', color: '#374151', marginBottom: '0.75rem' }}>
+                    Submission Information
+                  </h3>
+                  <div style={{ 
+                    backgroundColor: '#f9fafb', 
+                    padding: '1rem', 
+                    borderRadius: '0.375rem',
+                    border: '1px solid #e5e7eb'
+                  }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
+                      <div>
+                        <p style={{ fontSize: '0.75rem', color: '#6b7280', margin: '0 0 0.25rem 0', fontWeight: '600' }}>
+                          Submitted
+                        </p>
+                        <p style={{ fontSize: '0.875rem', color: '#1f2937', margin: 0 }}>
+                          {new Date(viewDetails.case.submitted_at).toLocaleString()}
+                        </p>
+                      </div>
+                      <div>
+                        <p style={{ fontSize: '0.75rem', color: '#6b7280', margin: '0 0 0.25rem 0', fontWeight: '600' }}>
+                          Assessment ID
+                        </p>
+                        <p style={{ fontSize: '0.875rem', color: '#1f2937', margin: 0, fontFamily: 'monospace' }}>
+                          {viewDetails.case.id}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Action Buttons */}
+                <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+                  <button
+                    onClick={handlePrintCase}
+                    style={{
+                      backgroundColor: '#4f94cd',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '0.375rem',
+                      padding: '0.5rem 1rem',
+                      fontSize: '0.875rem',
+                      fontWeight: '600',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = '#2563eb';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = '#3b82f6';
+                    }}
+                  >
+                    🖨️ Print
+                  </button>
+                  <button
+                    onClick={() => setViewDetails({ open: false, case: null })}
+                    style={{
+                      backgroundColor: '#6b7280',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '0.375rem',
+                      padding: '0.5rem 1rem',
+                      fontSize: '0.875rem',
+                      fontWeight: '600',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = '#4b5563';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = '#6b7280';
+                    }}
+                  >
+                    Close
+                  </button>
+                  <button
+                    style={{
+                      backgroundColor: '#16a34a',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '0.375rem',
+                      padding: '0.5rem 1rem',
+                      fontSize: '0.875rem',
+                      fontWeight: '600',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = '#15803d';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = '#16a34a';
+                    }}
+                  >
+                    Contact Worker
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Monthly Performance Tracking Section */}
+      <MonthlyPerformanceSection teamLeaderId={user?.id} />
 
       {/* Toast */}
       {toast && (
@@ -2662,9 +4258,9 @@ const TeamLeaderDashboard: React.FC = () => {
           onClose={() => setToast(null)}
         />
       )}
+      </Box>
     </LayoutWithSidebar>
   );
 };
 
 export default TeamLeaderDashboard;
-

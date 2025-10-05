@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { useAuth } from '../../contexts/AuthContext';
-import api from '../../utils/api';
+import { useAuth } from '../../contexts/AuthContext.supabase';
+import { SupabaseAPI } from '../../utils/supabaseApi';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import Toast from '../../components/Toast';
 import LayoutWithSidebar from '../../components/LayoutWithSidebar';
@@ -34,8 +34,10 @@ const TeamMemberManagement: React.FC = () => {
   const fetchTeamMembers = async () => {
     try {
       setLoading(true);
-      const response = await api.get('/team-leader/team-members');
-      setTeamMembers(response.data.teamMembers || []);
+      // TODO: Migrate to Supabase
+      console.log('Team members fetch is being migrated to Supabase');
+      throw new Error('Team members fetch is temporarily unavailable during migration to Supabase');
+      setTeamMembers([]);
     } catch (err: any) {
       setToast({ message: 'Failed to fetch team members', type: 'error' });
     } finally {
@@ -61,7 +63,9 @@ const TeamMemberManagement: React.FC = () => {
 
   const handleRemoveMember = async (memberId: string) => {
     try {
-      await api.delete(`/team-leader/team-members/${memberId}`);
+      // TODO: Migrate to Supabase
+      console.log('Team member removal is being migrated to Supabase');
+      throw new Error('Team member removal is temporarily unavailable during migration to Supabase');
       setToast({ message: 'Team member removed successfully', type: 'success' });
       fetchTeamMembers();
     } catch (err: any) {
@@ -71,7 +75,9 @@ const TeamMemberManagement: React.FC = () => {
 
   const handleSendInvite = async (memberId: string) => {
     try {
-      await api.post(`/team-leader/send-invite/${memberId}`);
+      // TODO: Migrate to Supabase
+      console.log('Send invite feature is being migrated to Supabase');
+      throw new Error('Send invite feature is temporarily unavailable during migration to Supabase');
       setToast({ message: 'Invitation sent successfully', type: 'success' });
       fetchTeamMembers();
     } catch (err: any) {
@@ -139,25 +145,35 @@ const TeamMemberManagement: React.FC = () => {
     <LayoutWithSidebar>
       <div style={{ 
         width: '100%',
-        padding: '2rem',
-        background: '#f8fafc',
+        padding: window.innerWidth <= 768 ? '12px' : '2rem',
+          background: 'transparent',
         minHeight: '100vh',
-        position: 'relative'
+        position: 'relative',
+        fontFamily: window.innerWidth <= 768 ? '-apple-system BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' : 'inherit',
+        WebkitFontSmoothing: 'antialiased',
+        MozOsxFontSmoothing: 'grayscale'
       }}>
-        <div style={{ marginBottom: '2rem' }}>
+        <div style={{ 
+          marginBottom: window.innerWidth <= 768 ? '1rem' : '2rem',
+          padding: window.innerWidth <= 768 ? '20px 16px' : '0',
+          background: 'transparent',
+        }}>
           <h1 style={{ 
-            fontSize: '2rem', 
+            fontSize: window.innerWidth <= 768 ? '1.5rem' : '2rem', 
             fontWeight: 'bold', 
             color: '#1a202c', 
             marginBottom: '0.5rem',
-            textShadow: '0 2px 4px rgba(0,0,0,0.1)'
+            textShadow: '0 2px 4px rgba(0,0,0,0.1)',
+            textAlign: window.innerWidth <= 768 ? 'center' : 'left'
           }}>
             Team Member Management
           </h1>
           <p style={{ 
             color: '#4a5568', 
             marginBottom: '0.25rem',
-            textShadow: '0 1px 2px rgba(0,0,0,0.05)'
+            textShadow: '0 1px 2px rgba(0,0,0,0.05)',
+            textAlign: window.innerWidth <= 768 ? 'center' : 'left',
+            fontSize: window.innerWidth <= 768 ? '0.875rem' : 'inherit'
           }}>
             Manage your team members, view their status, and control access
           </p>

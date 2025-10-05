@@ -88,9 +88,9 @@ const logActivity = async (req, res, data) => {
           action = 'login';
           success = true;
         } else {
-          action = 'login_failed';
+          // Don't log failed login attempts
+          action = '';
           success = false;
-          failureReason = responseData.message?.includes('Invalid credentials') ? 'invalid_credentials' : 'unknown';
         }
       }
     } else if (url.includes('/logout')) {
@@ -143,6 +143,12 @@ const logActivity = async (req, res, data) => {
 // Function to manually log login activity (for use in auth routes)
 const logLoginActivity = async (user, req, success = true, failureReason = null) => {
   try {
+    // Only log successful logins, skip failed attempts
+    if (!success) {
+      console.log('📝 Skipping failed login attempt log');
+      return;
+    }
+
     const ipAddress = getClientIP(req);
     const userAgentInfo = parseUserAgent(req.headers['user-agent']);
     
@@ -151,11 +157,11 @@ const logLoginActivity = async (user, req, success = true, failureReason = null)
       userEmail: user?.email || req.body?.email || 'unknown',
       userName: user ? `${user.firstName} ${user.lastName}` : 'Unknown User',
       userRole: user?.role || 'unknown',
-      action: success ? 'login' : 'login_failed',
+      action: 'login',
       ipAddress,
       userAgent: userAgentInfo.userAgent,
-      success,
-      failureReason,
+      success: true,
+      failureReason: null,
       sessionId: req.sessionID || null,
       deviceInfo: {
         deviceType: userAgentInfo.deviceType,
@@ -170,7 +176,7 @@ const logLoginActivity = async (user, req, success = true, failureReason = null)
     
     await AuthenticationLog.create(logData);
     
-    console.log(`📝 Manual login log: ${logData.action} - ${logData.userEmail} - ${success ? 'SUCCESS' : 'FAILED'}`);
+    console.log(`📝 Manual login log: ${logData.action} - ${logData.userEmail} - SUCCESS`);
   } catch (error) {
     console.error('Error logging login activity:', error);
   }

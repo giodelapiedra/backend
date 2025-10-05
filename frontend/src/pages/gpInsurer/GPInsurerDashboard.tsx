@@ -48,7 +48,7 @@ import {
   Assignment,
   Person,
 } from '@mui/icons-material';
-import { useAuth } from '../../contexts/AuthContext';
+import { useAuth } from '../../contexts/AuthContext.supabase';
 import LayoutWithSidebar from '../../components/LayoutWithSidebar';
 import axios from 'axios';
 
