@@ -7,14 +7,16 @@
       "config": {
         "distDir": "build",
         "installCommand": "npm install",
-        "buildCommand": "npm run build"
+        "buildCommand": "npm run build",
+        "nodeVersion": "20.x"
       }
     },
     {
       "src": "backend/index.js",
       "use": "@vercel/node",
       "config": {
-        "installCommand": "npm install"
+        "installCommand": "npm install",
+        "nodeVersion": "20.x"
       }
     }
   ],
