@@ -17,6 +17,10 @@
   CI = "false"
   DISABLE_ESLINT_PLUGIN = "true"
 
+# Netlify plugins
+[[plugins]]
+  package = "@netlify/plugin-functions-install-core"
+
 # Redirect rules for SPA (Single Page Application)
 [[redirects]]
   from = "/api/test"
