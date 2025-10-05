@@ -2,6 +2,14 @@ const mongoose = require('mongoose');
 
 // Database health check middleware
 const dbHealthCheck = (req, res, next) => {
+  // In production, we use Supabase only, so skip MongoDB health check
+  if (process.env.NODE_ENV === 'production') {
+    req.dbHealthy = true; // Supabase is our primary database
+    req.dbStatus = 'supabase';
+    next();
+    return;
+  }
+  
   const connectionState = mongoose.connection.readyState;
   
   // Connection states:

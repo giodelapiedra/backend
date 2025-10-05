@@ -32,6 +32,9 @@ const goalKpiRoutes = require('./routes/goalKpi');
 
 const app = express();
 
+// Trust proxy for rate limiting behind reverse proxy (Render)
+app.set('trust proxy', 1);
+
 // Rate limiting for general requests
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -217,12 +220,56 @@ app.use('/api/goal-kpi', goalKpiRoutes);
 // Apply database health check middleware to all routes
 app.use(dbHealthCheck);
 
+// Root endpoint
+app.get('/', (req, res) => {
+  res.json({ 
+    message: 'Work Readiness System API',
+    version: '1.0.0',
+    status: 'running',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// API root endpoint
+app.get('/api', (req, res) => {
+  res.json({ 
+    message: 'Work Readiness System API',
+    version: '1.0.0',
+    endpoints: {
+      auth: '/api/auth',
+      users: '/api/users',
+      cases: '/api/cases',
+      assessments: '/api/assessments',
+      appointments: '/api/appointments',
+      health: '/api/health'
+    }
+  });
+});
+
 // Enhanced health check endpoints
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'OK', 
     timestamp: new Date().toISOString(),
     database: req.dbHealthy ? 'connected' : 'disconnected'
+  });
+});
+
+// Health endpoint (without /api prefix)
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'OK', 
+    timestamp: new Date().toISOString(),
+    database: req.dbHealthy ? 'connected' : 'disconnected'
+  });
+});
+
+// Auth status endpoint
+app.get('/api/auth/status', (req, res) => {
+  res.json({ 
+    status: 'OK',
+    message: 'Authentication system is running',
+    timestamp: new Date().toISOString()
   });
 });
 

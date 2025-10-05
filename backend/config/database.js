@@ -10,6 +10,12 @@ let connectionPromise = null;
 // Connect to MongoDB with improved connection management
 const connectDB = async () => {
   try {
+    // Skip MongoDB connection in production (use Supabase only)
+    if (process.env.NODE_ENV === 'production') {
+      console.log('Skipping MongoDB connection in production - using Supabase only');
+      return null;
+    }
+    
     // Check if already connected
     if (mongoose.connection.readyState === 1) {
       console.log('MongoDB already connected');
