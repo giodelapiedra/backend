@@ -5,7 +5,7 @@ const Case = require('../models/Case');
 const User = require('../models/User');
 const { authMiddleware, roleMiddleware } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
-const zoomService = require('../services/zoomService');
+const zoomService = require('../services/ZoomService');
 const NotificationService = require('../services/NotificationService');
 // Import centralized validators
 const { 
