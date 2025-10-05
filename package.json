@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Work Readiness System with Frontend and Backend",
   "scripts": {
+    "build": "cd frontend && npm install && npm run build",
     "start": "cd backend && npm start",
     "dev": "concurrently \"cd frontend && npm start\" \"cd backend && npm run dev\""
   },
