@@ -303,3 +303,4 @@ AND tl.is_active = true
 GROUP BY tl.id, tl.first_name, tl.last_name, tl.team, tl.managed_teams
 ORDER BY workers_managed DESC;
 
+

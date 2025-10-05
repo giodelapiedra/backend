@@ -238,3 +238,4 @@ SELECT
         ELSE '❌ Auto-sync trigger missing'
     END as auto_sync_trigger_status;
 
+

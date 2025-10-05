@@ -268,3 +268,4 @@ SELECT
         ELSE '⚠️ No work readiness notifications found'
     END as notification_status;
 
+

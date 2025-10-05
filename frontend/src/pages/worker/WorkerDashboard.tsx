@@ -144,7 +144,7 @@ const WorkerDashboard: React.FC = memo(() => {
       console.log('🎯 Starting login cycle for worker:', user.id);
       console.log('🎯 User role:', user.role);
       
-      const response = await fetch('/api/goal-kpi/login-cycle', {
+      const response = await fetch(`${process.env.REACT_APP_API_BASE_URL || 'http://localhost:5000'}/api/goal-kpi/login-cycle`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

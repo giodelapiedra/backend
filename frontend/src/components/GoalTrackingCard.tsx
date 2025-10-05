@@ -86,7 +86,7 @@ const GoalTrackingCard: React.FC<GoalTrackingCardProps> = ({
         throw new Error('No access token found. Please log in again.');
       }
 
-      const response = await fetch(`/api/goal-kpi/worker/weekly-progress?workerId=${user?.id}`, {
+      const response = await fetch(`${process.env.REACT_APP_API_BASE_URL || 'http://localhost:5000'}/api/goal-kpi/worker/weekly-progress?workerId=${user?.id}`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${session.access_token}`,

@@ -130,6 +130,8 @@ const TeamKPIDashboard: React.FC<TeamKPIDashboardProps> = ({
       console.log('🔄 Fetching team KPI data for team leader:', teamLeaderId);
       console.log('📋 Team Leader ID:', teamLeaderId);
       console.log('👤 Current User:', user?.id, user?.role);
+      console.log('🌐 API Base URL:', process.env.REACT_APP_API_BASE_URL || 'http://localhost:5000');
+      
       // Get Supabase session token
       const { data: { session }, error: sessionError } = await authClient.auth.getSession();
       
@@ -137,12 +139,11 @@ const TeamKPIDashboard: React.FC<TeamKPIDashboardProps> = ({
         throw new Error('No access token found. Please log in again.');
       }
 
-      const apiUrl = `/api/goal-kpi/team-leader/weekly-summary?teamLeaderId=${teamLeaderId}`;
-      console.log('🔍 Making API request to:', apiUrl);
+      console.log('🔍 Making API request to:', `${process.env.REACT_APP_API_BASE_URL || 'http://localhost:5000'}/api/goal-kpi/team-leader/weekly-summary?teamLeaderId=${teamLeaderId}`);
       console.log('🔍 Team Leader ID:', teamLeaderId);
       console.log('🔍 Session token:', session.access_token ? 'Present' : 'Missing');
 
-      const response = await fetch(apiUrl, {
+      const response = await fetch(`${process.env.REACT_APP_API_BASE_URL || 'http://localhost:5000'}/api/goal-kpi/team-leader/weekly-summary?teamLeaderId=${teamLeaderId}`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${session.access_token}`,

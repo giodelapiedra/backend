@@ -327,3 +327,4 @@ SELECT
         ELSE '⚠️ No recent work readiness assessments'
     END as assessment_status;
 
+
