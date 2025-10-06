@@ -1,4 +1,17 @@
-const mongoose = require('mongoose');
+// Skip MongoDB models in production or if mongoose is not available
+if (process.env.NODE_ENV === 'production' || process.env.USE_SUPABASE === 'true') {
+  console.log('⏭️ Skipping AuthenticationLog model - using Supabase only');
+  module.exports = {};
+} else {
+  // Only load mongoose in development
+  let mongoose;
+  try {
+    mongoose = require('mongoose');
+  } catch (error) {
+    console.log('⏭️ Mongoose not available - using Supabase only');
+    module.exports = {};
+    return;
+  }
 
 const authenticationLogSchema = new mongoose.Schema({
   userId: {
@@ -119,4 +132,5 @@ authenticationLogSchema.statics.getUserActivitySummary = function(userId, days =
   ]);
 };
 
-module.exports = mongoose.model('AuthenticationLog', authenticationLogSchema);
+  module.exports = mongoose.model('AuthenticationLog', authenticationLogSchema);
+}
