@@ -1,12 +1,20 @@
-// Skip MongoDB imports in production
+// Skip MongoDB imports in production or if mongoose is not available
 let mongoose, Case, Incident, User;
-if (process.env.NODE_ENV !== 'production' && process.env.USE_SUPABASE !== 'true') {
-  mongoose = require('mongoose');
-  Case = require('../models/Case');
-  Incident = require('../models/Incident');
-  User = require('../models/User');
-} else {
-  console.log('Skipping MongoDB imports in caseController - using Supabase only');
+try {
+  if (process.env.NODE_ENV !== 'production' && process.env.USE_SUPABASE !== 'true') {
+    mongoose = require('mongoose');
+    Case = require('../models/Case');
+    Incident = require('../models/Incident');
+    User = require('../models/User');
+  } else {
+    console.log('Skipping MongoDB imports in caseController - using Supabase only');
+    Case = {};
+    Incident = {};
+    User = {};
+  }
+} catch (error) {
+  console.log('Mongoose not available in caseController - using Supabase only');
+  mongoose = null;
   Case = {};
   Incident = {};
   User = {};

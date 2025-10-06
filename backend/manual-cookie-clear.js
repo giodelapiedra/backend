@@ -1,0 +1,24 @@
+// Manual cookie clearing script for testing
+console.log('🍪 Manual Cookie Clearing Script');
+console.log('Run this in your browser console to manually clear cookies:');
+console.log('');
+console.log('// Clear all cookies');
+console.log('document.cookie.split(";").forEach(function(c) { ');
+console.log('  document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/"); ');
+console.log('});');
+console.log('');
+console.log('// Clear localStorage');
+console.log('localStorage.clear();');
+console.log('');
+console.log('// Clear sessionStorage');
+console.log('sessionStorage.clear();');
+console.log('');
+console.log('// Reload page');
+console.log('window.location.reload();');
+console.log('');
+console.log('Or simply:');
+console.log('1. Open Developer Tools (F12)');
+console.log('2. Go to Application tab');
+console.log('3. Click on Cookies > localhost');
+console.log('4. Right-click on token cookie and Delete');
+console.log('5. Refresh the page');

@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Verify Physio Bucket Setup</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { max-width: 600px; }
+        button { 
+            background: #6366f1; color: white; border: none; 
+            padding: 10px 20px; border-radius: 5px; cursor: pointer; 
+            margin: 10px 5px;
+        }
+        .output { 
+            background: #f8f9fa; border: 1px solid #dee2e6; 
+            padding: 15px; margin: 10px 0; border-radius: 5px; 
+        }
+        .success { background: #d4edda; border-color: #c3e6cb; }
+        .error { background: #f8d7da; border-color: #f5c6cb; }
+        img { max-width: 200px; border-radius: 50%; margin: 10px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🏪 Physio Bucket Verification</h1>
+        
+        <button onclick="listBuckets()">📋 List All Buckets</button>
+        <button onclick="checkPublicAccess()">🔓 Check Public Access</button>
+        <button onclick="testUpload()">📸 Test Upload</button>
+        <button onclick="testDirectAccess()">🔗 Test Direct Access</button>
+        
+        <div id="output"></div>
+    </div>
+
+    <script>
+        const SUPABASE_URL = 'https://dtcgzgbxhefwhqpeotrl.supabase.co';
+        const SERVICE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR0Y2d6Z2J4aGVmd2hxcGVvdHJsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1OTE0NDcxOCwiZXhwIjoyMDc0NzIwNzE4fQ.D1wSP12YM8jPtF-llVFiC4cI7xKJtRMtiaUuwRzJ3z8';
+
+        async function listBuckets() {
+            showOutput('Checking available buckets...');
+            
+            try {
+                const response = await fetch(`${SUPABASE_URL}/rest/v1/storage/v1/bucket`, {
+                    headers: {
+                        'Authorization': `Bearer ${SERVICE_KEY}`,
+                        'apikey': SERVICE_KEY
+                    }
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    showOutput(`✅ Found ${data.length} buckets: ${data.map(b => b.name).join(', ')}`, 'success');
+                    
+                    const physioBucket = data.find(b => b.name === 'physio');
+                    if (physioBucket) {
+                        showOutput(`✅ Physio bucket exists! Public: ${physioBucket.public}`, 'success');
+                    } else {
+                        showOutput(`❌ Physio bucket not found! Available: ${data.map(b => b.name).join(', ')}`, 'error');
+                    }
+                } else {
+                    showOutput(`❌ Error: ${response.status} ${await response.text()}`, 'error');
+                }
+            } catch (error) {
+                showOutput(`❌ Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function checkPublicAccess() {
+            showOutput('Testing public access to physio bucket...');
+            
+            try {
+                // Test direct public URL access
+                const testPath = 'profile-images/test-user/test.jpg';
+                const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/physio/${testPath}`;
+                
+                const response = await fetch(publicUrl, { method: 'HEAD' });
+                
+                if (response.status === 404) {
+                    showOutput(`✅ Public URL format is correct (404 is expected for non-existent file)`);
+                    showOutput(`Public URL format: ${publicUrl}`);
+                } else {
+                    showOutput(`Bucket access test: ${response.status}`);
+                }
+                
+            } catch (error) {
+                showOutput(`❌ Public access error: ${error.message}`, 'error');
+            }
+        }
+
+        async function testUpload() {
+            showOutput('⚠️ Upload test requires file input...');
+            showOutput(`Please use this format in your code:<br>
+                <code>storage.from('physio').upload('profile-images/USER_ID/profile.jpg', file)</code>`);
+        }
+
+        async function testDirectAccess() {
+            showOutput('🔗 Testing direct URL access patterns...');
+            
+            const exampleUrls = [
+                `${SUPABASE_URL}/storage/v1/object/public/physio/profile-images/user123/profile.jpg`,
+                `${SUPABASE_URL}/storage/v1/object/public/physio/profile-images/test/profile.png`
+            ];
+            
+            showOutput('Example public URLs:<br>' + exampleUrls.map(url => 
+                `<a href="${url}" target="_blank">${url}</a>`
+            ).join('<br>'));
+        }
+
+        function showOutput(message, type = '') {
+            const output = document.getElementById('output');
+            const className = type ? ` ${type}` : '';
+            output.innerHTML += `<div class="output${className}">${message}</div>`;
+        }
+    </script>
+</body>
+</html>

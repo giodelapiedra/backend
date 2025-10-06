@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>🧪 Profile Upload Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { max-width: 800px; }
+        button { 
+            background: #6366f1; color: white; border: none; 
+            padding: 10px 20px; border-radius: 5px; cursor: pointer; 
+            margin: 10px 5px;
+        }
+        .output { 
+            background: #f8f9fa; border: 1px solid #dee2e6; 
+            padding: 15px; margin: 10px 0; border-radius: 5px; 
+            white-space: pre-wrap; font-family: monospace;
+        }
+        .success { background: #d4edda; border-color: #c3e6cb; }
+        .error { background: #f8d7da; border-color: #f5c6cb; }
+        .info { background: #d1ecf1; border-color: #bee5eb; }
+        img { max-width: 200px; border-radius: 50%; margin: 10px; border: 2px solid #ccc; }
+        input[type="file"] { margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧪 Profile Upload Test</h1>
+        <p>This will test your Supabase profile image upload functionality step by step.</p>
+        
+        <div>
+            <button onclick="testConnection()">🔌 Test Supabase Connection</button>
+            <button onclick="testBucket()">🏪 Test Physio Bucket</button>
+            <button onclick="showUploadTest()">📸 Show Upload Test</button>
+        </div>
+        
+        <div id="uploadSection" style="display: none;">
+            <h3>Upload Test Image:</h3>
+            <input type="file" id="imageFile" accept="image/*">
+            <button onclick="testUpload()">📤 Test Upload to Physio Bucket</button>
+            <div id="preview"></div>
+        </div>
+        
+        <div id="output"></div>
+    </div>
+
+    <script>
+        const SUPABASE_URL = 'https://dtcgzgbxhefwhqpeotrl.supabase.co';
+        const SERVICE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR0Y2d6Z2J4aGVmd2hxcGVvdHJsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1OTE0NDcxOCwiZXhwIjoyMDc0NzIwNzE4fQ.D1wSP12YM8jPtF-llVFiC4cI7xKJtRMtiaUuwRzJ3z8';
+
+        async function testConnection() {
+            showOutput('🔌 Testing Supabase connection...');
+            
+            try {
+                const response = await fetch(`${SUPABASE_URL}/rest/v1/`, {
+                    headers: {
+                        'Authorization': `Bearer ${SERVICE_KEY}`,
+                        'apikey': SERVICE_KEY
+                    }
+                });
+                
+                if (response.ok) {
+                    showOutput('✅ Supabase connection successful!', 'success');
+                } else {
+                    showOutput(`❌ Connection failed: ${response.status}`, 'error');
+                }
+            } catch (error) {
+                showOutput(`❌ Connection error: ${error.message}`, 'error');
+            }
+        }
+
+        async function testBucket() {
+            showOutput('🏪 Testing physio bucket...');
+            
+            try {
+                const response = await fetch(`${SUPABASE_URL}/rest/v1/storage/v1/bucket`, {
+                    headers: {
+                        'Authorization': `Bearer ${SERVICE_KEY}`,
+                        'apikey': SERVICE_KEY
+                    }
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    const physioBucket = data.find(b => b.name === 'physio');
+                    
+                    if (physioBucket) {
+                        showOutput(`✅ Physio bucket found!\n${JSON.stringify(physioBucket, null, 2)}`, 'success');
+                        showOutput(`🔓 Public access: ${physioBucket.public ? 'ENABLED ✅' : 'DISABLED ❌'}`, 
+                            physioBucket.public ? 'success' : 'error');
+                    } else {
+                        showOutput(`❌ Physio bucket not found!\nAvailable buckets: ${data.map(b => b.name).join(', ')}`, 'error');
+                    }
+                } else {
+                    showOutput(`❌ Bucket test failed: ${response.status}`, 'error');
+                }
+            } catch (error) {
+                showOutput(`❌ Bucket test error: ${error.message}`, 'error');
+            }
+        }
+
+        function showUploadTest() {
+            document.getElementById('uploadSection').style.display = 'block';
+            showOutput('📸 Upload test ready! Select an image file and click Test Upload.', 'info');
+        }
+
+        async function testUpload() {
+            const fileInput = document.getElementById('imageFile');
+            const file = fileInput.files[0];
+            
+            if (!file) {
+                showOutput('❌ Please select an image file first!', 'error');
+                return;
+            }
+            
+            showOutput(`📤 Uploading ${file.name} (${file.type}, ${file.size} bytes)...`);
+            
+            const testUserId = 'test-user-12345';
+            const fileExtension = file.name.split('.').pop();
+            const filePath = `profile-images/${testUserId}/profile.${fileExtension}`;
+            
+            try {
+                // Upload using Supabase Storage API
+                const uploadResponse = await fetch(`${SUPABASE_URL}/storage/v1/object/physio/${filePath}`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${SERVICE_KEY}`,
+                        'Content-Type': file.type
+                    },
+                    body: file
+                });
+                
+                if (uploadResponse.ok) {
+                    const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/physio/${filePath}`;
+                    showOutput(`✅ Upload successful!\n🔗 Public URL: ${publicUrl}`, 'success');
+                    
+                    // Show preview
+                    const preview = document.getElementById('preview');
+                    const img = document.createElement('img');
+                    img.src = URL.createObjectURL(file);
+                    img.crossOrigin = 'anonymous';
+                    img.onload = () => {
+                        showOutput('🖼️ Preview loaded with crossOrigin="anonymous"', 'success');
+                    };
+                    img.onerror = () => {
+                        showOutput('❌ Preview failed to load', 'error');
+                    };
+                    preview.innerHTML = '';
+                    preview.appendChild(img);
+                    
+                } else {
+                    const errorText = await uploadResponse.text();
+                    showOutput(`❌ Upload failed: ${uploadResponse.status}\n${errorText}`, 'error');
+                }
+            } catch (error) {
+                showOutput(`❌ Upload error: ${error.message}`, 'error');
+            }
+        }
+
+        function showOutput(message, type = '') {
+            const output = document.getElementById('output');
+            const className = type ? ` ${type}` : '';
+            output.innerHTML += `<div class="output${className}">${message}</div>`;
+        }
+    </script>
+</body>
+</html>

@@ -1,13 +1,20 @@
 const express = require('express');
 
-// Skip MongoDB imports in production
+// Skip MongoDB imports in production or if mongoose is not available
 let mongoose, Case, Incident;
-if (process.env.NODE_ENV !== 'production' && process.env.USE_SUPABASE !== 'true') {
-  mongoose = require('mongoose');
-  Case = require('../models/Case');
-  Incident = require('../models/Incident');
-} else {
-  console.log('Skipping MongoDB imports in lazyLoading middleware - using Supabase only');
+try {
+  if (process.env.NODE_ENV !== 'production' && process.env.USE_SUPABASE !== 'true') {
+    mongoose = require('mongoose');
+    Case = require('../models/Case');
+    Incident = require('../models/Incident');
+  } else {
+    console.log('Skipping MongoDB imports in lazyLoading middleware - using Supabase only');
+    Case = {};
+    Incident = {};
+  }
+} catch (error) {
+  console.log('Mongoose not available in lazyLoading middleware - using Supabase only');
+  mongoose = null;
   Case = {};
   Incident = {};
 }

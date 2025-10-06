@@ -1,12 +1,18 @@
 const express = require('express');
 
-// Skip MongoDB imports in production
+// Skip MongoDB imports in production or if mongoose is not available
 let mongoose, User;
-if (process.env.NODE_ENV !== 'production' && process.env.USE_SUPABASE !== 'true') {
-  mongoose = require('mongoose');
-  User = require('../models/User');
-} else {
-  console.log('Skipping MongoDB imports in lazyPagination middleware - using Supabase only');
+try {
+  if (process.env.NODE_ENV !== 'production' && process.env.USE_SUPABASE !== 'true') {
+    mongoose = require('mongoose');
+    User = require('../models/User');
+  } else {
+    console.log('Skipping MongoDB imports in lazyPagination middleware - using Supabase only');
+    User = {};
+  }
+} catch (error) {
+  console.log('Mongoose not available in lazyPagination middleware - using Supabase only');
+  mongoose = null;
   User = {};
 }
 const { authMiddleware } = require('../middleware/auth');
