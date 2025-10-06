@@ -1,3 +1,13 @@
+// Skip MongoDB completely in production
+if (process.env.NODE_ENV === 'production' || process.env.USE_SUPABASE === 'true') {
+  console.log('Skipping MongoDB completely - using Supabase only');
+  module.exports = {
+    connectDB: async () => null,
+    getConnection: () => null
+  };
+  return;
+}
+
 const mongoose = require('mongoose');
 
 // Database connection URL - connect to occupational-rehab database
