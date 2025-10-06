@@ -1,6 +1,26 @@
-// Skip MongoDB completely in production
-if (process.env.NODE_ENV === 'production' || process.env.USE_SUPABASE === 'true') {
-  console.log('Skipping MongoDB completely - using Supabase only');
+// Skip MongoDB completely in production or if mongoose is not available
+try {
+  if (process.env.NODE_ENV === 'production' || process.env.USE_SUPABASE === 'true') {
+    console.log('Skipping MongoDB completely - using Supabase only');
+    module.exports = {
+      dbHealthCheck: (req, res, next) => {
+        req.dbHealthy = true; // Supabase is our primary database
+        req.dbStatus = 'supabase';
+        next();
+      },
+      getDatabaseStatus: (req, res) => {
+        res.json({
+          status: 'supabase',
+          healthy: true,
+          timestamp: new Date().toISOString()
+        });
+      },
+      ensureConnection: async () => true
+    };
+    return;
+  }
+} catch (error) {
+  console.log('Skipping MongoDB completely - mongoose not available');
   module.exports = {
     dbHealthCheck: (req, res, next) => {
       req.dbHealthy = true; // Supabase is our primary database
@@ -19,7 +39,28 @@ if (process.env.NODE_ENV === 'production' || process.env.USE_SUPABASE === 'true'
   return;
 }
 
-const mongoose = require('mongoose');
+let mongoose;
+try {
+  mongoose = require('mongoose');
+} catch (error) {
+  console.log('Mongoose not available - using Supabase only');
+  module.exports = {
+    dbHealthCheck: (req, res, next) => {
+      req.dbHealthy = true; // Supabase is our primary database
+      req.dbStatus = 'supabase';
+      next();
+    },
+    getDatabaseStatus: (req, res) => {
+      res.json({
+        status: 'supabase',
+        healthy: true,
+        timestamp: new Date().toISOString()
+      });
+    },
+    ensureConnection: async () => true
+  };
+  return;
+}
 
 // Database health check middleware
 const dbHealthCheck = (req, res, next) => {
