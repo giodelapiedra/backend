@@ -7,9 +7,25 @@
  * - Batch processing notifications
  * - Managing notification templates
  */
-const Notification = require('../models/Notification');
-const User = require('../models/User');
-const mongoose = require('mongoose');
+
+// Skip MongoDB imports in production or if mongoose is not available
+let Notification, User, mongoose;
+try {
+  if (process.env.NODE_ENV !== 'production' && process.env.USE_SUPABASE !== 'true') {
+    Notification = require('../models/Notification');
+    User = require('../models/User');
+    mongoose = require('mongoose');
+  } else {
+    console.log('Skipping MongoDB imports in NotificationService - using Supabase only');
+    Notification = {};
+    User = {};
+  }
+} catch (error) {
+  console.log('Mongoose not available in NotificationService - using Supabase only');
+  Notification = {};
+  User = {};
+  mongoose = null;
+}
 
 // Store active SSE connections
 const activeConnections = new Map();

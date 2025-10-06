@@ -1,18 +1,23 @@
-// Skip MongoDB models in production
-if (process.env.NODE_ENV === 'production' || process.env.USE_SUPABASE === 'true') {
-  console.log('⏭️ Skipping WorkReadiness model - using Supabase only');
+// Skip MongoDB models in production or if mongoose is not available
+try {
+  if (process.env.NODE_ENV === 'production' || process.env.USE_SUPABASE === 'true') {
+    console.log('Skipping WorkReadiness model - using Supabase only');
+    module.exports = {};
+    return;
+  }
+} catch (error) {
+  console.log('Skipping WorkReadiness model - mongoose not available');
   module.exports = {};
-  return; // Exit the module immediately
+  return;
 }
 
-// Only try to load mongoose in development
 let mongoose;
 try {
   mongoose = require('mongoose');
 } catch (error) {
-  console.log('⏭️ Mongoose not available in WorkReadiness model - using Supabase only');
+  console.log('Mongoose not available - using Supabase only');
   module.exports = {};
-  return; // Exit the module immediately
+  return;
 }
 
 const workReadinessSchema = new mongoose.Schema({

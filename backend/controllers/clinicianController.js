@@ -1,7 +1,24 @@
-const mongoose = require('mongoose');
-const Case = require('../models/Case');
-const Appointment = require('../models/Appointment');
-const User = require('../models/User');
+// Skip MongoDB imports in production or if mongoose is not available
+let mongoose, Case, Appointment, User;
+try {
+  if (process.env.NODE_ENV !== 'production' && process.env.USE_SUPABASE !== 'true') {
+    mongoose = require('mongoose');
+    Case = require('../models/Case');
+    Appointment = require('../models/Appointment');
+    User = require('../models/User');
+  } else {
+    console.log('Skipping MongoDB imports in clinicianController - using Supabase only');
+    Case = {};
+    Appointment = {};
+    User = {};
+  }
+} catch (error) {
+  console.log('Mongoose not available in clinicianController - using Supabase only');
+  mongoose = null;
+  Case = {};
+  Appointment = {};
+  User = {};
+}
 const { startOfMonth, endOfMonth, subMonths, format } = require('date-fns');
 
 // @desc    Get analytics data for a clinician

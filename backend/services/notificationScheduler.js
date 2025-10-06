@@ -1,16 +1,43 @@
-const mongoose = require('mongoose');
 const cron = require('node-cron');
 require('dotenv').config();
 
-// Connect to MongoDB
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/occupational-rehab', {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-});
+// Skip MongoDB in production or if mongoose is not available
+let mongoose;
+try {
+  if (process.env.NODE_ENV !== 'production' && process.env.USE_SUPABASE !== 'true') {
+    mongoose = require('mongoose');
+    // Connect to MongoDB
+    mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/occupational-rehab', {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+    });
+  } else {
+    console.log('Skipping MongoDB connection in notificationScheduler - using Supabase only');
+  }
+} catch (error) {
+  console.log('Mongoose not available in notificationScheduler - using Supabase only');
+  mongoose = null;
+}
 
-const Appointment = require('../models/Appointment');
-const Notification = require('../models/Notification');
-const User = require('../models/User');
+// Skip MongoDB imports in production or if mongoose is not available
+let Appointment, Notification, User;
+try {
+  if (process.env.NODE_ENV !== 'production' && process.env.USE_SUPABASE !== 'true') {
+    Appointment = require('../models/Appointment');
+    Notification = require('../models/Notification');
+    User = require('../models/User');
+  } else {
+    console.log('Skipping MongoDB model imports in notificationScheduler - using Supabase only');
+    Appointment = {};
+    Notification = {};
+    User = {};
+  }
+} catch (error) {
+  console.log('Mongoose not available in notificationScheduler - using Supabase only');
+  Appointment = {};
+  Notification = {};
+  User = {};
+}
 const NotificationService = require('./NotificationService');
 
 class NotificationScheduler {

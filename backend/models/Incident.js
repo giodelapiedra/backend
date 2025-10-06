@@ -1,4 +1,24 @@
-const mongoose = require('mongoose');
+// Skip MongoDB models in production or if mongoose is not available
+try {
+  if (process.env.NODE_ENV === 'production' || process.env.USE_SUPABASE === 'true') {
+    console.log('Skipping Incident model - using Supabase only');
+    module.exports = {};
+    return;
+  }
+} catch (error) {
+  console.log('Skipping Incident model - mongoose not available');
+  module.exports = {};
+  return;
+}
+
+let mongoose;
+try {
+  mongoose = require('mongoose');
+} catch (error) {
+  console.log('Mongoose not available - using Supabase only');
+  module.exports = {};
+  return;
+}
 
 const incidentSchema = new mongoose.Schema({
   incidentNumber: {

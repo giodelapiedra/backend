@@ -178,8 +178,9 @@ if (process.env.NODE_ENV === 'development') {
 // CSRF protection for state-changing operations
 app.use(csrfProtection);
 
-// Database connection
+// Supabase connection using centralized config
 const { supabase } = require('./config/supabase');
+const { dbHealthCheck, getDatabaseStatus } = require('./middleware/dbHealth');
 
 // Test Supabase connection
 const testSupabaseConnection = async () => {
@@ -245,12 +246,8 @@ app.use('/api/team-leader', teamLeaderRoutes);
 app.use('/api/work-readiness', workReadinessRoutes);
 app.use('/api/goal-kpi', goalKpiRoutes);
 
-// Add Supabase health check middleware
-app.use((req, res, next) => {
-  req.dbHealthy = true; // Supabase is our primary database
-  req.dbStatus = 'supabase';
-  next();
-});
+// Apply database health check middleware to all routes
+app.use(dbHealthCheck);
 
 // Root endpoint
 app.get('/', (req, res) => {
@@ -318,13 +315,7 @@ app.get('/api/auth/status', (req, res) => {
 });
 
 // Database status endpoint
-app.get('/api/database/status', (req, res) => {
-  res.json({
-    status: 'supabase',
-    healthy: true,
-    timestamp: new Date().toISOString()
-  });
-});
+app.get('/api/database/status', getDatabaseStatus);
 
 // Error handling middleware
 app.use((err, req, res, next) => {

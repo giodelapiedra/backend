@@ -1,7 +1,24 @@
-const mongoose = require('mongoose');
-const Case = require('../models/Case');
-const Incident = require('../models/Incident');
-const User = require('../models/User');
+// Skip MongoDB imports in production or if mongoose is not available
+let mongoose, Case, Incident, User;
+try {
+  if (process.env.NODE_ENV !== 'production' && process.env.USE_SUPABASE !== 'true') {
+    mongoose = require('mongoose');
+    Case = require('../models/Case');
+    Incident = require('../models/Incident');
+    User = require('../models/User');
+  } else {
+    console.log('Skipping MongoDB imports in caseController - using Supabase only');
+    Case = {};
+    Incident = {};
+    User = {};
+  }
+} catch (error) {
+  console.log('Mongoose not available in caseController - using Supabase only');
+  mongoose = null;
+  Case = {};
+  Incident = {};
+  User = {};
+}
 const NotificationService = require('../services/NotificationService');
 const AutoAssignmentService = require('../services/AutoAssignmentService');
 
@@ -390,21 +407,25 @@ const getCaseById = async (req, res) => {
       userRole: req.user.role
     });
     
-    // Try to get more diagnostic information
+    // Try to get more diagnostic information (only if MongoDB is available)
     try {
-      console.log('Attempting to get raw case data from database...');
-      const rawCase = await mongoose.connection.db.collection('cases').findOne({ 
-        _id: new mongoose.Types.ObjectId(req.params.id) 
-      });
-      
-      if (rawCase) {
-        console.log('Raw case data found:', {
-          caseNumber: rawCase.caseNumber,
-          clinician: rawCase.clinician,
-          status: rawCase.status
+      if (mongoose && mongoose.connection && mongoose.connection.db) {
+        console.log('Attempting to get raw case data from database...');
+        const rawCase = await mongoose.connection.db.collection('cases').findOne({ 
+          _id: new mongoose.Types.ObjectId(req.params.id) 
         });
+        
+        if (rawCase) {
+          console.log('Raw case data found:', {
+            caseNumber: rawCase.caseNumber,
+            clinician: rawCase.clinician,
+            status: rawCase.status
+          });
+        } else {
+          console.log('No raw case data found in database');
+        }
       } else {
-        console.log('No raw case data found in database');
+        console.log('MongoDB not available - skipping diagnostic query');
       }
     } catch (diagError) {
       console.error('Error in diagnostic query:', diagError);

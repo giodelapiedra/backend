@@ -2,8 +2,22 @@ const express = require('express');
 const { body, query } = require('express-validator');
 const fs = require('fs');
 const path = require('path');
-const mongoose = require('mongoose');
-const User = require('../models/User');
+
+// Skip MongoDB imports in production or if mongoose is not available
+let mongoose, User;
+try {
+  if (process.env.NODE_ENV !== 'production' && process.env.USE_SUPABASE !== 'true') {
+    mongoose = require('mongoose');
+    User = require('../models/User');
+  } else {
+    console.log('Skipping MongoDB imports in users routes - using Supabase only');
+    User = {}; // Empty object for production
+  }
+} catch (error) {
+  console.log('Mongoose not available in users routes - using Supabase only');
+  mongoose = null;
+  User = {}; // Empty object for production
+}
 const { authMiddleware } = require('../middleware/auth');
 const { sanitizeInput } = require('../middleware/sanitization');
 const { uploadSingleUserPhoto } = require('../middleware/upload');

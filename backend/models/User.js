@@ -1,21 +1,18 @@
-// Skip MongoDB models in production
+// Skip MongoDB models in production or if mongoose is not available
 if (process.env.NODE_ENV === 'production' || process.env.USE_SUPABASE === 'true') {
   console.log('⏭️ Skipping User model - using Supabase only');
   module.exports = {};
-  return; // Exit the module immediately
-}
-
-// Only try to load mongoose in development
-let mongoose;
-try {
-  mongoose = require('mongoose');
-} catch (error) {
-  console.log('⏭️ Mongoose not available in User model - using Supabase only');
-  module.exports = {};
-  return; // Exit the module immediately
-}
-
-const bcrypt = require('bcryptjs');
+} else {
+  // Only load mongoose in development
+  let mongoose;
+  try {
+    mongoose = require('mongoose');
+  } catch (error) {
+    console.log('⏭️ Mongoose not available - using Supabase only');
+    module.exports = {};
+    return;
+  }
+  const bcrypt = require('bcryptjs');
 
 const userSchema = new mongoose.Schema({
   firstName: {
@@ -228,4 +225,5 @@ userSchema.methods.toJSON = function() {
   userSchema.index({ createdAt: -1 });
   userSchema.index({ role: 1, isActive: 1 }); // Compound index for role-based queries
 
-module.exports = mongoose.model('User', userSchema);
+  module.exports = mongoose.model('User', userSchema);
+}
