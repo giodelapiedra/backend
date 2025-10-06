@@ -11,8 +11,8 @@ let connectionPromise = null;
 const connectDB = async () => {
   try {
     // Skip MongoDB connection in production (use Supabase only)
-    if (process.env.NODE_ENV === 'production') {
-      console.log('Skipping MongoDB connection in production - using Supabase only');
+    if (process.env.NODE_ENV === 'production' || process.env.USE_SUPABASE === 'true') {
+      console.log('Skipping MongoDB connection - using Supabase only');
       return null;
     }
     
@@ -126,7 +126,14 @@ const connectDB = async () => {
   }
 };
 
+// Export connection functions that handle production environment
 module.exports = {
   connectDB,
-  getConnection: () => mongoose.connection
+  getConnection: () => {
+    // Return null connection in production to prevent MongoDB usage
+    if (process.env.NODE_ENV === 'production' || process.env.USE_SUPABASE === 'true') {
+      return null;
+    }
+    return mongoose.connection;
+  }
 };
