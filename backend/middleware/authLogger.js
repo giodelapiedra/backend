@@ -1,4 +1,16 @@
-const AuthenticationLog = require('../models/AuthenticationLog');
+// Skip MongoDB imports in production or if mongoose is not available
+let AuthenticationLog;
+try {
+  if (process.env.NODE_ENV !== 'production' && process.env.USE_SUPABASE !== 'true') {
+    AuthenticationLog = require('../models/AuthenticationLog');
+  } else {
+    console.log('⏭️ Skipping MongoDB imports in authLogger middleware - using Supabase only');
+    AuthenticationLog = { create: async () => {} }; // Mock for production
+  }
+} catch (error) {
+  console.log('⏭️ Mongoose not available in authLogger middleware - using Supabase only');
+  AuthenticationLog = { create: async () => {} }; // Mock for production
+}
 
 // Helper function to get client IP address
 const getClientIP = (req) => {

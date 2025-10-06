@@ -2,7 +2,21 @@ const express = require('express');
 const { body } = require('express-validator');
 const fs = require('fs');
 const path = require('path');
-const User = require('../models/User');
+
+// Skip MongoDB imports in production or if mongoose is not available
+let User;
+try {
+  if (process.env.NODE_ENV !== 'production' && process.env.USE_SUPABASE !== 'true') {
+    User = require('../models/User');
+  } else {
+    console.log('⏭️ Skipping MongoDB imports in auth routes - using Supabase only');
+    User = {};
+  }
+} catch (error) {
+  console.log('⏭️ Mongoose not available in auth routes - using Supabase only');
+  User = {};
+}
+
 const { generateToken, authMiddleware } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { authLimiter, registrationLimiter, passwordResetLimiter } = require('../middleware/rateLimiter');
