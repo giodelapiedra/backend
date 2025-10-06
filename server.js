@@ -32,6 +32,9 @@ const goalKpiRoutes = require('./routes/goalKpi');
 
 const app = express();
 
+// Trust proxy for rate limiting behind reverse proxy (Render)
+app.set('trust proxy', 1);
+
 // Rate limiting for general requests
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -77,8 +80,37 @@ app.use(compression());
 
 // CORS configuration
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
-  credentials: true
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    const allowedOrigins = [
+      'http://localhost:3000',
+      'http://localhost:3001',
+      'http://localhost:3002',
+      'https://frontend-oi0bvqtjg-giodelapiedras-projects.vercel.app',
+      'https://*.vercel.app',
+      process.env.FRONTEND_URL
+    ].filter(Boolean);
+    
+    // Check if origin is allowed
+    if (allowedOrigins.some(allowedOrigin => 
+      origin === allowedOrigin || 
+      (allowedOrigin.includes('*') && origin.includes(allowedOrigin.replace('*', '')))
+    )) {
+      return callback(null, true);
+    }
+    
+    // For development, allow all localhost origins
+    if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
+      return callback(null, true);
+    }
+    
+    return callback(new Error('Not allowed by CORS'));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin']
 }));
 
 // Logging
@@ -217,12 +249,68 @@ app.use('/api/goal-kpi', goalKpiRoutes);
 // Apply database health check middleware to all routes
 app.use(dbHealthCheck);
 
+// Root endpoint
+app.get('/', (req, res) => {
+  res.json({ 
+    message: 'Work Readiness System API',
+    version: '1.0.0',
+    status: 'running',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// API root endpoint
+app.get('/api', (req, res) => {
+  res.json({ 
+    message: 'Work Readiness System API',
+    version: '1.0.0',
+    endpoints: {
+      auth: '/api/auth',
+      users: '/api/users',
+      cases: '/api/cases',
+      assessments: '/api/assessments',
+      appointments: '/api/appointments',
+      checkIns: '/api/check-ins',
+      rehabilitationPlans: '/api/rehabilitation-plans',
+      incidents: '/api/incidents',
+      clinicians: '/api/clinicians',
+      preventiveTasks: '/api/preventive-tasks',
+      notifications: '/api/notifications',
+      activityLogs: '/api/activity-logs',
+      admin: '/api/admin',
+      clinicianAnalytics: '/api/clinicians/analytics',
+      teamLeader: '/api/team-leader',
+      workReadiness: '/api/work-readiness',
+      goalKpi: '/api/goal-kpi',
+      health: '/api/health'
+    }
+  });
+});
+
 // Enhanced health check endpoints
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'OK', 
     timestamp: new Date().toISOString(),
     database: req.dbHealthy ? 'connected' : 'disconnected'
+  });
+});
+
+// Health endpoint (without /api prefix)
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'OK', 
+    timestamp: new Date().toISOString(),
+    database: req.dbHealthy ? 'connected' : 'disconnected'
+  });
+});
+
+// Auth status endpoint
+app.get('/api/auth/status', (req, res) => {
+  res.json({ 
+    status: 'OK',
+    message: 'Authentication system is running',
+    timestamp: new Date().toISOString()
   });
 });
 
