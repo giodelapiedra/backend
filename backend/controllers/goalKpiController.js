@@ -505,6 +505,8 @@ const getMonthlyPerformanceTracking = async (req, res) => {
     const monthEnd = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0, 23, 59, 59);
     
     console.log(`📅 Analyzing month: ${monthStart.toISOString().split('T')[0]} to ${monthEnd.toISOString().split('T')[0]}`);
+    console.log(`👥 Team members found: ${teamMembers?.length || 0}`);
+    console.log(`🆔 Team member IDs:`, teamMemberIds);
     
     // 1. MONTHLY KPI CALCULATION FOR EACH WORKER
     const monthlyWorkerKPIs = await Promise.all(teamMembers.map(async (member) => {
@@ -517,12 +519,11 @@ const getMonthlyPerformanceTracking = async (req, res) => {
         .lte('submitted_at', monthEnd.toISOString())
         .order('submitted_at', { ascending: true });
       
-      // Get completed cycles for the month
+      // Get all assessments for the month (since we don't have cycle tracking columns)
       const { data: completedCycles } = await supabase
         .from('work_readiness')
-        .select('cycle_start, cycle_day, streak_days, cycle_completed, submitted_at')
+        .select('submitted_at, readiness_level, fatigue_level, mood')
         .eq('worker_id', member.id)
-        .eq('cycle_completed', true)
         .gte('submitted_at', monthStart.toISOString())
         .lte('submitted_at', monthEnd.toISOString())
         .order('submitted_at', { ascending: true });
@@ -530,6 +531,8 @@ const getMonthlyPerformanceTracking = async (req, res) => {
       // Calculate monthly metrics
       const totalAssessments = monthlyAssessments?.length || 0;
       const completedCyclesCount = completedCycles?.length || 0;
+      
+      console.log(`👤 Worker ${member.first_name} ${member.last_name}: ${totalAssessments} assessments found`);
       
       // Calculate working days in the month (Monday-Friday)
       const workingDaysInMonth = getWorkingDaysInMonth(monthStart, monthEnd);
@@ -539,14 +542,21 @@ const getMonthlyPerformanceTracking = async (req, res) => {
         ? (totalAssessments / workingDaysInMonth) * 100 
         : 0;
       
-      // Calculate average KPI for completed cycles
-      const cycleKPIs = completedCycles?.map(cycle => {
-        const completionRate = (cycle.streak_days / 7) * 100;
-        return calculateCompletionRateKPI(completionRate, null, totalAssessments);
+      // Calculate average KPI based on readiness levels (since we don't have cycle tracking)
+      const readinessKPIs = monthlyAssessments?.map(assessment => {
+        // Convert readiness level to a score
+        let score = 0;
+        switch(assessment.readiness_level) {
+          case 'fit': score = 100; break;
+          case 'minor': score = 70; break;
+          case 'not_fit': score = 30; break;
+          default: score = 50;
+        }
+        return calculateCompletionRateKPI(score, null, 1);
       }) || [];
       
-      const averageCycleKPI = cycleKPIs.length > 0
-        ? cycleKPIs.reduce((sum, kpi) => sum + kpi.score, 0) / cycleKPIs.length
+      const averageCycleKPI = readinessKPIs.length > 0
+        ? readinessKPIs.reduce((sum, kpi) => sum + kpi.score, 0) / readinessKPIs.length
         : 0;
       
       // Calculate readiness statistics for the month
@@ -582,11 +592,21 @@ const getMonthlyPerformanceTracking = async (req, res) => {
           not_fit: readinessStats.not_fit || 0
         },
         averageFatigueLevel: Math.round(avgFatigueLevel * 10) / 10,
-        cycleDetails: completedCycles?.map(cycle => ({
-          cycleStart: cycle.cycle_start,
-          completedAt: cycle.submitted_at,
-          streakDays: cycle.streak_days,
-          kpi: calculateCompletionRateKPI((cycle.streak_days / 7) * 100, null, null)
+        cycleDetails: monthlyAssessments?.map(assessment => ({
+          submittedAt: assessment.submitted_at,
+          readinessLevel: assessment.readiness_level,
+          fatigueLevel: assessment.fatigue_level,
+          mood: assessment.mood,
+          kpi: (() => {
+            let score = 0;
+            switch(assessment.readiness_level) {
+              case 'fit': score = 100; break;
+              case 'minor': score = 70; break;
+              case 'not_fit': score = 30; break;
+              default: score = 50;
+            }
+            return calculateCompletionRateKPI(score, null, 1);
+          })()
         })) || []
       };
     }));
@@ -637,7 +657,6 @@ const getMonthlyPerformanceTracking = async (req, res) => {
         .from('work_readiness')
         .select('*')
         .in('worker_id', teamMemberIds)
-        .eq('cycle_completed', true)
         .gte('submitted_at', trendMonthStart.toISOString())
         .lte('submitted_at', trendMonthEnd.toISOString());
       
