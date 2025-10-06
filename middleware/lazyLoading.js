@@ -1,7 +1,16 @@
 const express = require('express');
-const mongoose = require('mongoose');
-const Case = require('../models/Case');
-const Incident = require('../models/Incident');
+
+// Skip MongoDB imports in production
+let mongoose, Case, Incident;
+if (process.env.NODE_ENV !== 'production' && process.env.USE_SUPABASE !== 'true') {
+  mongoose = require('mongoose');
+  Case = require('../models/Case');
+  Incident = require('../models/Incident');
+} else {
+  console.log('Skipping MongoDB imports in lazyLoading middleware - using Supabase only');
+  Case = {};
+  Incident = {};
+}
 const { authMiddleware } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
 

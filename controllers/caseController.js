@@ -1,7 +1,16 @@
-const mongoose = require('mongoose');
-const Case = require('../models/Case');
-const Incident = require('../models/Incident');
-const User = require('../models/User');
+// Skip MongoDB imports in production
+let mongoose, Case, Incident, User;
+if (process.env.NODE_ENV !== 'production' && process.env.USE_SUPABASE !== 'true') {
+  mongoose = require('mongoose');
+  Case = require('../models/Case');
+  Incident = require('../models/Incident');
+  User = require('../models/User');
+} else {
+  console.log('Skipping MongoDB imports in caseController - using Supabase only');
+  Case = {};
+  Incident = {};
+  User = {};
+}
 const NotificationService = require('../services/NotificationService');
 const AutoAssignmentService = require('../services/AutoAssignmentService');
 
