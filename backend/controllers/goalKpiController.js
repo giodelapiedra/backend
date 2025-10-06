@@ -678,6 +678,11 @@ const getMonthlyPerformanceTracking = async (req, res) => {
     }
     
     // 4. PERFORMANCE INSIGHTS
+    console.log('🔍 Generating insights with data:', {
+      workerKPIsCount: monthlyWorkerKPIs.length,
+      teamSummary: monthlyTeamSummary,
+      trendsCount: monthlyTrends.length
+    });
     const performanceInsights = generateMonthlyInsights(monthlyWorkerKPIs, monthlyTeamSummary, monthlyTrends);
     
     res.json({
@@ -802,7 +807,7 @@ const generateMonthlyInsights = (monthlyWorkerKPIs, teamSummary, monthlyTrends) 
     data: {
       totalCycles: teamSummary.totalCompletedCycles,
       averageRate: teamSummary.averageCompletionRate,
-      teamKPI: teamSummary.teamMonthlyKPI.rating
+      teamKPI: teamSummary.teamKPI?.rating || 'N/A'
     }
   });
   
