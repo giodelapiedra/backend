@@ -1,10 +1,18 @@
 const express = require('express');
 const router = express.Router();
-const mongoose = require('mongoose');
 const { authMiddleware, roleMiddleware } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { adminLimiter } = require('../middleware/rateLimiter');
-const AuthenticationLog = require('../models/AuthenticationLog');
+
+// Skip MongoDB imports in production
+let mongoose, AuthenticationLog;
+if (process.env.NODE_ENV !== 'production' && process.env.USE_SUPABASE !== 'true') {
+  mongoose = require('mongoose');
+  AuthenticationLog = require('../models/AuthenticationLog');
+} else {
+  console.log('Skipping MongoDB imports in admin routes - using Supabase only');
+  AuthenticationLog = {}; // Empty object for production
+}
 
 console.log('🔍 Admin routes loaded - AuthenticationLog model:', !!AuthenticationLog);
 
