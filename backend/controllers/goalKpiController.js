@@ -1635,7 +1635,7 @@ const getTeamWeeklyKPI = async (req, res) => {
       weekEnd: currentWeekEnd.toLocaleDateString('en-CA'), // Use local date format
       todaySubmissions: todaySubmissionCount,
       todaySubmissionRate: Math.round(todaySubmissionRate),
-      todayDate: currentDate.toLocaleDateString('en-CA') // Use local date format
+      todayDate: new Date().toLocaleDateString('en-CA') // Use local date format
     };
     
     // Debug logging to understand team performance

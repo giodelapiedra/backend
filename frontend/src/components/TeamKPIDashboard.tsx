@@ -36,6 +36,7 @@ import {
 } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext.supabase';
 import { authClient } from '../lib/supabase';
+import { kpiAPI } from '../utils/backendApi';
 
 interface KPIData {
   rating: string;
@@ -130,37 +131,10 @@ const TeamKPIDashboard: React.FC<TeamKPIDashboardProps> = ({
       console.log('🔄 Fetching team KPI data for team leader:', teamLeaderId);
       console.log('📋 Team Leader ID:', teamLeaderId);
       console.log('👤 Current User:', user?.id, user?.role);
-      console.log('🌐 API Base URL:', process.env.REACT_APP_API_BASE_URL || 'http://localhost:5000');
+      console.log('🌐 Using Backend API');
       
-      // Get Supabase session token
-      const { data: { session }, error: sessionError } = await authClient.auth.getSession();
-      
-      if (sessionError || !session?.access_token) {
-        throw new Error('No access token found. Please log in again.');
-      }
-
-      console.log('🔍 Making API request to:', `${process.env.REACT_APP_API_BASE_URL || 'http://localhost:5000'}/api/goal-kpi/team-leader/weekly-summary?teamLeaderId=${teamLeaderId}`);
-      console.log('🔍 Team Leader ID:', teamLeaderId);
-      console.log('🔍 Session token:', session.access_token ? 'Present' : 'Missing');
-
-      const response = await fetch(`${process.env.REACT_APP_API_BASE_URL || 'http://localhost:5000'}/api/goal-kpi/team-leader/weekly-summary?teamLeaderId=${teamLeaderId}`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        }
-      });
-
-      console.log('🔍 Response status:', response.status);
-      console.log('🔍 Response ok:', response.ok);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('❌ API Error Response:', errorText);
-        throw new Error(`Failed to fetch team KPI data: ${response.status} ${response.statusText} - ${errorText}`);
-      }
-
-      const result = await response.json();
+      // Use the new backend API
+      const result = await kpiAPI.getTeamWeeklySummary(teamLeaderId);
       
       if (result.success) {
         setData(result.data.teamKPI);
@@ -170,7 +144,13 @@ const TeamKPIDashboard: React.FC<TeamKPIDashboardProps> = ({
       }
     } catch (err: any) {
       console.error('Error fetching team KPI data:', err);
-      setError(err.message || 'Failed to load team KPI data');
+      
+      // Check if it's a network error (backend down)
+      if (err.code === 'ERR_NETWORK' || err.message?.includes('Network Error') || err.message?.includes('ERR_FAILED')) {
+        setError('Backend service is temporarily unavailable. Please try again later or contact support if the issue persists.');
+      } else {
+        setError(err.message || 'Failed to load team KPI data');
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -622,29 +602,68 @@ const TeamKPIDashboard: React.FC<TeamKPIDashboardProps> = ({
   }
 
   if (error && !data) {
+    const isNetworkError = error.includes('Backend service is temporarily unavailable');
+    
     return (
       <Card sx={{ 
         borderRadius: 3,
         boxShadow: '0 4px 20px rgba(0, 0, 0, 0.08)',
-        backgroundColor: '#f0f9ff',
-        border: '1px solid #bae6fd',
+        backgroundColor: isNetworkError ? '#fef2f2' : '#f0f9ff',
+        border: isNetworkError ? '1px solid #fecaca' : '1px solid #bae6fd',
       }}>
         <CardContent sx={{ textAlign: 'center', py: 6 }}>
-          <Assessment sx={{ color: '#3b82f6', fontSize: 64, mb: 3 }} />
-          <Typography sx={{ color: '#1e40af', mb: 2, fontSize: '1.25rem', fontWeight: 600 }}>
-            KPI Dashboard - Demonstration Mode
-          </Typography>
-          <Typography sx={{ color: '#6b7280', mb: 3 }}>
-            Team performance tracking will be available once backend is deployed. Work readiness data is being collected successfully.
-          </Typography>
-          <Typography sx={{ color: '#10b981', fontSize: '0.875rem', fontWeight: 500 }}>
-            ✅ Team member submissions are being tracked
-          </Typography>
+          {isNetworkError ? (
+            <>
+              <Warning sx={{ color: '#dc2626', fontSize: 64, mb: 3 }} />
+              <Typography sx={{ color: '#dc2626', mb: 2, fontSize: '1.25rem', fontWeight: 600 }}>
+                Service Temporarily Unavailable
+              </Typography>
+              <Typography sx={{ color: '#6b7280', mb: 3 }}>
+                The backend service is currently experiencing issues. This may be due to:
+              </Typography>
+              <Box sx={{ textAlign: 'left', mb: 3, maxWidth: 400, mx: 'auto' }}>
+                <Typography sx={{ color: '#6b7280', fontSize: '0.875rem', mb: 1 }}>
+                  • Server maintenance or updates
+                </Typography>
+                <Typography sx={{ color: '#6b7280', fontSize: '0.875rem', mb: 1 }}>
+                  • Database connection issues
+                </Typography>
+                <Typography sx={{ color: '#6b7280', fontSize: '0.875rem', mb: 1 }}>
+                  • Network connectivity problems
+                </Typography>
+              </Box>
+              <Typography sx={{ color: '#10b981', fontSize: '0.875rem', fontWeight: 500, mb: 3 }}>
+                ✅ Work readiness data collection is still working normally
+              </Typography>
+            </>
+          ) : (
+            <>
+              <Assessment sx={{ color: '#3b82f6', fontSize: 64, mb: 3 }} />
+              <Typography sx={{ color: '#1e40af', mb: 2, fontSize: '1.25rem', fontWeight: 600 }}>
+                KPI Dashboard - Demonstration Mode
+              </Typography>
+              <Typography sx={{ color: '#6b7280', mb: 3 }}>
+                Team performance tracking will be available once backend is deployed. Work readiness data is being collected successfully.
+              </Typography>
+              <Typography sx={{ color: '#10b981', fontSize: '0.875rem', fontWeight: 500 }}>
+                ✅ Team member submissions are being tracked
+              </Typography>
+            </>
+          )}
           <Button
             variant="outlined"
             startIcon={<Refresh />}
             onClick={handleRefresh}
-            sx={{ mt: 2, borderRadius: 2 }}
+            sx={{ 
+              mt: 2, 
+              borderRadius: 2,
+              borderColor: isNetworkError ? '#dc2626' : '#3b82f6',
+              color: isNetworkError ? '#dc2626' : '#3b82f6',
+              '&:hover': {
+                borderColor: isNetworkError ? '#b91c1c' : '#2563eb',
+                backgroundColor: isNetworkError ? '#fef2f2' : '#f0f9ff'
+              }
+            }}
           >
             Retry Connection
           </Button>

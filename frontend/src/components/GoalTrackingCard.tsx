@@ -25,6 +25,7 @@ import {
 } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext.supabase';
 import { authClient } from '../lib/supabase';
+import { kpiAPI } from '../utils/backendApi';
 
 interface KPIData {
   rating: string;
@@ -79,26 +80,12 @@ const GoalTrackingCard: React.FC<GoalTrackingCardProps> = ({
     try {
       setRefreshing(true);
       
-      // Get Supabase session token
-      const { data: { session }, error: sessionError } = await authClient.auth.getSession();
-      
-      if (sessionError || !session?.access_token) {
-        throw new Error('No access token found. Please log in again.');
+      if (!user?.id) {
+        throw new Error('User ID is required');
       }
 
-      const response = await fetch(`${process.env.REACT_APP_API_BASE_URL || 'http://localhost:5000'}/api/goal-kpi/worker/weekly-progress?workerId=${user?.id}`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch goal data: ${response.statusText}`);
-      }
-
-      const result = await response.json();
+      // Use the new backend API
+      const result = await kpiAPI.getWorkerWeeklyProgress(user.id);
       
       if (result.success) {
         setData(result.data);
