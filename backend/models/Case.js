@@ -1,17 +1,19 @@
-// Skip MongoDB models in production or if mongoose is not available
+// Skip MongoDB models in production
 if (process.env.NODE_ENV === 'production' || process.env.USE_SUPABASE === 'true') {
   console.log('⏭️ Skipping Case model - using Supabase only');
   module.exports = {};
-} else {
-  // Only load mongoose in development
-  let mongoose;
-  try {
-    mongoose = require('mongoose');
-  } catch (error) {
-    console.log('⏭️ Mongoose not available - using Supabase only');
-    module.exports = {};
-    return;
-  }
+  return; // Exit the module immediately
+}
+
+// Only try to load mongoose in development
+let mongoose;
+try {
+  mongoose = require('mongoose');
+} catch (error) {
+  console.log('⏭️ Mongoose not available in Case model - using Supabase only');
+  module.exports = {};
+  return; // Exit the module immediately
+}
 
 const caseSchema = new mongoose.Schema({
   caseNumber: {
@@ -185,5 +187,4 @@ caseSchema.index({ clinician: 1 });
   caseSchema.index({ caseManager: 1, status: 1 }); // Compound index for case manager workload
   caseSchema.index({ clinician: 1, status: 1 }); // Compound index for clinician workload
 
-  module.exports = mongoose.model('Case', caseSchema);
-}
+module.exports = mongoose.model('Case', caseSchema);

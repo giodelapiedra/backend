@@ -228,5 +228,4 @@ userSchema.methods.toJSON = function() {
   userSchema.index({ createdAt: -1 });
   userSchema.index({ role: 1, isActive: 1 }); // Compound index for role-based queries
 
-  module.exports = mongoose.model('User', userSchema);
-}
+module.exports = mongoose.model('User', userSchema);
