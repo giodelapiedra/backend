@@ -1,3 +1,10 @@
+// Skip MongoDB models in production
+if (process.env.NODE_ENV === 'production' || process.env.USE_SUPABASE === 'true') {
+  console.log('Skipping Assessment model - using Supabase only');
+  module.exports = {};
+  return;
+}
+
 const mongoose = require('mongoose');
 
 const assessmentSchema = new mongoose.Schema({
