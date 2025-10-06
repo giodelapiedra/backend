@@ -1,4 +1,19 @@
-const mongoose = require('mongoose');
+// Skip MongoDB models in production
+if (process.env.NODE_ENV === 'production' || process.env.USE_SUPABASE === 'true') {
+  console.log('⏭️ Skipping RehabilitationPlan model - using Supabase only');
+  module.exports = {};
+  return; // Exit the module immediately
+}
+
+// Only try to load mongoose in development
+let mongoose;
+try {
+  mongoose = require('mongoose');
+} catch (error) {
+  console.log('⏭️ Mongoose not available in RehabilitationPlan model - using Supabase only');
+  module.exports = {};
+  return; // Exit the module immediately
+}
 
 const rehabilitationPlanSchema = new mongoose.Schema({
   // Case reference
