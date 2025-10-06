@@ -144,7 +144,7 @@ const WorkerDashboard: React.FC = memo(() => {
       console.log('🎯 Starting login cycle for worker:', user.id);
       console.log('🎯 User role:', user.role);
       
-      const response = await fetch(`${process.env.REACT_APP_API_BASE_URL || 'http://localhost:5000'}/api/goal-kpi/login-cycle`, {
+      const response = await fetch(`${process.env.REACT_APP_API_BASE_URL || 'https://sociosystem.onrender.com'}/api/goal-kpi/login-cycle`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -626,7 +626,7 @@ const WorkerDashboard: React.FC = memo(() => {
       
       // Submit work readiness data with cycle tracking
       try {
-        const cycleResponse = await fetch(`${process.env.REACT_APP_API_BASE_URL || 'http://localhost:5000'}/api/goal-kpi/submit-assessment`, {
+        const cycleResponse = await fetch(`${process.env.REACT_APP_API_BASE_URL || 'https://sociosystem.onrender.com'}/api/goal-kpi/submit-assessment`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

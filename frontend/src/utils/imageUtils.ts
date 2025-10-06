@@ -28,7 +28,7 @@ export const getImageUrl = (imagePath: string): string => {
   }
   
   // Get the base URL from environment variable
-  const baseUrl = process.env.REACT_APP_API_URL?.replace('/api', '') || 'http://localhost:5000';
+  const baseUrl = process.env.REACT_APP_API_URL?.replace('/api', '') || 'https://sociosystem.onrender.com';
   
   // Ensure imagePath starts with /
   const normalizedPath = imagePath.startsWith('/') ? imagePath : `/${imagePath}`;

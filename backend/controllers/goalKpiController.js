@@ -606,7 +606,7 @@ const getMonthlyPerformanceTracking = async (req, res) => {
       averageCycleKPI: monthlyWorkerKPIs.length > 0
         ? monthlyWorkerKPIs.reduce((sum, member) => sum + member.monthlyMetrics.averageCycleKPI, 0) / monthlyWorkerKPIs.length
         : 0,
-      teamMonthlyKPI: calculateCompletionRateKPI(
+      teamKPI: calculateCompletionRateKPI(
         monthlyWorkerKPIs.length > 0
           ? monthlyWorkerKPIs.reduce((sum, member) => sum + member.monthlyMetrics.completionRate, 0) / monthlyWorkerKPIs.length
           : 0,
@@ -664,18 +664,10 @@ const getMonthlyPerformanceTracking = async (req, res) => {
     res.json({
       success: true,
       data: {
-        monthlyPerformance: {
-          targetMonth: {
-            month: monthlyTeamSummary.month,
-            monthStart: monthlyTeamSummary.monthStart,
-            monthEnd: monthlyTeamSummary.monthEnd
-          },
-          monthlyTeamSummary: monthlyTeamSummary,
-          individualWorkerKPIs: monthlyWorkerKPIs,
-          monthlyTrends: monthlyTrends,
-          performanceInsights: performanceInsights,
-          generatedAt: new Date().toISOString()
-        }
+        monthlyWorkerKPIs: monthlyWorkerKPIs,
+        monthlyTeamSummary: monthlyTeamSummary,
+        monthlyTrends: monthlyTrends,
+        performanceInsights: performanceInsights
       }
     });
     

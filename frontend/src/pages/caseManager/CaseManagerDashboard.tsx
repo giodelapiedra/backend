@@ -717,13 +717,13 @@ const CaseManagerDashboard: React.FC = () => {
       // The api.interceptors.request will automatically add the token
       // This is more reliable than creating a custom config
       
-      console.log('API URL:', process.env.REACT_APP_API_URL || 'http://localhost:5000/api'); // TODO: Remove when fully migrated to Supabase
+      console.log('API URL:', process.env.REACT_APP_API_URL || 'https://sociosystem.onrender.com/api'); // TODO: Remove when fully migrated to Supabase
       
       // Log the complete request details
       console.log('Making API request to create case:', {
         url: '/cases',
         data: caseData,
-        baseURL: process.env.REACT_APP_API_URL || 'http://localhost:5000/api' // TODO: Remove when fully migrated to Supabase
+        baseURL: process.env.REACT_APP_API_URL || 'https://sociosystem.onrender.com/api' // TODO: Remove when fully migrated to Supabase
       });
 
       // Make the API call with default configuration

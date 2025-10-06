@@ -119,9 +119,7 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
         timeout: 15000, // Increased timeout
         headers: {
           'Content-Type': 'application/json',
-          'X-Requested-With': 'XMLHttpRequest',
-          'Cache-Control': 'no-cache',
-          'Pragma': 'no-cache'
+          'X-Requested-With': 'XMLHttpRequest'
         }
       });
 
@@ -155,7 +153,7 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
       );
 
       const response = await apiClient.get(
-        `${process.env.REACT_APP_API_BASE_URL || 'http://localhost:5000'}/api/goal-kpi/team-leader/monthly-performance`,
+        `${process.env.REACT_APP_API_BASE_URL || 'https://sociosystem.onrender.com'}/api/goal-kpi/team-leader/monthly-performance`,
         {
           params: {
             teamLeaderId: sanitizeInput(teamLeaderId),
@@ -168,8 +166,8 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
 
       if (response.data.success) {
         // Validate response data structure
-        const data = response.data.data?.monthlyPerformance;
-        if (!data || !data.targetMonth || !data.monthlyTeamSummary) {
+        const data = response.data.data;
+        if (!data || !data.monthlyTeamSummary) {
           throw new Error('Invalid data structure received');
         }
         
@@ -245,11 +243,11 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
 
   // Memoized sorted workers for performance
   const sortedWorkers = useMemo(() => {
-    if (!monthlyData?.individualWorkerKPIs) return [];
-    return [...monthlyData.individualWorkerKPIs].sort(
+    if (!monthlyData?.monthlyWorkerKPIs) return [];
+    return [...monthlyData.monthlyWorkerKPIs].sort(
       (a, b) => b.monthlyMetrics.completionRate - a.monthlyMetrics.completionRate
     );
-  }, [monthlyData?.individualWorkerKPIs]);
+  }, [monthlyData?.monthlyWorkerKPIs]);
 
   // Memoized pagination calculations
   const paginationData = useMemo(() => {
@@ -481,7 +479,7 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
     return null;
   }
 
-  const { targetMonth, monthlyTeamSummary, individualWorkerKPIs, monthlyTrends, performanceInsights } = monthlyData;
+  const { monthlyWorkerKPIs, monthlyTeamSummary, monthlyTrends, performanceInsights } = monthlyData;
 
   // Use memoized pagination data
   const { totalPages, startIndex, endIndex, currentWorkers } = paginationData;
@@ -555,7 +553,7 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
             
             <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
               <p style={{ color: '#6b7280', margin: 0, fontSize: window.innerWidth <= 768 ? '0.8rem' : '0.875rem' }}>
-                {targetMonth.month} - Comprehensive KPI Analysis
+                {monthlyTeamSummary.month} - Comprehensive KPI Analysis
               </p>
               
               {lastUpdated && (
@@ -745,13 +743,13 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
           padding: '1.5rem',
           borderRadius: '0.5rem',
           boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
-          border: `2px solid ${monthlyTeamSummary.teamMonthlyKPI.color}`,
+          border: `2px solid ${monthlyTeamSummary.teamKPI?.color || '#6b7280'}`,
           transition: 'all 0.2s ease',
           cursor: 'pointer'
         }}
         onMouseEnter={(e) => {
           e.currentTarget.style.transform = 'translateY(-2px)';
-          e.currentTarget.style.boxShadow = `0 4px 12px ${monthlyTeamSummary.teamMonthlyKPI.color}40`;
+          e.currentTarget.style.boxShadow = `0 4px 12px ${monthlyTeamSummary.teamKPI?.color || '#6b7280'}40`;
         }}
         onMouseLeave={(e) => {
           e.currentTarget.style.transform = 'translateY(0)';
@@ -760,16 +758,16 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
         >
           <div style={{ marginBottom: '0.5rem' }}>
             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M12 2L15.09 8.26L22 9L17 14L18.18 21L12 17.77L5.82 21L7 14L2 9L8.91 8.26L12 2Z" stroke={monthlyTeamSummary.teamMonthlyKPI.color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M12 2L15.09 8.26L22 9L17 14L18.18 21L12 17.77L5.82 21L7 14L2 9L8.91 8.26L12 2Z" stroke={monthlyTeamSummary.teamKPI?.color || '#6b7280'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
           </div>
           <div style={{
             fontSize: '1.5rem',
             fontWeight: '700',
-            color: monthlyTeamSummary.teamMonthlyKPI.color,
+            color: monthlyTeamSummary.teamKPI?.color || '#6b7280',
             marginBottom: '0.25rem'
           }}>
-            {monthlyTeamSummary.teamMonthlyKPI.rating}
+            {monthlyTeamSummary.teamKPI?.rating || 'N/A'}
           </div>
           <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.5rem' }}>
             Team Monthly KPI
@@ -1068,12 +1066,12 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
                      <div style={{
                        padding: '0.25rem 0.5rem',
                        borderRadius: '0.25rem',
-                       backgroundColor: worker.monthlyMetrics.monthlyKPI.color,
+                       backgroundColor: worker.monthlyMetrics?.monthlyKPI?.color || '#6b7280',
                        color: 'white',
                        fontSize: '0.7rem',
                        fontWeight: '600'
                      }}>
-                       {worker.monthlyMetrics.monthlyKPI.rating}
+                       {worker.monthlyMetrics?.monthlyKPI?.rating || 'N/A'}
                      </div>
 
                      {/* Completion Rate */}
@@ -1317,12 +1315,12 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
                     <div style={{
                       padding: '0.375rem 0.75rem',
                       borderRadius: '0.25rem',
-                      backgroundColor: worker.monthlyMetrics.monthlyKPI.color,
+                      backgroundColor: worker.monthlyMetrics?.monthlyKPI?.color || '#6b7280',
                       color: 'white',
                       fontSize: '0.75rem',
                       fontWeight: '600'
                     }}>
-                      {worker.monthlyMetrics.monthlyKPI.rating}
+                      {worker.monthlyMetrics?.monthlyKPI?.rating || 'N/A'}
                     </div>
 
                     {/* Completion Rate */}
