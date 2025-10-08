@@ -51,7 +51,7 @@ import { dataClient } from '../../lib/supabase';
 import LayoutWithSidebar from '../../components/LayoutWithSidebar';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { useGetIncidentsQuery, useCreateIncidentMutation, incidentsApi } from '../../store/api/incidentsApi';
-import { useGetTeamsQuery, useGetTeamMembersQuery, teamsApi } from '../../store/api/teamsApi';
+import { useGetTeamsQuery, useGetTeamMembersQuery, useGetUnselectedWorkersQuery, teamsApi } from '../../store/api/teamsApi';
 import { useGetCasesQuery, casesApi } from '../../store/api/casesApi';
 import {
   setSelectedIncident,
@@ -211,16 +211,16 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
   });
   
   const { 
-    data: teamMembersData, 
-    isLoading: teamMembersLoading, 
-    error: teamMembersError 
-  } = useGetTeamMembersQuery(
-    { teamLeaderId: user?.id || '', teamName: selectedTeam },
-    { skip: !user?.id || !selectedTeam }
+    data: unselectedWorkersData, 
+    isLoading: unselectedWorkersLoading, 
+    error: unselectedWorkersError 
+  } = useGetUnselectedWorkersQuery(
+    { teamLeaderId: selectedTeam || '', date: new Date().toISOString().split('T')[0] },
+    { skip: !selectedTeam }
   );
 
   // Combined loading state for better UX
-  const isAnyLoading = incidentsLoading || casesLoading || teamsLoading || teamMembersLoading;
+  const isAnyLoading = incidentsLoading || casesLoading || teamsLoading || unselectedWorkersLoading;
 
   const [createIncident, { isLoading: creatingIncident }] = useCreateIncidentMutation();
 
@@ -229,6 +229,7 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
   const cases = casesData?.cases || [];
   const teams = teamsData?.teams || [];
   const currentTeam = teamsData?.currentTeam || null;
+  const teamMembers = unselectedWorkersData?.unselectedWorkers || [];
 
   // Fetch notifications (same logic as /notifications page)
   const fetchNotifications = useCallback(async () => {
@@ -421,10 +422,20 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
 
   // Effects
   useEffect(() => {
-    if (teamMembersData?.teamMembers) {
-      dispatch(setTeamMembers(teamMembersData.teamMembers));
+    if (unselectedWorkersData?.unselectedWorkers) {
+      // Transform unselected workers data to match the expected format
+      const formattedWorkers = unselectedWorkersData.unselectedWorkers.map((unselected: any) => ({
+        id: unselected.worker.id,
+        first_name: unselected.worker.first_name,
+        last_name: unselected.worker.last_name,
+        email: unselected.worker.email,
+        reason: unselected.reason,
+        notes: unselected.notes || 'No notes provided',
+        caseStatus: unselected.case_status || 'open'
+      }));
+      dispatch(setTeamMembers(formattedWorkers));
     }
-  }, [teamMembersData, dispatch]);
+  }, [unselectedWorkersData, dispatch]);
 
   // Auto-select current team if available
   useEffect(() => {
@@ -446,16 +457,16 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
       selectedTeam,
       teams,
       teamMembers,
-      teamMembersData,
+      unselectedWorkersData,
       teamsData,
       teamsLoading,
       teamsError
     });
-  }, [user, selectedTeam, teams, teamMembers, teamMembersData, teamsData, teamsLoading, teamsError]);
+  }, [user, selectedTeam, teams, teamMembers, unselectedWorkersData, teamsData, teamsLoading, teamsError]);
 
   useEffect(() => {
-    if (incidentsError || casesError || teamsError || teamMembersError) {
-      const errorMessage = incidentsError || casesError || teamsError || teamMembersError;
+    if (incidentsError || casesError || teamsError || unselectedWorkersError) {
+      const errorMessage = incidentsError || casesError || teamsError || unselectedWorkersError;
       let errorString = 'Failed to fetch data';
       
       if (typeof errorMessage === 'string') {
@@ -479,7 +490,7 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
       
       dispatch(setError(errorString));
     }
-  }, [incidentsError, casesError, teamsError, teamMembersError, dispatch]);
+  }, [incidentsError, casesError, teamsError, unselectedWorkersError, dispatch]);
 
   // Handlers
   const handleCreateIncidentClick = useCallback(() => {
@@ -1270,11 +1281,22 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
                       <em>Teams loaded: {teams.length}</em>
                     </MenuItem>
                     {teams.length > 0 ? (
-                      teams.map((team: string) => (
-                        <MenuItem key={team} value={team}>
-                          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
-                            <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                              {team}
+                      teams.map((team: any) => (
+                        <MenuItem key={team.teamLeaderId} value={team.teamLeaderId}>
+                          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', width: '100%' }}>
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+                              <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                                {team.teamName}
+                              </Typography>
+                              <Chip 
+                                label={`${team.activeCases} cases`}
+                                size="small"
+                                color={team.activeCases > 5 ? 'error' : team.activeCases > 2 ? 'warning' : 'success'}
+                                sx={{ fontSize: '0.688rem', height: 20 }}
+                              />
+                            </Box>
+                            <Typography variant="caption" color="text.secondary">
+                              Team Leader: {team.teamLeader.name} • {team.totalMembers} workers
                             </Typography>
                           </Box>
                         </MenuItem>
@@ -1291,35 +1313,68 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
               {/* Team Member Selection */}
               <Box sx={{ mb: 2 }}>
                 <Typography variant="h6" gutterBottom>
-                  Select Worker
+                  Select Unselected Worker
+                </Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
+                  Only showing workers from unselected_workers table
                 </Typography>
                 <FormControl fullWidth required>
-                  <InputLabel>Worker *</InputLabel>
+                  <InputLabel>Unselected Worker *</InputLabel>
                   <Select
                     value={incidentForm.worker}
                     onChange={(e) => handleFormChange('worker', e.target.value)}
-                    label="Worker *"
+                    label="Unselected Worker *"
                   >
                     {teamMembers.length > 0 ? (
                       teamMembers.map((member: any) => (
                         <MenuItem key={member.id} value={member.id}>
-                          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
-                            <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                              {member.first_name} {member.last_name}
-                            </Typography>
+                          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', width: '100%' }}>
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+                              <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                                {member.first_name} {member.last_name}
+                              </Typography>
+                              <Chip
+                                label={member.reason || 'not_rostered'}
+                                size="small"
+                                color="warning"
+                                sx={{ 
+                                  fontSize: '0.688rem', 
+                                  height: 20, 
+                                  fontWeight: 'bold',
+                                  backgroundColor: member.reason === 'sick' ? '#ef4444' : 
+                                                 member.reason === 'injured_medical' ? '#f59e0b' : 
+                                                 member.reason === 'on_leave_rdo' ? '#3b82f6' : '#6b7280'
+                                }}
+                              />
+                            </Box>
                             <Typography variant="caption" color="text.secondary">
                               {member.email}
                             </Typography>
+                            {member.notes && (
+                              <Typography variant="caption" sx={{ color: '#6b7280', fontStyle: 'italic', display: 'block', mt: 0.5 }}>
+                                Note: {member.notes}
+                              </Typography>
+                            )}
                           </Box>
                         </MenuItem>
                       ))
                     ) : (
                       <MenuItem disabled>
-                        {selectedTeam ? 'No team members found' : 'Please select a team first'}
+                        {selectedTeam ? 'No unselected workers found' : 'Please select a team first'}
                       </MenuItem>
                     )}
                   </Select>
                 </FormControl>
+                {teamMembers.length > 0 && (
+                  <Alert severity="info" sx={{ mt: 1, py: 0.5 }}>
+                    Showing {teamMembers.length} unselected worker{teamMembers.length !== 1 ? 's' : ''} from unselected_workers table
+                  </Alert>
+                )}
+                {selectedTeam && teamMembers.length === 0 && (
+                  <Alert severity="warning" sx={{ mt: 1, py: 0.5 }}>
+                    No unselected workers found in unselected_workers table for this team.
+                  </Alert>
+                )}
               </Box>
 
               {/* Incident Details */}

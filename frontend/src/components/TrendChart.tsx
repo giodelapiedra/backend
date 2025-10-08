@@ -64,41 +64,58 @@ const TrendChart: React.FC<TrendChartProps> = ({
   // Process data based on time period (optimized)
   // Backend already filters data by date range, so we just format it here
   const processedData = useMemo(() => {
-    if (!data || !data.length) return [];
+    if (!data || !data.length) {
+      console.log('TrendChart - No data to process');
+      return [];
+    }
 
     console.log('TrendChart - Processing data:', {
       timePeriod,
       dataLength: data.length,
       firstDate: data[0]?.date,
-      lastDate: data[data.length - 1]?.date
+      lastDate: data[data.length - 1]?.date,
+      sampleData: data.slice(0, 3)
     });
 
     // Format dates for display based on time period
     return data.map(item => {
-      const date = new Date(item.date);
-      let formattedDate = '';
-      
-      switch (timePeriod) {
-        case 'week':
-          // Show as "Mon 15" or "Oct 15" format
-          formattedDate = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-          break;
-        case 'month':
-          // Show as "Week 1", "Week 2" etc or "Oct 15"
-          formattedDate = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-          break;
-        case 'year':
-          // Show as "Jan '24" format
-          formattedDate = date.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
-          break;
-        default:
-          formattedDate = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      try {
+        const date = new Date(item.date);
+        if (isNaN(date.getTime())) {
+          console.error('Invalid date:', item.date);
+          return item;
+        }
+
+        let formattedDate = '';
+        
+        switch (timePeriod) {
+          case 'week':
+            // Show as "Mon 15" format
+            formattedDate = date.toLocaleDateString('en-US', { weekday: 'short', day: 'numeric' });
+            break;
+          case 'month':
+            // Show as "Oct 15" format
+            formattedDate = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            break;
+          case 'year':
+            // Show as "Jan '24" format
+            formattedDate = date.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+            break;
+          default:
+            formattedDate = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        }
+        
+        return {
+          ...item,
+          date: formattedDate,
+          fitForWork: item.fitForWork || 0,
+          minorConcernsFitForWork: item.minorConcernsFitForWork || 0,
+          notFitForWork: item.notFitForWork || 0
+        };
+      } catch (error) {
+        console.error('Error processing data item:', error, item);
+        return item;
       }
-      
-      return {
-        ...item,
-        date: formattedDate
-      };
     });
   }, [data, timePeriod]);
 
@@ -177,14 +194,34 @@ const TrendChart: React.FC<TrendChartProps> = ({
           sx={{
             height: chartHeight,
             display: 'flex',
+            flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
             backgroundColor: '#fafafa',
             borderRadius: 2,
-            animation: 'pulse 2s infinite'
+            animation: 'pulse 2s infinite',
+            gap: 2
           }}
         >
-          <Typography sx={{ color: '#737373', fontSize: { xs: '0.875rem', md: '1rem' } }}>Loading chart...</Typography>
+          <Box sx={{ 
+            width: 60, 
+            height: 60, 
+            borderRadius: '50%', 
+            backgroundColor: '#f5f5f5',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            animation: 'spin 1s linear infinite'
+          }}>
+            <ShowChart sx={{ fontSize: 30, color: '#6366f1' }} />
+          </Box>
+          <Typography sx={{ 
+            color: '#737373', 
+            fontSize: { xs: '0.875rem', md: '1rem' },
+            fontWeight: 500
+          }}>
+            Loading chart data...
+          </Typography>
         </Box>
       );
     }
@@ -406,6 +443,10 @@ const TrendChart: React.FC<TrendChartProps> = ({
         @keyframes pulse {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.7; }
+        }
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
         }
       `}</style>
       <Card

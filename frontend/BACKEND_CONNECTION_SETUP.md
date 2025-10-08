@@ -83,3 +83,4 @@ const result = await kpiAPI.submitAssessment(assessmentData);
 4. Deploy your frontend with the new configuration
 
 Your KPI system is now connected to your deployed backend! 🎉
+

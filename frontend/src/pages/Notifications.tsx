@@ -49,6 +49,7 @@ import {
 import LayoutWithSidebar from '../components/LayoutWithSidebar';
 import { dataClient } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext.supabase';
+import NotificationService from '../utils/notificationService';
 import { createImageProps } from '../utils/imageUtils';
 import { useGetCaseByIdQuery } from '../store/api/casesApi';
 import '../styles/print.css';
@@ -161,6 +162,20 @@ const NotificationsPage: React.FC = () => {
   useEffect(() => {
     if (user?.id) {
       fetchNotifications();
+      
+      // Subscribe to real-time notifications
+      const subscription = NotificationService.subscribeToNotifications(
+        user.id,
+        (newNotification) => {
+          console.log('New notification received:', newNotification);
+          fetchNotifications(); // Refresh the list when new notification arrives
+        }
+      );
+
+      return () => {
+        // Cleanup subscription on unmount
+        subscription.then(sub => sub.unsubscribe());
+      };
     }
   }, [user?.id]);
 
@@ -274,24 +289,13 @@ const NotificationsPage: React.FC = () => {
         return;
       }
 
-      console.log('Fetching notifications for user:', user.id);
-      console.log('User email:', user.email);
-
-      const { data: notificationsData, error: notificationsError } = await dataClient
-        .from('notifications')
-        .select('*')
-        .eq('recipient_id', user.id)
-        .order('created_at', { ascending: false });
-
-      if (notificationsError) {
-        console.error('Error fetching notifications:', notificationsError);
-        throw notificationsError;
-      }
-
-      console.log('Fetched notifications:', notificationsData);
-      console.log('Total notifications found:', notificationsData?.length || 0);
-
-      setNotifications(notificationsData || []);
+      console.log('🔍 Fetching notifications for user:', user.id);
+      console.log('📧 User email:', user.email);
+      const notifications = await NotificationService.fetchNotifications(user.id);
+      console.log('📬 Fetched notifications:', notifications);
+      console.log('📊 Total notifications:', notifications.length);
+      console.log('📅 Latest notification:', notifications[0]);
+      setNotifications(notifications);
     } catch (err: any) {
       console.error('Error fetching notifications:', err);
       setError(err.message || 'Failed to fetch notifications');
@@ -988,10 +992,10 @@ const NotificationsPage: React.FC = () => {
     >
       {/* User Avatar */}
       <Box sx={{ marginRight: '16px', position: 'relative' }}>
-        {notification.sender?.profileImage ? (
+        {notification.sender && notification.sender.profileImage ? (
           <img
-            {...createImageProps(notification.sender.profileImage)}
-            alt={`${notification.sender.firstName} ${notification.sender.lastName}`}
+            {...createImageProps(notification.sender?.profileImage || '')}
+            alt={notification.sender?.firstName && notification.sender?.lastName ? `${notification.sender.firstName} ${notification.sender.lastName}` : 'Unknown Sender'}
             style={{
               width: '48px',
               height: '48px',
@@ -1009,7 +1013,7 @@ const NotificationsPage: React.FC = () => {
               fontWeight: '600',
             }}
           >
-            {notification.sender ? `${notification.sender.firstName.charAt(0)}${notification.sender.lastName.charAt(0)}` : 'N'}
+            {notification.sender?.firstName && notification.sender?.lastName ? `${notification.sender.firstName.charAt(0)}${notification.sender.lastName.charAt(0)}` : 'N'}
           </Avatar>
         )}
         

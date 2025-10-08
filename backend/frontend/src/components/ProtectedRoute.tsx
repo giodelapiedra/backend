@@ -14,10 +14,9 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
 }) => {
   const { user, loading } = useAuth();
 
-  console.log('ProtectedRoute - user:', user, 'loading:', loading, 'allowedRoles:', allowedRoles);
+  // ✅ OPTIMIZATION: Removed console.log for production
 
   if (loading) {
-    console.log('ProtectedRoute: Still loading...');
     return (
       <Box 
         sx={{
@@ -38,15 +37,15 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   }
 
   if (!user) {
-    console.log('ProtectedRoute: No user, redirecting to login');
+    // ✅ OPTIMIZATION: Removed console.log - user will see login page
     return <Navigate to="/login" replace />;
   }
 
   if (allowedRoles && !allowedRoles.includes(user.role)) {
-    console.log('ProtectedRoute: Role not allowed, redirecting to dashboard. User role:', user.role, 'Allowed:', allowedRoles);
+    // ✅ OPTIMIZATION: Removed console.log - user redirected to dashboard
     return <Navigate to="/dashboard" replace />;
   }
 
-  console.log('ProtectedRoute: Access granted');
+  // ✅ Access granted - render protected content
   return <>{children}</>;
 };

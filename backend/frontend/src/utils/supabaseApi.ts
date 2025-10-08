@@ -20,6 +20,22 @@ export class SupabaseAPI {
     responseCache.set(cacheKey, { data, timestamp: Date.now() });
   }
   
+  // Clear cache by pattern or all
+  static clearCache(pattern?: string) {
+    if (pattern) {
+      // Clear specific cache entries matching pattern
+      const keys = Array.from(responseCache.keys());
+      keys.forEach(key => {
+        if (key.includes(pattern)) {
+          responseCache.delete(key);
+        }
+      });
+    } else {
+      // Clear all cache
+      responseCache.clear();
+    }
+  }
+  
   // Cases API
   static async getCases() {
     const { data, error } = await dataClient
@@ -1049,14 +1065,24 @@ export class SupabaseAPI {
   }
 
   // Get work readiness trend data for charts (with caching)
-  static async getWorkReadinessTrendData(teamLeaderId: string, dateRange: string, startDate?: Date, endDate?: Date) {
+  static async getWorkReadinessTrendData(teamLeaderId: string, dateRange: string, startDate?: Date, endDate?: Date, forceRefresh = false) {
     try {
-      // Check cache first
+      // Create cache key
       const cacheKey = `work-readiness-trend-${teamLeaderId}-${dateRange}-${startDate?.toISOString()}-${endDate?.toISOString()}`;
-      const cachedData = SupabaseAPI.getCachedData(cacheKey);
-      if (cachedData) {
-        console.log('📊 Using cached work readiness trend data');
-        return cachedData;
+      
+      // Clear all work readiness trend caches if force refresh
+      if (forceRefresh) {
+        console.log('🗑️ Clearing work readiness trend cache...');
+        SupabaseAPI.clearCache('work-readiness-trend');
+      }
+      
+      // Check cache first (only if not forcing refresh)
+      if (!forceRefresh) {
+        const cachedData = SupabaseAPI.getCachedData(cacheKey);
+        if (cachedData) {
+          console.log('📊 Using cached work readiness trend data for:', dateRange);
+          return cachedData;
+        }
       }
       
       console.log('🔄 Fetching work readiness trend data for team leader:', teamLeaderId);
@@ -1240,45 +1266,16 @@ export class SupabaseAPI {
         }
       });
       
-      // Generate continuous date range for better visualization (but use actual data)
-      const generateDateRange = (start: Date, end: Date) => {
-        const dates = [];
-        const current = new Date(start);
-        
-        while (current <= end) {
-          dates.push(current.toISOString().split('T')[0]);
-          current.setDate(current.getDate() + 1);
-        }
-        
-        return dates;
-      };
+      // Get only dates that have actual data, sorted chronologically
+      const datesWithData = Object.keys(dateGroups).sort();
       
-      const allDates = generateDateRange(start, end);
-      
-      // For large date ranges, sample dates to avoid overcrowding the chart
-      let sampledDates = allDates;
-      if (allDates.length > 30) {
-        // Sample every nth day to keep chart readable, but always include start and end dates
-        const step = Math.ceil(allDates.length / 30);
-        const sampled = allDates.filter((_, index) => index % step === 0);
-        
-        // Ensure start and end dates are always included
-        const startDate = allDates[0];
-        const endDate = allDates[allDates.length - 1];
-        
-        // Create a set to avoid duplicates and ensure start/end are included
-        const dateSet = new Set([startDate, endDate]);
-        sampled.forEach(date => dateSet.add(date));
-        
-        sampledDates = Array.from(dateSet).sort();
-      }
-      
-      console.log('📊 Generated continuous date range:', sampledDates.length, 'dates');
+      console.log('📊 Dates with actual submissions:', datesWithData.length, 'dates');
+      console.log('📊 Total submissions:', workReadinessData.length);
       console.log('📊 Date groups with actual data:', dateGroups);
       
-      // Generate trend data efficiently using pre-aggregated counts
-      const readinessTrendData = sampledDates.map(date => {
-        const dayData = dateGroups[date] || { not_fit: 0, minor: 0, fit: 0 };
+      // Generate trend data ONLY for dates with actual submissions
+      const readinessTrendData = datesWithData.map(date => {
+        const dayData = dateGroups[date];
         
         return {
           date,
@@ -1289,7 +1286,8 @@ export class SupabaseAPI {
         };
       });
       
-      console.log('📊 Generated trend data with continuous range:', readinessTrendData.length, 'points');
+      console.log('📊 Generated trend data (dates with submissions only):', readinessTrendData.length, 'dates');
+      console.log('📊 Total submissions across all dates:', workReadinessData.length);
       console.log('📊 Trend data details:', readinessTrendData.map(item => ({
         date: item.date,
         notFit: item.notFitForWork,
@@ -1306,14 +1304,15 @@ export class SupabaseAPI {
         
         console.log('📅 Data validation:', {
           requestedRange: dateRange,
-          expectedDays: dateRange === 'week' ? 7 : dateRange === 'month' ? 30 : 365,
-          actualDataPoints: readinessTrendData.length,
-          firstDataDate: readinessTrendData[0].date,
-          lastDataDate: readinessTrendData[readinessTrendData.length - 1].date,
+          requestedDays: dateRange === 'week' ? 7 : dateRange === 'month' ? 30 : 365,
+          datesWithData: readinessTrendData.length,
+          totalSubmissions: workReadinessData.length,
+          firstSubmissionDate: readinessTrendData[0].date,
+          lastSubmissionDate: readinessTrendData[readinessTrendData.length - 1].date,
           dataSpanDays: dataDaysDiff,
           isWithinRange: firstDataDate >= start && lastDataDate <= end,
           validationPassed: readinessTrendData.length > 0 && firstDataDate >= start && lastDataDate <= end,
-          note: 'Chart shows continuous range with actual data where available'
+          note: 'Chart shows ONLY dates with actual submissions (no empty dates)'
         });
       }
       

@@ -1,24 +1,6 @@
-// Skip MongoDB imports in production or if mongoose is not available
-let mongoose, Case, Incident, User;
-try {
-  if (process.env.NODE_ENV !== 'production' && process.env.USE_SUPABASE !== 'true') {
-    mongoose = require('mongoose');
-    Case = require('../models/Case');
-    Incident = require('../models/Incident');
-    User = require('../models/User');
-  } else {
-    console.log('Skipping MongoDB imports in caseController - using Supabase only');
-    Case = {};
-    Incident = {};
-    User = {};
-  }
-} catch (error) {
-  console.log('Mongoose not available in caseController - using Supabase only');
-  mongoose = null;
-  Case = {};
-  Incident = {};
-  User = {};
-}
+// Supabase-only implementation - MongoDB fallbacks removed
+const { db, supabase } = require('../config/supabase.local');
+const logger = require('../utils/logger');
 const NotificationService = require('../services/NotificationService');
 const AutoAssignmentService = require('../services/AutoAssignmentService');
 
@@ -443,8 +425,116 @@ const getCaseById = async (req, res) => {
   }
 };
 
+// @desc    Get team leaders with active cases (for Site Supervisor)
+// @route   GET /api/cases/teams-with-cases
+// @access  Private (Site Supervisor only)
+const getTeamsWithCases = async (req, res) => {
+  try {
+    logger.info('Fetching teams with active cases', {
+      userId: req.user?._id || req.user?.id,
+      userRole: req.user?.role
+    });
+
+    // Verify site supervisor role
+    if (req.user?.role !== 'site_supervisor') {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Site supervisors only.'
+      });
+    }
+
+    // Query Supabase for cases grouped by team leader
+    const { data: cases, error } = await supabase
+      .from('cases')
+      .select(`
+        id,
+        worker_id,
+        status,
+        users!cases_worker_id_fkey (
+          id,
+          team_leader_id,
+          team,
+          users!users_team_leader_id_fkey (
+            id,
+            first_name,
+            last_name,
+            team
+          )
+        )
+      `)
+      .in('status', ['open', 'in_progress', 'monitoring']);
+
+    if (error) {
+      logger.error('Error fetching cases from Supabase:', error);
+      throw error;
+    }
+
+    // Group cases by team leader
+    const teamLeaderMap = new Map();
+    
+    cases?.forEach(caseItem => {
+      const worker = caseItem.users;
+      if (!worker || !worker.users) return;
+      
+      const teamLeader = worker.users;
+      const teamLeaderId = teamLeader.id;
+      
+      if (!teamLeaderMap.has(teamLeaderId)) {
+        teamLeaderMap.set(teamLeaderId, {
+          teamLeaderId: teamLeaderId,
+          teamLeaderName: `${teamLeader.first_name} ${teamLeader.last_name}`,
+          teamName: teamLeader.team || 'Unassigned',
+          activeCases: 0,
+          workerIds: new Set()
+        });
+      }
+      
+      const teamData = teamLeaderMap.get(teamLeaderId);
+      teamData.activeCases++;
+      teamData.workerIds.add(worker.id);
+    });
+
+    // Convert to array and format
+    const teams = Array.from(teamLeaderMap.values()).map(team => ({
+      teamLeaderId: team.teamLeaderId,
+      teamName: team.teamName,
+      teamLeader: {
+        id: team.teamLeaderId,
+        name: team.teamLeaderName
+      },
+      totalMembers: team.workerIds.size,
+      activeCases: team.activeCases
+    }));
+
+    logger.info('Teams with cases fetched successfully', {
+      teamsCount: teams.length,
+      totalActiveCases: cases?.length || 0
+    });
+
+    res.json({
+      success: true,
+      count: teams.length,
+      teams
+    });
+
+  } catch (error) {
+    logger.error('Error in getTeamsWithCases:', {
+      error: error.message,
+      stack: error.stack,
+      userId: req.user?._id || req.user?.id
+    });
+
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch teams with cases',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   getMyCases,
   getCases,
-  getCaseById
+  getCaseById,
+  getTeamsWithCases
 };

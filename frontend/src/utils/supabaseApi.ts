@@ -344,6 +344,14 @@ export class SupabaseAPI {
 
       console.log('Current user data:', currentUser);
 
+      // SECURITY: Server-side validation - One team per team leader
+      const hasExistingTeam = (currentUser?.team && currentUser.team.trim() !== '') || 
+                             (currentUser?.managed_teams && currentUser.managed_teams.length > 0);
+      
+      if (hasExistingTeam) {
+        throw new Error('You already have a team. Only one team per team leader is allowed.');
+      }
+
       // Add new team to existing managed teams array
       const currentManagedTeams = currentUser?.managed_teams || [];
       const updatedManagedTeams = [...currentManagedTeams, teamName];
@@ -1051,6 +1059,13 @@ export class SupabaseAPI {
   // Get work readiness trend data for charts (with caching)
   static async getWorkReadinessTrendData(teamLeaderId: string, dateRange: string, startDate?: Date, endDate?: Date) {
     try {
+      console.log('🔄 getWorkReadinessTrendData called with:', {
+        teamLeaderId,
+        dateRange,
+        startDate: startDate?.toISOString(),
+        endDate: endDate?.toISOString()
+      });
+
       // Check cache first
       const cacheKey = `work-readiness-trend-${teamLeaderId}-${dateRange}-${startDate?.toISOString()}-${endDate?.toISOString()}`;
       const cachedData = SupabaseAPI.getCachedData(cacheKey);
@@ -1092,43 +1107,44 @@ export class SupabaseAPI {
       // Calculate date range
       let start, end;
       const now = new Date();
+      now.setHours(23, 59, 59, 999); // Set to end of current day
+      
+      const calculateStartDate = (daysAgo: number) => {
+        const date = new Date(now);
+        date.setDate(date.getDate() - daysAgo);
+        date.setHours(0, 0, 0, 0);
+        return date;
+      };
       
       switch (dateRange) {
         case 'week':
-          start = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+          start = calculateStartDate(7);
           end = now;
           break;
         case 'month':
-          start = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+          start = calculateStartDate(30);
           end = now;
           break;
         case 'year':
-          start = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
+          start = calculateStartDate(365);
           end = now;
           break;
         case 'custom':
           if (startDate && endDate) {
-            // Use the provided custom dates directly, but normalize to start/end of day
             start = new Date(startDate);
             end = new Date(endDate);
-            
-            // Ensure start is at beginning of day and end is at end of day
+            // Ensure proper time range
             start.setHours(0, 0, 0, 0);
             end.setHours(23, 59, 59, 999);
-            
-            // Add 1 day to end date to ensure the selected end date is included
-            end.setDate(end.getDate() + 1);
             
             console.log('📅 Custom range processing:', {
               startDate: startDate?.toISOString(),
               endDate: endDate?.toISOString(),
               calculatedStart: start.toISOString(),
-              calculatedEnd: end.toISOString(),
-              note: 'Added +1 day to end date to include selected date'
+              calculatedEnd: end.toISOString()
             });
           } else {
-            // Fallback to default range if custom dates not provided
-            start = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+            start = calculateStartDate(7); // Default to week
             end = now;
             console.log('📅 Custom range fallback to default:', {
               calculatedStart: start.toISOString(),
@@ -1137,9 +1153,20 @@ export class SupabaseAPI {
           }
           break;
         default:
-          start = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+          start = calculateStartDate(7);
           end = now;
       }
+      
+      console.log('📅 Calculated date range:', {
+        start: start.toISOString(),
+        end: end.toISOString(),
+        dateRange,
+        isCustom: dateRange === 'custom',
+        customDates: dateRange === 'custom' ? {
+          startDate: startDate?.toISOString(),
+          endDate: endDate?.toISOString()
+        } : null
+      });
       
       console.log('📅 Calculated date range:', { 
         start: start.toISOString(), 
@@ -1169,20 +1196,30 @@ export class SupabaseAPI {
           end_date: end.toISOString()
         });
         
-        // Optimized query - only select necessary columns for better performance
-        const { data: wrData, error: workReadinessError } = await dataClient
-          .from('work_readiness')
-          .select('submitted_at, readiness_level')
-          .in('worker_id', teamMemberIds)
-          .gte('submitted_at', start.toISOString())
-          .lte('submitted_at', end.toISOString())
-          .order('submitted_at', { ascending: true });
+        try {
+          // Optimized query - only select necessary columns for better performance
+          const { data: wrData, error: workReadinessError } = await dataClient
+            .from('work_readiness')
+            .select('submitted_at, readiness_level, worker_id')
+            .in('worker_id', teamMemberIds)
+            .gte('submitted_at', start.toISOString())
+            .lte('submitted_at', end.toISOString())
+            .order('submitted_at', { ascending: true });
 
-        if (workReadinessError) {
-          console.error('Error fetching work readiness trend data:', workReadinessError);
-        } else {
+          if (workReadinessError) {
+            console.error('Error fetching work readiness trend data:', workReadinessError);
+            throw workReadinessError;
+          }
+
           workReadinessData = wrData || [];
-          console.log('📊 Raw query result:', wrData?.length || 0, 'records');
+          console.log('📊 Raw query result:', {
+            totalRecords: wrData?.length || 0,
+            sampleData: wrData?.slice(0, 3),
+            uniqueWorkers: Array.from(new Set(wrData?.map(d => d.worker_id) || [])).length || 0
+          });
+        } catch (error) {
+          console.error('Failed to fetch work readiness data:', error);
+          throw error;
         }
       } else {
         console.log('📊 No team members found - trying to fetch all work readiness data');
@@ -1475,15 +1512,18 @@ export class SupabaseAPI {
         throw new Error('Email already registered. Please use a different email address.');
       }
       
-      // Use service role key to create user in Supabase Auth
-      console.log('Creating Supabase Auth user with service role...');
+      // Use environment variables for Supabase configuration
+      const supabaseUrl = process.env.REACT_APP_SUPABASE_URL || 'https://dtcgzgbxhefwhqpeotrl.supabase.co';
+      const supabaseAnonKey = process.env.REACT_APP_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR0Y2d6Z2J4aGVmd2hxcGVvdHJsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTkxNDQ3MTgsImV4cCI6MjA3NDcyMDcxOH0.n557fWuqr8-e900nNhWOfeJTzdnhSzsv5tBW2pNM4gw';
       
-      // Create user using admin API with service role
-      const response = await fetch('https://dtcgzgbxhefwhqpeotrl.supabase.co/auth/v1/admin/users', {
+      console.log('Creating Supabase Auth user with anon key...');
+      
+      // Create user using admin API with anon key
+      const response = await fetch(`${supabaseUrl}/auth/v1/admin/users`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR0Y2d6Z2J4aGVmd2hxcGVvdHJsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1OTE0NDcxOCwiZXhwIjoyMDc0NzIwNzE4fQ.D1wSP12YM8jPtF-llVFiC4cI7xKJtRMtiaUuwRzJ3z8`,
-          'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR0Y2d6Z2J4aGVmd2hxcGVvdHJsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1OTE0NDcxOCwiZXhwIjoyMDc0NzIwNzE4fQ.D1wSP12YM8jPtF-llVFiC4cI7xKJtRMtiaUuwRzJ3z8',
+          'Authorization': `Bearer ${supabaseAnonKey}`,
+          'apikey': supabaseAnonKey,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
@@ -1565,6 +1605,269 @@ export class SupabaseAPI {
       return { user: data };
     } catch (error) {
       console.error('Error creating user:', error);
+      throw error;
+    }
+  }
+
+  // Work Readiness Assignments API
+  
+  // Create assignments for workers
+  static async createWorkReadinessAssignments(teamLeaderId: string, workerIds: string[], assignedDate: Date, team: string, notes?: string, dueTime?: string) {
+    try {
+      console.log('📝 Creating work readiness assignments:', {
+        teamLeaderId,
+        workerIds,
+        assignedDate: assignedDate.toISOString(),
+        team,
+        dueTime
+      });
+
+      const assignments = workerIds.map(workerId => ({
+        team_leader_id: teamLeaderId,
+        worker_id: workerId,
+        assigned_date: assignedDate.toISOString().split('T')[0], // YYYY-MM-DD format
+        due_time: dueTime || '09:00:00',
+        team,
+        status: 'pending',
+        notes: notes || null,
+        reminder_sent: false
+      }));
+
+      const { data, error } = await dataClient
+        .from('work_readiness_assignments')
+        .insert(assignments)
+        .select();
+
+      if (error) {
+        console.error('Error creating assignments:', error);
+        throw error;
+      }
+
+      console.log('✅ Assignments created successfully:', data?.length);
+      return { assignments: data };
+    } catch (error) {
+      console.error('Error creating work readiness assignments:', error);
+      throw error;
+    }
+  }
+
+  // Get assignments for a team leader
+  static async getWorkReadinessAssignments(teamLeaderId: string, date?: Date, status?: string) {
+    try {
+      console.log('📊 Fetching work readiness assignments for team leader:', teamLeaderId);
+
+      let query = dataClient
+        .from('work_readiness_assignments')
+        .select(`
+          *,
+          worker:users!work_readiness_assignments_worker_id_fkey(*),
+          work_readiness:work_readiness(*)
+        `)
+        .eq('team_leader_id', teamLeaderId)
+        .order('assigned_date', { ascending: false });
+
+      if (date) {
+        const dateStr = date.toISOString().split('T')[0];
+        query = query.eq('assigned_date', dateStr);
+      }
+
+      if (status) {
+        query = query.eq('status', status);
+      }
+
+      const { data, error } = await query;
+
+      if (error) {
+        console.error('Error fetching assignments:', error);
+        throw error;
+      }
+
+      console.log('✅ Assignments fetched:', data?.length);
+      return { assignments: data || [] };
+    } catch (error) {
+      console.error('Error fetching work readiness assignments:', error);
+      throw error;
+    }
+  }
+
+  // Get assignments for a worker
+  static async getWorkerAssignments(workerId: string, date?: Date, status?: string) {
+    try {
+      console.log('📊 Fetching assignments for worker:', workerId);
+
+      let query = dataClient
+        .from('work_readiness_assignments')
+        .select(`
+          *,
+          team_leader:users!work_readiness_assignments_team_leader_id_fkey(*),
+          work_readiness:work_readiness(*)
+        `)
+        .eq('worker_id', workerId)
+        .order('assigned_date', { ascending: false });
+
+      if (date) {
+        const dateStr = date.toISOString().split('T')[0];
+        query = query.eq('assigned_date', dateStr);
+      }
+
+      if (status) {
+        query = query.eq('status', status);
+      }
+
+      const { data, error } = await query;
+
+      if (error) {
+        console.error('Error fetching worker assignments:', error);
+        throw error;
+      }
+
+      console.log('✅ Worker assignments fetched:', data?.length);
+      return { assignments: data || [] };
+    } catch (error) {
+      console.error('Error fetching worker assignments:', error);
+      throw error;
+    }
+  }
+
+  // Get today's assignment for a worker
+  static async getTodayAssignment(workerId: string) {
+    try {
+      const today = new Date().toISOString().split('T')[0];
+
+      const { data, error } = await dataClient
+        .from('work_readiness_assignments')
+        .select(`
+          *,
+          team_leader:users!work_readiness_assignments_team_leader_id_fkey(*),
+          work_readiness:work_readiness(*)
+        `)
+        .eq('worker_id', workerId)
+        .eq('assigned_date', today)
+        .neq('status', 'cancelled')
+        .single();
+
+      if (error && error.code !== 'PGRST116') { // PGRST116 = no rows returned
+        throw error;
+      }
+
+      return { assignment: data || null };
+    } catch (error) {
+      console.error('Error fetching today\'s assignment:', error);
+      throw error;
+    }
+  }
+
+  // Update assignment status
+  static async updateAssignmentStatus(assignmentId: string, status: string, notes?: string, workReadinessId?: string) {
+    try {
+      const updates: any = {
+        status,
+        updated_at: new Date().toISOString()
+      };
+
+      if (notes) {
+        updates.notes = notes;
+      }
+
+      if (workReadinessId) {
+        updates.work_readiness_id = workReadinessId;
+      }
+
+      if (status === 'completed') {
+        updates.completed_at = new Date().toISOString();
+      }
+
+      const { data, error } = await dataClient
+        .from('work_readiness_assignments')
+        .update(updates)
+        .eq('id', assignmentId)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      console.log('✅ Assignment status updated:', assignmentId);
+      return { assignment: data };
+    } catch (error) {
+      console.error('Error updating assignment status:', error);
+      throw error;
+    }
+  }
+
+  // Delete/Cancel assignment
+  static async cancelAssignment(assignmentId: string) {
+    try {
+      const { data, error } = await dataClient
+        .from('work_readiness_assignments')
+        .update({ 
+          status: 'cancelled',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', assignmentId)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      console.log('✅ Assignment cancelled:', assignmentId);
+      return { assignment: data };
+    } catch (error) {
+      console.error('Error cancelling assignment:', error);
+      throw error;
+    }
+  }
+
+  // Mark overdue assignments
+  static async markOverdueAssignments() {
+    try {
+      const today = new Date().toISOString().split('T')[0];
+
+      const { data, error } = await dataClient
+        .from('work_readiness_assignments')
+        .update({ status: 'overdue', updated_at: new Date().toISOString() })
+        .lt('assigned_date', today)
+        .eq('status', 'pending')
+        .select();
+
+      if (error) throw error;
+
+      console.log('✅ Marked overdue assignments:', data?.length);
+      return { count: data?.length || 0 };
+    } catch (error) {
+      console.error('Error marking overdue assignments:', error);
+      throw error;
+    }
+  }
+
+  // Get assignment statistics for team leader
+  static async getAssignmentStats(teamLeaderId: string, startDate?: Date, endDate?: Date) {
+    try {
+      const start = startDate || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      const end = endDate || new Date();
+
+      const { data, error } = await dataClient
+        .from('work_readiness_assignments')
+        .select('*')
+        .eq('team_leader_id', teamLeaderId)
+        .gte('assigned_date', start.toISOString().split('T')[0])
+        .lte('assigned_date', end.toISOString().split('T')[0]);
+
+      if (error) throw error;
+
+      const stats = {
+        total: data?.length || 0,
+        pending: data?.filter(a => a.status === 'pending').length || 0,
+        completed: data?.filter(a => a.status === 'completed').length || 0,
+        overdue: data?.filter(a => a.status === 'overdue').length || 0,
+        cancelled: data?.filter(a => a.status === 'cancelled').length || 0,
+        completionRate: data?.length > 0 
+          ? Math.round((data.filter(a => a.status === 'completed').length / data.length) * 100) 
+          : 0
+      };
+
+      return { stats };
+    } catch (error) {
+      console.error('Error fetching assignment stats:', error);
       throw error;
     }
   }

@@ -1,232 +1,196 @@
 import { dataClient } from '../lib/supabase';
 
-export interface NotificationData {
-  recipient_id: string;
-  sender_id: string;
-  type: 'case_assignment' | 'case_update' | 'appointment_reminder' | 'general';
-  title: string;
-  message: string;
-  priority?: 'low' | 'medium' | 'high' | 'urgent';
-  related_case_id?: string;
-  related_incident_id?: string;
-}
-
-export class NotificationService {
-  /**
-   * Send a notification to a user
-   */
-  static async sendNotification(notificationData: NotificationData) {
-    try {
-      const { data, error } = await dataClient
-        .from('notifications')
-        .insert([{
-          recipient_id: notificationData.recipient_id,
-          sender_id: notificationData.sender_id,
-          type: notificationData.type,
-          title: notificationData.title,
-          message: notificationData.message,
-          priority: notificationData.priority || 'medium',
-          related_case_id: notificationData.related_case_id,
-          related_incident_id: notificationData.related_incident_id
-        }])
-        .select();
-
-      if (error) {
-        console.error('Error sending notification:', error);
-        // If table doesn't exist, just log and continue
-        if (error.code === '42P01' || error.message.includes('does not exist')) {
-          console.log('Notifications table does not exist yet, notification not sent');
-          return null;
-        }
-        throw error;
-      }
-
-      console.log('Notification sent successfully:', data);
-      return data;
-    } catch (error) {
-      console.error('Failed to send notification:', error);
-      // Don't throw error, just log it
-      console.log('Notification not sent due to error:', error);
-      return null;
-    }
-  }
-
-  /**
-   * Send case assignment notification to clinician
-   */
-  static async sendCaseAssignmentNotification(
-    clinicianId: string,
-    caseManagerId: string,
-    caseId: string,
-    caseNumber: string,
-    workerName: string
+export const NotificationService = {
+  // Send notification for work readiness assignment
+  async sendWorkReadinessNotification(
+    workerId: string,
+    teamLeaderId: string,
+    assignmentId: string,
+    dueTime: string,
+    notes?: string
   ) {
     try {
-      console.log('Sending case assignment notification...');
-      console.log('Clinician ID:', clinicianId);
-      console.log('Case Manager ID:', caseManagerId);
-      console.log('Case ID:', caseId);
-      console.log('Case Number:', caseNumber);
-      console.log('Worker Name:', workerName);
+      const { error } = await dataClient
+        .from('notifications')
+        .insert({
+          recipient_id: workerId,
+          sender_id: teamLeaderId,
+          type: 'case_assigned',
+          title: 'New Work Readiness Assignment',
+          message: `You have been assigned to complete a work readiness assessment. Due within 24 hours (${new Date(dueTime).toLocaleString()}).${notes ? ` Note: ${notes}` : ''}`,
+          priority: 'high',
+          metadata: {
+            assignment_id: assignmentId,
+            due_time: dueTime,
+            task_type: 'work_readiness'
+          }
+        });
 
-      const notificationData: NotificationData = {
-        recipient_id: clinicianId,
-        sender_id: caseManagerId,
-        type: 'case_assignment',
-        title: 'New Case Assigned',
-        message: `You have been assigned case ${caseNumber} for worker ${workerName}. Please review and begin assessment.`,
-        priority: 'high',
-        related_case_id: caseId
-      };
-
-      console.log('Notification data to send:', notificationData);
-
-      const result = await this.sendNotification(notificationData);
-      console.log('Notification send result:', result);
-      
-      return result;
+      if (error) throw error;
+      return true;
     } catch (error) {
-      console.error('Failed to send case assignment notification:', error);
-      return null;
+      console.error('Error sending work readiness notification:', error);
+      return false;
     }
-  }
+  },
 
-  /**
-   * Send case update notification
-   */
-  static async sendCaseUpdateNotification(
+  // Send notification for case assignment
+  async sendCaseAssignmentNotification(
+    clinicianId: string,
+    caseManagerId: string,
+    caseId: string
+  ) {
+    try {
+      const { error } = await dataClient
+        .from('notifications')
+        .insert({
+          recipient_id: clinicianId,
+          sender_id: caseManagerId,
+          type: 'case_assigned',
+          title: 'New Case Assigned',
+          message: `A new case has been assigned to you.`,
+          priority: 'high',
+          metadata: {
+            case_id: caseId,
+            task_type: 'case_assignment'
+          }
+        });
+
+      if (error) throw error;
+      return true;
+    } catch (error) {
+      console.error('Error sending case assignment notification:', error);
+      return false;
+    }
+  },
+
+  // Send notification for case updates
+  async sendCaseUpdateNotification(
     recipientId: string,
     senderId: string,
     caseId: string,
-    caseNumber: string,
-    updateType: string,
-    details: string
+    status: string,
+    notes?: string
   ) {
-    const notificationData: NotificationData = {
-      recipient_id: recipientId,
-      sender_id: senderId,
-      type: 'case_update',
-      title: `Case ${caseNumber} Updated`,
-      message: `${updateType}: ${details}`,
-      priority: 'medium',
-      related_case_id: caseId
-    };
-
-    return this.sendNotification(notificationData);
-  }
-
-  /**
-   * Get notifications for a user
-   */
-  static async getUserNotifications(userId: string, limit: number = 10) {
     try {
-      // Check if notifications table exists
+      const { error } = await dataClient
+        .from('notifications')
+        .insert({
+          recipient_id: recipientId,
+          sender_id: senderId,
+          type: 'case_assigned',
+          title: 'Case Update',
+          message: `Case status updated to: ${status}${notes ? `. Notes: ${notes}` : ''}`,
+          priority: 'medium',
+          metadata: {
+            case_id: caseId,
+            status: status,
+            task_type: 'case_update'
+          }
+        });
+
+      if (error) throw error;
+      return true;
+    } catch (error) {
+      console.error('Error sending case update notification:', error);
+      return false;
+    }
+  },
+  async fetchNotifications(userId: string) {
+    try {
       const { data, error } = await dataClient
         .from('notifications')
-        .select('*')
+        .select(`
+          *,
+          sender:users!sender_id(
+            id,
+            first_name,
+            last_name,
+            email
+          )
+        `)
         .eq('recipient_id', userId)
-        .order('created_at', { ascending: false })
-        .limit(limit);
+        .order('created_at', { ascending: false });
 
-      if (error) {
-        console.error('Notifications table error:', error);
-        // If table doesn't exist, return empty array
-        if (error.code === '42P01' || error.message.includes('does not exist')) {
-          console.log('Notifications table does not exist yet, returning empty array');
-          return [];
-        }
-        throw error;
-      }
-
+      if (error) throw error;
       return data || [];
     } catch (error) {
-      console.error('Failed to fetch notifications:', error);
+      console.error('Error fetching notifications:', error);
       return [];
     }
-  }
+  },
 
-  /**
-   * Mark notification as read
-   */
-  static async markAsRead(notificationId: string) {
+  async fetchUnreadCount(userId: string) {
     try {
       const { data, error } = await dataClient
         .from('notifications')
-        .update({ is_read: true })
-        .eq('id', notificationId)
-        .select();
-
-      if (error) {
-        console.error('Error marking notification as read:', error);
-        // If table doesn't exist, just return null
-        if (error.code === '42P01' || error.message.includes('does not exist')) {
-          console.log('Notifications table does not exist yet');
-          return null;
-        }
-        throw error;
-      }
-
-      return data;
-    } catch (error) {
-      console.error('Failed to mark notification as read:', error);
-      return null;
-    }
-  }
-
-  /**
-   * Mark all notifications as read for a user
-   */
-  static async markAllAsRead(userId: string) {
-    try {
-      const { data, error } = await dataClient
-        .from('notifications')
-        .update({ is_read: true })
-        .eq('recipient_id', userId)
-        .eq('is_read', false)
-        .select();
-
-      if (error) {
-        console.error('Error marking all notifications as read:', error);
-        // If table doesn't exist, just return null
-        if (error.code === '42P01' || error.message.includes('does not exist')) {
-          console.log('Notifications table does not exist yet');
-          return null;
-        }
-        throw error;
-      }
-
-      return data;
-    } catch (error) {
-      console.error('Failed to mark all notifications as read:', error);
-      return null;
-    }
-  }
-
-  /**
-   * Get unread notification count for a user
-   */
-  static async getUnreadCount(userId: string) {
-    try {
-      const { count, error } = await dataClient
-        .from('notifications')
-        .select('*', { count: 'exact', head: true })
+        .select('id', { count: 'exact' })
         .eq('recipient_id', userId)
         .eq('is_read', false);
 
-      if (error) {
-        console.error('Error getting unread count:', error);
-        // If table doesn't exist, return 0
-        if (error.code === '42P01' || error.message.includes('does not exist')) {
-          console.log('Notifications table does not exist yet, returning 0');
-          return 0;
-        }
-        return 0;
-      }
-
-      return count || 0;
+      if (error) throw error;
+      return data?.length || 0;
     } catch (error) {
-      console.error('Failed to get unread count:', error);
+      console.error('Error fetching unread count:', error);
       return 0;
     }
+  },
+
+  async markAsRead(notificationId: string) {
+    try {
+      const { error } = await dataClient
+        .from('notifications')
+        .update({ 
+          is_read: true,
+          read_at: new Date().toISOString()
+        })
+        .eq('id', notificationId);
+
+      if (error) throw error;
+      return true;
+    } catch (error) {
+      console.error('Error marking notification as read:', error);
+      return false;
+    }
+  },
+
+  async markAllAsRead(userId: string) {
+    try {
+      const { error } = await dataClient
+        .from('notifications')
+        .update({ 
+          is_read: true,
+          read_at: new Date().toISOString()
+        })
+        .eq('recipient_id', userId)
+        .eq('is_read', false);
+
+      if (error) throw error;
+      return true;
+    } catch (error) {
+      console.error('Error marking all notifications as read:', error);
+      return false;
+    }
+  },
+
+  async subscribeToNotifications(userId: string, onNewNotification: (notification: any) => void) {
+    return dataClient
+      .channel('notifications')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'notifications',
+          filter: `recipient_id=eq.${userId}`
+        },
+        (payload) => {
+          console.log('New notification received:', payload);
+          onNewNotification(payload.new);
+        }
+      )
+      .subscribe();
   }
-}
+};
+
+export default NotificationService;

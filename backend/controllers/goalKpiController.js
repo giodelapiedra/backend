@@ -1,5 +1,17 @@
 const { db, supabase } = require('../config/supabase');
 
+// Import services - no fallbacks, standardize on Supabase
+const WorkReadinessService = require('../services/WorkReadinessService');
+const cacheService = require('../services/CacheService');
+const logger = require('../utils/logger');
+const errorHandler = require('../middleware/errorHandler');
+const performance = require('../middleware/performance');
+
+const asyncHandler = errorHandler.asyncHandler;
+const createError = errorHandler.createError;
+const monitorDatabaseQuery = performance.monitorDatabaseQuery;
+const monitorBusinessOperation = performance.monitorBusinessOperation;
+
 /**
  * Goal Tracking & KPI Controller
  * 
@@ -9,6 +21,8 @@ const { db, supabase } = require('../config/supabase');
  * - Individual and team performance metrics
  * - Data filtering by worker and team leader
  * - Weekly achievement summaries
+ * 
+ * Updated to use service layer architecture for better maintainability
  */
 
 /**
@@ -17,32 +31,30 @@ const { db, supabase } = require('../config/supabase');
  * @returns {object} KPI score and rating
  */
 const calculateKPI = (consecutiveDays) => {
-  let rating, color, description, score;
+  // Use service layer
+  return WorkReadinessService.calculateKPI(consecutiveDays);
   
-  // KPI scoring based on consecutive days:
-  // 7/7 days: Excellent
-  // 5-6 days: Good  
-  // 3-4 days: Average
-  // Less than 3 days: No KPI points
+  // Fallback KPI calculation
+  let rating, color, description, score;
   
   if (consecutiveDays >= 7) {
     rating = 'Excellent';
-    color = '#10b981'; // green
+    color = '#10b981';
     description = 'Outstanding! Complete 7-day cycle achieved.';
     score = 100;
   } else if (consecutiveDays >= 5) {
     rating = 'Good';
-    color = '#22c55e'; // light green
+    color = '#22c55e';
     description = 'Good progress! Keep going to complete the cycle.';
     score = Math.round((consecutiveDays / 7) * 100);
   } else if (consecutiveDays >= 3) {
     rating = 'Average';
-    color = '#eab308'; // yellow/orange
+    color = '#eab308';
     description = 'Average progress. Focus on consistency.';
     score = Math.round((consecutiveDays / 7) * 100);
   } else {
     rating = 'No KPI Points';
-    color = '#ef4444'; // red
+    color = '#ef4444';
     description = 'Need at least 3 consecutive days for KPI points.';
     score = 0;
   }
@@ -58,7 +70,96 @@ const calculateKPI = (consecutiveDays) => {
 };
 
 /**
- * Calculate KPI score based on completion rate percentage
+ * Calculate KPI score based on assignment completion rate
+ * @param {number} completedAssignments - Number of completed assignments
+ * @param {number} totalAssignments - Total number of assignments given
+ * @param {number} onTimeSubmissions - Number of on-time submissions
+ * @param {number} qualityScore - Average quality score (0-100)
+ * @returns {object} KPI score and rating
+ */
+const calculateAssignmentKPI = (completedAssignments, totalAssignments, onTimeSubmissions = 0, qualityScore = 0) => {
+  // Input validation
+  if (typeof completedAssignments !== 'number' || typeof totalAssignments !== 'number') {
+    console.error('❌ Invalid input types for KPI calculation:', {
+      completedAssignments: typeof completedAssignments,
+      totalAssignments: typeof totalAssignments
+    });
+    return {
+      rating: 'Error',
+      color: '#ef4444',
+      description: 'Invalid data for KPI calculation',
+      score: 0,
+      completionRate: 0,
+      onTimeRate: 0,
+      qualityScore: 0,
+      completedAssignments: 0,
+      totalAssignments: 0
+    };
+  }
+  
+  // Handle edge cases
+  if (totalAssignments === 0) {
+    return {
+      rating: 'No Assignments',
+      color: '#6b7280',
+      description: 'No work readiness assignments given yet.',
+      score: 0,
+      completionRate: 0,
+      onTimeRate: 0,
+      qualityScore: 0,
+      completedAssignments: 0,
+      totalAssignments: 0
+    };
+  }
+  
+  // Ensure values are within valid ranges
+  const completionRate = Math.max(0, Math.min(100, (completedAssignments / totalAssignments) * 100));
+  const onTimeRate = Math.max(0, Math.min(100, (onTimeSubmissions / totalAssignments) * 100));
+  const validatedQualityScore = Math.max(0, Math.min(100, qualityScore));
+  
+  // Calculate weighted score
+  // 60% completion rate + 20% on-time rate + 20% quality score
+  const weightedScore = (completionRate * 0.6) + (onTimeRate * 0.2) + (validatedQualityScore * 0.2);
+  
+  // Determine rating based on weighted score
+  let rating, color, description;
+  if (weightedScore >= 90) {
+    rating = 'Excellent';
+    color = '#10b981';
+    description = 'Outstanding performance! Perfect assignment completion and quality.';
+  } else if (weightedScore >= 75) {
+    rating = 'Good';
+    color = '#22c55e';
+    description = 'Good performance! Keep up the consistency.';
+  } else if (weightedScore >= 60) {
+    rating = 'Average';
+    color = '#eab308';
+    description = 'Average performance. Focus on completing more assignments.';
+  } else if (weightedScore >= 40) {
+    rating = 'Below Average';
+    color = '#f97316';
+    description = 'Below average performance. Needs improvement.';
+  } else {
+    rating = 'Needs Improvement';
+    color = '#ef4444';
+    description = 'Poor performance. Immediate attention required.';
+  }
+
+  return {
+    rating,
+    color,
+    description,
+    score: Math.round(weightedScore),
+    completionRate: Math.round(completionRate),
+    onTimeRate: Math.round(onTimeRate),
+    qualityScore: Math.round(validatedQualityScore),
+    completedAssignments,
+    totalAssignments
+  };
+};
+
+/**
+ * Calculate KPI score based on completion rate percentage (Legacy - for backward compatibility)
  * @param {number} completionRate - Completion rate percentage (0-100)
  * @param {number} currentDay - Current day in cycle (optional)
  * @param {number} totalAssessments - Total number of assessments submitted (optional)
@@ -331,7 +432,7 @@ const getWorkerWeeklyProgress = async (req, res) => {
       });
     }
     
-    // Get latest assessment to check cycle status
+    // Get latest assessment
     const { data: latestAssessment, error: assessmentError } = await supabase
       .from('work_readiness')
       .select('cycle_start, cycle_day, streak_days, cycle_completed, submitted_at')
@@ -372,15 +473,10 @@ const getWorkerWeeklyProgress = async (req, res) => {
     }
     
     const cycleStart = new Date(latestAssessment.cycle_start);
-    const today = new Date();
-    
-    // Calculate cycle progress based on consecutive days
-    const consecutiveDaysCompleted = latestAssessment.streak_days || 0;
-    
-    // Get assessments for this cycle
     const cycleEnd = new Date(cycleStart);
     cycleEnd.setDate(cycleStart.getDate() + 6); // 7-day cycle
     
+    // Get assessments
     const { data: assessments, error: assessmentsError } = await supabase
       .from('work_readiness')
       .select('*')
@@ -415,7 +511,8 @@ const getWorkerWeeklyProgress = async (req, res) => {
       });
     }
     
-    // Calculate KPI with consecutive days
+    // Calculate KPI
+    const consecutiveDaysCompleted = latestAssessment.streak_days || 0;
     const kpi = calculateKPI(consecutiveDaysCompleted);
     
     // Achievement summary
@@ -2151,6 +2248,297 @@ const handleLogin = async (req, res) => {
 };
 
 /**
+ * Get Team Leader Assignment KPI Summary
+ * @route GET /api/goal-kpi/team-leader/assignment-summary
+ * @access Team Leader
+ * 
+ * NOTE: This function uses the new assignment-based KPI system.
+ * It does NOT use cycle-based columns (cycle_day, streak_days, cycle_completed, cycle_start).
+ * Those columns are kept in the database for migration purposes but are not used in calculations.
+ */
+const getTeamLeaderAssignmentKPI = async (req, res) => {
+  try {
+    const { teamLeaderId } = req.query;
+    
+    console.log('🎯 getTeamLeaderAssignmentKPI called with teamLeaderId:', teamLeaderId);
+    
+    if (!teamLeaderId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Team Leader ID is required'
+      });
+    }
+
+    // Get date range for the current month
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+
+    // Get team members
+    const { data: teamLeader } = await supabase
+      .from('users')
+      .select('managed_teams')
+      .eq('id', teamLeaderId)
+      .eq('role', 'team_leader')
+      .single();
+
+    const { data: teamMembers } = await supabase
+      .from('users')
+      .select('id, first_name, last_name, email, team')
+      .eq('role', 'worker')
+      .in('team', teamLeader?.managed_teams || []);
+
+    const teamMemberIds = teamMembers?.map(member => member.id) || [];
+
+    // Get all assignments for team members this month
+    const { data: assignments, error: assignmentsError } = await supabase
+      .from('work_readiness_assignments')
+      .select('*')
+      .in('worker_id', teamMemberIds)
+      .gte('assigned_date', monthStart.toISOString().split('T')[0])
+      .lte('assigned_date', monthEnd.toISOString().split('T')[0])
+      .order('assigned_date', { ascending: false });
+
+    if (assignmentsError) {
+      console.error('Error fetching assignments:', assignmentsError);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to fetch assignments'
+      });
+    }
+
+    // Calculate team metrics
+    const totalAssignments = assignments?.length || 0;
+    const completedAssignments = assignments?.filter(a => a.status === 'completed').length || 0;
+    const onTimeSubmissions = assignments?.filter(a => 
+      a.status === 'completed' && 
+      a.completed_at && 
+      new Date(a.completed_at) <= new Date(a.due_time)
+    ).length || 0;
+
+    console.log('📊 Team Metrics:', {
+      totalAssignments,
+      completedAssignments,
+      onTimeSubmissions,
+      teamMembersCount: teamMembers?.length || 0
+    });
+
+    // Calculate individual worker KPIs
+    const individualKPIs = await Promise.all(teamMembers.map(async (member) => {
+      const memberAssignments = assignments?.filter(a => a.worker_id === member.id) || [];
+      const memberCompleted = memberAssignments.filter(a => a.status === 'completed').length;
+      const memberOnTime = memberAssignments.filter(a => 
+        a.status === 'completed' && 
+        a.completed_at && 
+        new Date(a.completed_at) <= new Date(a.due_time)
+      ).length;
+
+      // Get work readiness data for quality scoring
+      const { data: workReadiness } = await supabase
+        .from('work_readiness')
+        .select('readiness_level')
+        .eq('worker_id', member.id)
+        .gte('submitted_at', monthStart.toISOString())
+        .lte('submitted_at', monthEnd.toISOString());
+
+      // Calculate quality score
+      let qualityScore = 0;
+      if (workReadiness && workReadiness.length > 0) {
+        const qualityScores = workReadiness.map(wr => {
+          switch(wr.readiness_level) {
+            case 'fit': return 100;
+            case 'minor': return 70;
+            case 'not_fit': return 30;
+            default: return 50;
+          }
+        });
+        qualityScore = qualityScores.reduce((sum, score) => sum + score, 0) / qualityScores.length;
+      }
+
+      const kpi = calculateAssignmentKPI(memberCompleted, memberAssignments.length, memberOnTime, qualityScore);
+
+      return {
+        workerId: member.id,
+        workerName: `${member.first_name} ${member.last_name}`,
+        workerEmail: member.email,
+        kpi: kpi,
+        assignments: {
+          total: memberAssignments.length,
+          completed: memberCompleted,
+          onTime: memberOnTime,
+          pending: memberAssignments.filter(a => a.status === 'pending').length,
+          overdue: memberAssignments.filter(a => a.status === 'overdue').length
+        }
+      };
+    }));
+
+    // Calculate team KPI
+    const teamCompletionRate = totalAssignments > 0 ? (completedAssignments / totalAssignments) * 100 : 0;
+    const teamOnTimeRate = totalAssignments > 0 ? (onTimeSubmissions / totalAssignments) * 100 : 0;
+    const avgQualityScore = individualKPIs.length > 0 
+      ? individualKPIs.reduce((sum, kpi) => sum + kpi.kpi.qualityScore, 0) / individualKPIs.length 
+      : 0;
+
+    const teamKPI = calculateAssignmentKPI(completedAssignments, totalAssignments, onTimeSubmissions, avgQualityScore);
+
+    console.log('🎯 Final Team KPI:', teamKPI);
+
+    res.json({
+      success: true,
+      teamKPI: teamKPI,
+      teamMetrics: {
+        totalAssignments,
+        completedAssignments,
+        onTimeSubmissions,
+        teamCompletionRate: Math.round(teamCompletionRate),
+        teamOnTimeRate: Math.round(teamOnTimeRate),
+        avgQualityScore: Math.round(avgQualityScore),
+        totalMembers: teamMembers.length
+      },
+      individualKPIs,
+      period: {
+        start: monthStart.toISOString().split('T')[0],
+        end: monthEnd.toISOString().split('T')[0],
+        month: now.toLocaleString('default', { month: 'long', year: 'numeric' })
+      }
+    });
+
+  } catch (error) {
+    console.error('Error in getTeamLeaderAssignmentKPI:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Get Worker KPI based on Assignment Completion
+ * @route GET /api/goal-kpi/worker/assignment-kpi
+ * @access Worker
+ * 
+ * NOTE: This function uses the new assignment-based KPI system.
+ * It does NOT use cycle-based columns (cycle_day, streak_days, cycle_completed, cycle_start).
+ * Those columns are kept in the database for migration purposes but are not used in calculations.
+ */
+const getWorkerAssignmentKPI = async (req, res) => {
+  try {
+    const { workerId } = req.query;
+    
+    if (!workerId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Worker ID is required'
+      });
+    }
+
+    // Get date range for the current month
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+
+    // Get all assignments for the worker this month
+    const { data: assignments, error: assignmentsError } = await supabase
+      .from('work_readiness_assignments')
+      .select('*')
+      .eq('worker_id', workerId)
+      .gte('assigned_date', monthStart.toISOString().split('T')[0])
+      .lte('assigned_date', monthEnd.toISOString().split('T')[0])
+      .order('assigned_date', { ascending: false });
+
+    if (assignmentsError) {
+      console.error('Error fetching assignments:', assignmentsError);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to fetch assignments'
+      });
+    }
+
+    // Get completed work readiness submissions for quality scoring
+    const { data: workReadiness, error: workReadinessError } = await supabase
+      .from('work_readiness')
+      .select('*')
+      .eq('worker_id', workerId)
+      .gte('submitted_at', monthStart.toISOString())
+      .lte('submitted_at', monthEnd.toISOString());
+
+    if (workReadinessError) {
+      console.error('Error fetching work readiness:', workReadinessError);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to fetch work readiness data'
+      });
+    }
+
+    // Calculate metrics
+    const totalAssignments = assignments?.length || 0;
+    const completedAssignments = assignments?.filter(a => a.status === 'completed').length || 0;
+    const onTimeSubmissions = assignments?.filter(a => 
+      a.status === 'completed' && 
+      a.completed_at && 
+      new Date(a.completed_at) <= new Date(a.due_time)
+    ).length || 0;
+
+    // Calculate quality score based on readiness levels
+    let qualityScore = 0;
+    if (workReadiness && workReadiness.length > 0) {
+      const qualityScores = workReadiness.map(wr => {
+        switch(wr.readiness_level) {
+          case 'fit': return 100;
+          case 'minor': return 70;
+          case 'not_fit': return 30;
+          default: return 50;
+        }
+      });
+      qualityScore = qualityScores.reduce((sum, score) => sum + score, 0) / qualityScores.length;
+    }
+
+    // Calculate KPI using new assignment-based system
+    const kpi = calculateAssignmentKPI(completedAssignments, totalAssignments, onTimeSubmissions, qualityScore);
+
+    // Get recent assignments for context
+    const recentAssignments = assignments?.slice(0, 5).map(assignment => ({
+      id: assignment.id,
+      assignedDate: assignment.assigned_date,
+      status: assignment.status,
+      dueTime: assignment.due_time,
+      completedAt: assignment.completed_at,
+      isOnTime: assignment.status === 'completed' && 
+                assignment.completed_at && 
+                new Date(assignment.completed_at) <= new Date(assignment.due_time)
+    })) || [];
+
+    res.json({
+      success: true,
+      kpi: kpi,
+      metrics: {
+        totalAssignments,
+        completedAssignments,
+        onTimeSubmissions,
+        qualityScore: Math.round(qualityScore),
+        completionRate: totalAssignments > 0 ? Math.round((completedAssignments / totalAssignments) * 100) : 0,
+        onTimeRate: totalAssignments > 0 ? Math.round((onTimeSubmissions / totalAssignments) * 100) : 0
+      },
+      recentAssignments,
+      period: {
+        start: monthStart.toISOString().split('T')[0],
+        end: monthEnd.toISOString().split('T')[0],
+        month: now.toLocaleString('default', { month: 'long', year: 'numeric' })
+      }
+    });
+
+  } catch (error) {
+    console.error('Error in getWorkerAssignmentKPI:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
+
+/**
  * Handle Work Readiness Assessment Submission and Update Cycle
  * @route POST /api/goal-kpi/submit-assessment
  * @access Worker
@@ -2159,12 +2547,26 @@ const handleAssessmentSubmission = async (req, res) => {
   try {
     const { workerId, assessmentData } = req.body;
     
+    console.log('🎯 Handling assessment submission:', { workerId, assessmentData });
+    
     if (!workerId) {
       return res.status(400).json({
         success: false,
         message: 'Worker ID is required'
       });
     }
+
+    // Validate assessment data
+    if (!assessmentData) {
+      return res.status(400).json({
+        success: false,
+        message: 'Assessment data is required'
+      });
+    }
+
+    const { readinessLevel, fatigueLevel } = assessmentData;
+    
+    // Validation is handled by middleware - no need to duplicate here
     
     // Get worker info
     const { data: worker, error: workerError } = await supabase
@@ -2182,6 +2584,41 @@ const handleAssessmentSubmission = async (req, res) => {
     }
     
     const today = new Date().toISOString().split('T')[0];
+    
+    // Check if worker has active assignment for today
+    const { data: assignment, error: assignmentError } = await supabase
+      .from('work_readiness_assignments')
+      .select('id, status, due_time')
+      .eq('worker_id', workerId)
+      .eq('assigned_date', today)
+      .in('status', ['pending', 'assigned'])
+      .single();
+
+    if (assignmentError && assignmentError.code !== 'PGRST116') {
+      console.error('Error checking assignment:', assignmentError);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to check assignment status'
+      });
+    }
+
+    if (!assignment) {
+      return res.status(400).json({
+        success: false,
+        message: 'No active work readiness assignment found for today. Please wait for your team leader to assign you.'
+      });
+    }
+
+    // Check if assignment is overdue - BLOCK submission if overdue
+    const now = new Date();
+    const dueTime = new Date(assignment.due_time);
+    if (now > dueTime) {
+      return res.status(400).json({
+        success: false,
+        message: 'Assignment is overdue - no catch-up allowed. This is a permanent record.',
+        error: 'Overdue assignments cannot be completed. This reflects the true performance record.'
+      });
+    }
     
     // Get latest assessment to check cycle status
     const { data: latestAssessment, error: assessmentError } = await supabase
@@ -2248,9 +2685,15 @@ const handleAssessmentSubmission = async (req, res) => {
       }
     }
     
-    // Add cycle data to assessment
-    const assessmentWithCycle = {
-      ...assessmentData,
+    // Transform assessment data to match database schema (camelCase to snake_case)
+    const transformedAssessmentData = {
+      worker_id: workerId,
+      readiness_level: assessmentData.readinessLevel,
+      fatigue_level: assessmentData.fatigueLevel,
+      mood: assessmentData.mood,
+      pain_discomfort: assessmentData.painDiscomfort,
+      notes: assessmentData.notes || null,
+      // Legacy cycle columns - kept for migration but not used in new assignment-based system
       cycle_start: cycleStart,
       cycle_day: cycleDay,
       streak_days: streakDays,
@@ -2267,11 +2710,7 @@ const handleAssessmentSubmission = async (req, res) => {
       
       const updateData = {
         ...existingAssessment,
-        ...assessmentData,
-        cycle_start: cycleStart,
-        cycle_day: cycleDay,
-        streak_days: streakDays,
-        cycle_completed: cycleCompleted,
+        ...transformedAssessmentData,
         updated_at: new Date().toISOString()
       };
       
@@ -2296,7 +2735,7 @@ const handleAssessmentSubmission = async (req, res) => {
       
       const { data: newAssessment, error: saveError } = await supabase
         .from('work_readiness')
-        .insert([assessmentWithCycle])
+        .insert([transformedAssessmentData])
         .select()
         .single();
       
@@ -2307,6 +2746,39 @@ const handleAssessmentSubmission = async (req, res) => {
       
       savedAssessment = newAssessment;
       console.log('✅ New assessment saved with cycle data:', savedAssessment.id);
+    }
+    
+    // Update assignment status to completed
+    try {
+      const { data: assignment, error: assignmentError } = await supabase
+        .from('work_readiness_assignments')
+        .select('id')
+        .eq('worker_id', workerId)
+        .eq('assigned_date', today)
+        .in('status', ['pending', 'assigned'])
+        .single();
+
+      if (!assignmentError && assignment) {
+        const { error: updateAssignmentError } = await supabase
+          .from('work_readiness_assignments')
+          .update({
+            status: 'completed',
+            work_readiness_id: savedAssessment.id,
+            completed_at: new Date().toISOString()
+          })
+          .eq('id', assignment.id);
+
+        if (updateAssignmentError) {
+          console.error('❌ Failed to update assignment status:', updateAssignmentError);
+        } else {
+          console.log('✅ Assignment status updated to completed:', assignment.id);
+        }
+      } else {
+        console.log('ℹ️ No active assignment found for worker:', workerId);
+      }
+    } catch (assignmentUpdateError) {
+      console.error('❌ Error updating assignment status:', assignmentUpdateError);
+      // Don't fail the whole request if assignment update fails
     }
     
     // Calculate KPI based on consecutive days
@@ -2336,7 +2808,7 @@ const handleAssessmentSubmission = async (req, res) => {
       day: streakDays,
       cycleComplete: cycleCompleted,
       kpi: kpi,
-      assessmentData: assessmentWithCycle,
+      assessmentData: transformedAssessmentData,
       savedAssessmentId: savedAssessment.id
     });
     
@@ -2352,6 +2824,8 @@ const handleAssessmentSubmission = async (req, res) => {
 
 module.exports = {
   getWorkerWeeklyProgress,
+  getWorkerAssignmentKPI,
+  getTeamLeaderAssignmentKPI,
   getTeamWeeklyKPI,
   getTeamMonitoringDashboard,
   getMonthlyPerformanceTracking,
@@ -2361,6 +2835,7 @@ module.exports = {
   handleAssessmentSubmission,
   calculateKPI,
   calculateCompletionRateKPI,
+  calculateAssignmentKPI,
   getWeekDateRange,
   getWorkingDaysCount,
   calculateStreaks,

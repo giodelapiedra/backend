@@ -29,6 +29,7 @@ const clinicianAnalyticsRoutes = require('./routes/clinicianAnalytics');
 const teamLeaderRoutes = require('./routes/teamLeader');
 const workReadinessRoutes = require('./routes/workReadiness');
 const goalKpiRoutes = require('./routes/goalKpi');
+const multiTeamAnalyticsRoutes = require('./routes/multiTeamAnalytics');
 
 const app = express();
 
@@ -213,6 +214,7 @@ app.use('/api/clinicians/analytics', clinicianAnalyticsRoutes);
 app.use('/api/team-leader', teamLeaderRoutes);
 app.use('/api/work-readiness', workReadinessRoutes);
 app.use('/api/goal-kpi', goalKpiRoutes);
+app.use('/api/multi-team-analytics', multiTeamAnalyticsRoutes);
 
 // Apply database health check middleware to all routes
 app.use(dbHealthCheck);

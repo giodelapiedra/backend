@@ -1,7 +1,21 @@
 const { createClient } = require('@supabase/supabase-js');
 
-const supabaseUrl = 'https://dtcgzgbxhefwhqpeotrl.supabase.co';
-const supabaseServiceKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR0Y2d6Z2J4aGVmd2hxcGVvdHJsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1OTE0NDcxOCwiZXhwIjoyMDc0NzIwNzE4fQ.D1wSP12YM8jPtF-llVFiC4cI7xKJtRMtiaUuwRzJ3z8';
+// Environment-based configuration with fallbacks
+const supabaseUrl = process.env.SUPABASE_URL || 'https://dtcgzgbxhefwhqpeotrl.supabase.co';
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR0Y2d6Z2J4aGVmd2hxcGVvdHJsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1OTE0NDcxOCwiZXhwIjoyMDc0NzIwNzE4fQ.D1wSP12YM8jPtF-llVFiC4cI7xKJtRMtiaUuwRzJ3z8';
+
+// Validate configuration
+if (!supabaseUrl || !supabaseServiceKey) {
+  console.error('❌ Supabase configuration missing!');
+  console.log('Please set SUPABASE_URL and SUPABASE_SERVICE_KEY in your .env file');
+  console.log('Current values:');
+  console.log('- SUPABASE_URL:', supabaseUrl ? '✅ Set' : '❌ Missing');
+  console.log('- SUPABASE_SERVICE_KEY:', supabaseServiceKey ? '✅ Set' : '❌ Missing');
+  process.exit(1);
+}
+
+console.log('✅ Supabase configuration loaded successfully');
+console.log('📍 Supabase URL:', supabaseUrl);
 
 // Create Supabase client for backend operations (service role)
 const supabase = createClient(supabaseUrl, supabaseServiceKey, {

@@ -27,38 +27,45 @@ import { useAuth } from '../contexts/AuthContext.supabase';
 import { authClient } from '../lib/supabase';
 import { kpiAPI } from '../utils/backendApi';
 
-interface KPIData {
+interface AssignmentKPIData {
   rating: string;
   color: string;
   description: string;
   score: number;
-}
-
-interface WeeklyProgress {
-  completedDays: number;
-  totalWorkDays: number;
   completionRate: number;
-  kpi: KPIData;
-  weekLabel: string;
-  streaks: {
-    current: number;
-    longest: number;
-  };
-  topPerformingDays: number;
+  onTimeRate: number;
+  qualityScore: number;
+  completedAssignments: number;
+  totalAssignments: number;
 }
 
-interface DailyBreakdownEntry {
-  date: string;
-  dayName: string;
-  completed: boolean;
-  readinessLevel: string | null;
-  fatigueLevel: number | null;
-  mood: string | null;
-} 
+interface AssignmentMetrics {
+  totalAssignments: number;
+  completedAssignments: number;
+  onTimeSubmissions: number;
+  qualityScore: number;
+  completionRate: number;
+  onTimeRate: number;
+}
 
-interface GoalTrackingData {
-  weeklyProgress: WeeklyProgress;
-  dailyBreakdown: DailyBreakdownEntry[];
+interface RecentAssignment {
+  id: string;
+  assignedDate: string;
+  status: string;
+  dueTime: string;
+  completedAt?: string;
+  isOnTime: boolean;
+}
+
+interface AssignmentKPIResponse {
+  kpi: AssignmentKPIData;
+  metrics: AssignmentMetrics;
+  recentAssignments: RecentAssignment[];
+  period: {
+    start: string;
+    end: string;
+    month: string;
+  };
 }
 
 interface GoalTrackingCardProps {
@@ -71,7 +78,7 @@ const GoalTrackingCard: React.FC<GoalTrackingCardProps> = ({
   compact = false 
 }) => {
   const { user } = useAuth();
-  const [data, setData] = useState<GoalTrackingData | null>(null);
+  const [data, setData] = useState<AssignmentKPIResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -84,18 +91,18 @@ const GoalTrackingCard: React.FC<GoalTrackingCardProps> = ({
         throw new Error('User ID is required');
       }
 
-      // Use the new backend API
-      const result = await kpiAPI.getWorkerWeeklyProgress(user.id);
+      // Use the new assignment-based KPI API
+      const result = await kpiAPI.getWorkerAssignmentKPI(user.id);
       
       if (result.success) {
-        setData(result.data);
+        setData(result);
         setError(null);
       } else {
-        throw new Error(result.message || 'Failed to fetch goal data');
+        throw new Error(result.message || 'Failed to fetch assignment KPI data');
       }
     } catch (err: any) {
-      console.error('Error fetching goal data:', err);
-      setError(err.message || 'Failed to load goal tracking data');
+      console.error('Error fetching assignment KPI data:', err);
+      setError(err.message || 'Failed to load assignment KPI data');
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -175,8 +182,9 @@ const GoalTrackingCard: React.FC<GoalTrackingCardProps> = ({
 
   if (!data) return null;
 
-  const progressPercentage = data.weeklyProgress.completionRate;
-  const currentKPI = data.weeklyProgress.kpi;
+  const progressPercentage = data.kpi.completionRate;
+  const currentKPI = data.kpi;
+  const metrics = data.metrics;
 
   return (
     <Card sx={{ 
@@ -216,7 +224,7 @@ const GoalTrackingCard: React.FC<GoalTrackingCardProps> = ({
               <Speed sx={{ fontSize: 20, color: '#0ea5e9' }} />
             </Box>
             <Typography variant="h6" sx={{ fontWeight: 600, color: '#1e293b' }}>
-              {compact ? 'This Week' : 'Weekly Goals & KPI'}
+              {compact ? 'This Month' : 'Assignment Goals & KPI'}
             </Typography>
           </Box>
           
@@ -242,7 +250,7 @@ const GoalTrackingCard: React.FC<GoalTrackingCardProps> = ({
           </Tooltip>
         </Box>
 
-        {/* Week Label */}
+        {/* Month Label */}
         <Box sx={{ mb: 3 }}>
           <Box sx={{ 
             display: 'flex', 
@@ -259,7 +267,7 @@ const GoalTrackingCard: React.FC<GoalTrackingCardProps> = ({
                 fontSize: '0.875rem'
               }}
             >
-              {data.weeklyProgress.weekLabel}
+              {data.period.month}
             </Typography>
           </Box>
         </Box>
@@ -273,10 +281,10 @@ const GoalTrackingCard: React.FC<GoalTrackingCardProps> = ({
             mb: 1 
           }}>
             <Typography variant="body2" sx={{ fontWeight: 500, color: '#374151' }}>
-              Work Readiness Assessments
+              Work Readiness Assignments
             </Typography>
             <Typography variant="body2" sx={{ fontWeight: 600, color: '#1f2937' }}>
-              {data.weeklyProgress.completedDays}/{data.weeklyProgress.totalWorkDays} days
+              {metrics.completedAssignments}/{metrics.totalAssignments} completed
             </Typography>
           </Box>
           
@@ -343,10 +351,10 @@ const GoalTrackingCard: React.FC<GoalTrackingCardProps> = ({
                 color: '#1e293b',
                 fontSize: '1.125rem'
               }}>
-                {data.weeklyProgress.streaks.current}
+                {metrics.onTimeSubmissions}
               </Typography>
               <Typography variant="caption" sx={{ color: '#64748b' }}>
-                Day Streak
+                On-Time
               </Typography>
             </Box>
             <Box sx={{ textAlign: 'center' }}>
@@ -355,10 +363,10 @@ const GoalTrackingCard: React.FC<GoalTrackingCardProps> = ({
                 color: '#1e293b',
                 fontSize: '1.125rem'
               }}>
-                {data.weeklyProgress.topPerformingDays}
+                {metrics.qualityScore}%
               </Typography>
               <Typography variant="caption" sx={{ color: '#64748b' }}>
-                Best Days
+                Quality
               </Typography>
             </Box>
           </Box>
@@ -377,10 +385,10 @@ const GoalTrackingCard: React.FC<GoalTrackingCardProps> = ({
                   color: '#1e293b',
                   fontSize: '1.25rem'
                 }}>
-                  {data.weeklyProgress.streaks.current}
+                  {metrics.onTimeRate}%
                 </Typography>
                 <Typography variant="caption" sx={{ color: '#64748b' }}>
-                  Current Streak
+                  On-Time Rate
                 </Typography>
               </Box>
             </Grid>
@@ -397,10 +405,10 @@ const GoalTrackingCard: React.FC<GoalTrackingCardProps> = ({
                   color: '#1e293b',
                   fontSize: '1.25rem'
                 }}>
-                  {data.weeklyProgress.topPerformingDays}
+                  {metrics.qualityScore}%
                 </Typography>
                 <Typography variant="caption" sx={{ color: '#64748b' }}>
-                  Best Days This Week
+                  Quality Score
                 </Typography>
               </Box>
             </Grid>
@@ -413,42 +421,45 @@ const GoalTrackingCard: React.FC<GoalTrackingCardProps> = ({
                 border: '1px solid #bbf7d0'
               }}>
                 <Typography variant="body2" sx={{ color: '#14532d', fontWeight: 500 }}>
-                  🏆 Longest streak this year: {data.weeklyProgress.streaks.longest} days
+                  🎯 Assignment completion rate: {metrics.completionRate}%
                 </Typography>
               </Box>
             </Grid>
           </Grid>
         )}
 
-        {/* Daily Breakdown */}
-        {!compact && data.dailyBreakdown.length > 0 && (
+        {/* Recent Assignments */}
+        {!compact && data.recentAssignments.length > 0 && (
           <Box sx={{ mt: 3, pt: 3, borderTop: '1px solid #e5e7eb' }}>
             <Typography variant="subtitle2" sx={{ 
               fontWeight: 600, 
               color: '#374151',
               mb: 2 
             }}>
-              This Week's Progress
+              Recent Assignments
             </Typography>
             <Grid container spacing={1}>
-              {data.dailyBreakdown.map((day, index) => (
-                <Grid item key={day.date} xs={12}>
+              {data.recentAssignments.map((assignment, index) => (
+                <Grid item key={assignment.id} xs={12}>
                   <Box sx={{ 
                     display: 'flex', 
                     alignItems: 'center', 
                     gap: 2,
                     p: 1.5,
-                    backgroundColor: day.completed ? '#f0fdf4' : '#f9fafb',
+                    backgroundColor: assignment.status === 'completed' ? '#f0fdf4' : '#f9fafb',
                     borderRadius: 1.5,
-                    border: `1px solid ${day.completed ? '#bbf7d0' : '#e5e7eb'}`
+                    border: `1px solid ${assignment.status === 'completed' ? '#bbf7d0' : '#e5e7eb'}`
                   }}>
-                    <Box sx={{ minWidth: 60 }}>
+                    <Box sx={{ minWidth: 80 }}>
                       <Typography variant="caption" sx={{ 
                         fontWeight: 500,
-                        color: day.completed ? '#166534' : '#6b7280',
+                        color: assignment.status === 'completed' ? '#166534' : '#6b7280',
                         fontSize: '0.75rem'
                       }}>
-                        {day.dayName}
+                        {new Date(assignment.assignedDate).toLocaleDateString('en-US', { 
+                          month: 'short', 
+                          day: 'numeric' 
+                        })}
                       </Typography>
                     </Box>
                     
@@ -458,7 +469,7 @@ const GoalTrackingCard: React.FC<GoalTrackingCardProps> = ({
                       gap: 1,
                       flex: 1 
                     }}>
-                      {day.completed ? (
+                      {assignment.status === 'completed' ? (
                         <CheckCircle sx={{ fontSize: 16, color: '#22c55e' }} />
                       ) : (
                         <Typography sx={{ 
@@ -470,29 +481,32 @@ const GoalTrackingCard: React.FC<GoalTrackingCardProps> = ({
                         </Typography>
                       )}
                       
-                      {day.completed ? (
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                          <Chip 
-                            label={day.readinessLevel === 'fit' ? 'FIT' : day.readinessLevel === 'minor' ? 'MINOR' : 'NOT FIT'}
-                            size="small"
-                            sx={{ 
-                              fontSize: '0.625rem',
-                              height: 20,
-                              backgroundColor: day.readinessLevel === 'fit' ? '#dcfce7' : 
-                                              day.readinessLevel === 'minor' ? '#fef3c7' : '#fecaca',
-                              color: day.readinessLevel === 'fit' ? '#166534' : 
-                                     day.readinessLevel === 'minor' ? '#92400e' : '#991b1b'
-                            }}
-                          />
-                          <Typography variant="caption" sx={{ color: '#64748b', ml: 1 }}>
-                            Fatigue: {day.fatigueLevel}/10
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                        <Chip 
+                          label={assignment.status === 'completed' ? 'COMPLETED' : 
+                                 assignment.status === 'pending' ? 'PENDING' : 
+                                 assignment.status === 'assigned' ? 'ASSIGNED' : assignment.status.toUpperCase()}
+                          size="small"
+                          sx={{ 
+                            fontSize: '0.625rem',
+                            height: 20,
+                            backgroundColor: assignment.status === 'completed' ? '#dcfce7' : 
+                                            assignment.status === 'pending' ? '#fef3c7' : '#f3f4f6',
+                            color: assignment.status === 'completed' ? '#166534' : 
+                                   assignment.status === 'pending' ? '#92400e' : '#6b7280'
+                          }}
+                        />
+                        {assignment.status === 'completed' && assignment.isOnTime && (
+                          <Typography variant="caption" sx={{ color: '#22c55e', ml: 1 }}>
+                            ✓ On-time
                           </Typography>
-                        </Box>
-                      ) : (
-                        <Typography variant="caption" sx={{ color: '#9ca3af' }}>
-                          No submission
-                        </Typography>
-                      )}
+                        )}
+                        {assignment.status === 'completed' && !assignment.isOnTime && (
+                          <Typography variant="caption" sx={{ color: '#f59e0b', ml: 1 }}>
+                            ⚠ Late
+                          </Typography>
+                        )}
+                      </Box>
                     </Box>
                   </Box>
                 </Grid>

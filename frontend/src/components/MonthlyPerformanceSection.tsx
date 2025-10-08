@@ -1,43 +1,32 @@
 import React, { useState, useEffect, useCallback, useMemo, memo } from 'react';
-import axios from 'axios';
+import backendApi from '../utils/backendApi';
 
 interface MonthlyPerformanceSectionProps {
   teamLeaderId?: string;
 }
 
-interface WorkerKPI {
+interface AssignmentWorkerKPI {
   workerId: string;
   workerName: string;
-  email: string;
-  team: string;
-  monthlyMetrics: {
-    totalAssessments: number;
-    completedCycles: number;
-    workingDaysInMonth: number;
+  workerEmail: string;
+  kpi: {
+    rating: string;
+    color: string;
+    description: string;
+    score: number;
     completionRate: number;
-    averageCycleKPI: number;
-    monthlyKPI: {
-      rating: string;
-      score: number;
-      color: string;
-      description: string;
-    };
+    onTimeRate: number;
+    qualityScore: number;
+    completedAssignments: number;
+    totalAssignments: number;
   };
-  readinessBreakdown: {
-    fit: number;
-    minor: number;
-    not_fit: number;
+  assignments: {
+    total: number;
+    completed: number;
+    onTime: number;
+    pending: number;
+    overdue: number;
   };
-  averageFatigueLevel: number;
-  cycleDetails: Array<{
-    cycleStart: string;
-    completedAt: string;
-    streakDays: number;
-    kpi: {
-      rating: string;
-      score: number;
-    };
-  }>;
 }
 
 interface MonthlyTrend {
@@ -105,73 +94,42 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
         return;
       }
 
-      if (!validateMonth(selectedMonth) || !validateYear(selectedYear)) {
-        setError('Invalid month or year selected');
-        setLoading(false);
-        return;
-      }
-
       setLoading(true);
       setError(null);
       
-      // Create axios instance with security headers
-      const apiClient = axios.create({
-        timeout: 15000, // Increased timeout
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Requested-With': 'XMLHttpRequest'
+      console.log('🎯 Fetching monthly performance for team leader:', teamLeaderId);
+      
+      const response = await backendApi.get('/goal-kpi/team-leader/assignment-summary', {
+        params: {
+          teamLeaderId: sanitizeInput(teamLeaderId)
         }
       });
 
-      // Add request interceptor for security
-      apiClient.interceptors.request.use(
-        (config) => {
-          // Sanitize parameters
-          if (config.params) {
-            config.params.teamLeaderId = sanitizeInput(config.params.teamLeaderId);
-            config.params.year = sanitizeInput(config.params.year);
-            config.params.month = sanitizeInput(config.params.month);
-          }
-          return config;
-        },
-        (error) => Promise.reject(error)
-      );
-
-      // Add response interceptor for security
-      apiClient.interceptors.response.use(
-        (response) => {
-          // Validate response structure
-          if (!response.data || typeof response.data !== 'object') {
-            throw new Error('Invalid response format');
-          }
-          return response;
-        },
-        (error) => {
-          console.error('API Error:', error);
-          return Promise.reject(error);
-        }
-      );
-
-      const response = await apiClient.get(
-        `${process.env.REACT_APP_API_BASE_URL || 'https://sociosystem.onrender.com'}/api/goal-kpi/team-leader/monthly-performance`,
-        {
-          params: {
-            teamLeaderId: sanitizeInput(teamLeaderId),
-            year: sanitizeInput(selectedYear),
-            month: sanitizeInput(selectedMonth),
-            includePreviousMonths: 3
-          }
-        }
-      );
+      console.log('📊 Monthly performance response:', response.data);
 
       if (response.data.success) {
         // Validate response data structure
-        const data = response.data.data;
-        if (!data || !data.monthlyTeamSummary) {
-          throw new Error('Invalid data structure received');
+        const data = response.data;
+        if (!data || !data.teamKPI || !data.teamMetrics) {
+          throw new Error('Invalid assignment KPI data structure received');
         }
         
-        setMonthlyData(data);
+        // Handle empty data gracefully
+        if (data.teamMetrics.totalAssignments === 0) {
+          console.log('📝 No assignments found, showing empty state');
+          setMonthlyData({
+            ...data,
+            teamKPI: {
+              rating: 'No Data',
+              color: '#6b7280',
+              description: 'No assignments found for this month. Create some assignments to see performance data.',
+              score: 0
+            }
+          });
+        } else {
+          setMonthlyData(data);
+        }
+        
         setLastUpdated(new Date());
         setError(null);
         setRetryCount(0); // Reset retry count on success
@@ -179,7 +137,7 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
         throw new Error(response.data.message || 'Failed to load monthly performance data');
       }
     } catch (err: any) {
-      console.error('Error fetching monthly performance:', err);
+      console.error('❌ Error fetching monthly performance:', err);
       
       let errorMessage = 'Failed to load monthly performance data';
       
@@ -215,7 +173,7 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
     } finally {
       setLoading(false);
     }
-  }, [teamLeaderId, selectedYear, selectedMonth, retryCount]);
+  }, [teamLeaderId, retryCount]);
 
   useEffect(() => {
     if (teamLeaderId) {
@@ -243,11 +201,11 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
 
   // Memoized sorted workers for performance
   const sortedWorkers = useMemo(() => {
-    if (!monthlyData?.monthlyWorkerKPIs) return [];
-    return [...monthlyData.monthlyWorkerKPIs].sort(
-      (a, b) => b.monthlyMetrics.completionRate - a.monthlyMetrics.completionRate
+    if (!monthlyData?.individualKPIs) return [];
+    return [...monthlyData.individualKPIs].sort(
+      (a, b) => b.kpi.score - a.kpi.score
     );
-  }, [monthlyData?.monthlyWorkerKPIs]);
+  }, [monthlyData?.individualKPIs]);
 
   // Memoized pagination calculations
   const paginationData = useMemo(() => {
@@ -479,7 +437,7 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
     return null;
   }
 
-  const { monthlyWorkerKPIs, monthlyTeamSummary, monthlyTrends, performanceInsights } = monthlyData;
+  const { teamKPI, teamMetrics, individualKPIs, period } = monthlyData;
 
   // Use memoized pagination data
   const { totalPages, startIndex, endIndex, currentWorkers } = paginationData;
@@ -547,13 +505,13 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
                 WebkitBackgroundClip: 'text',
                 WebkitTextFillColor: 'transparent'
               }}>
-                📅 Monthly Performance Tracking
+                📋 Assignment Performance Tracking
               </h2>
             </div>
             
             <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
               <p style={{ color: '#6b7280', margin: 0, fontSize: window.innerWidth <= 768 ? '0.8rem' : '0.875rem' }}>
-                {monthlyTeamSummary.month} - Comprehensive KPI Analysis
+                {period.month} - Assignment-Based KPI Analysis
               </p>
               
               {lastUpdated && (
@@ -658,13 +616,13 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
             </svg>
           </div>
           <div style={{ fontSize: window.innerWidth <= 768 ? '1.75rem' : '2rem', fontWeight: '700', color: '#1f2937', marginBottom: '0.25rem' }}>
-            {monthlyTeamSummary.totalMembers}
+            {teamMetrics.totalMembers}
           </div>
           <div style={{ fontSize: window.innerWidth <= 768 ? '0.8rem' : '0.875rem', color: '#6b7280', marginBottom: '0.5rem' }}>
             Total Team Members
           </div>
           <div style={{ fontSize: window.innerWidth <= 768 ? '0.7rem' : '0.75rem', color: '#10b981', fontWeight: '600' }}>
-            ✓ {monthlyTeamSummary.activeMembers} Active
+            ✓ {teamMetrics.completedAssignments} Completed Assignments
           </div>
         </div>
 
@@ -697,10 +655,10 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
             </svg>
           </div>
           <div style={{ fontSize: '2rem', fontWeight: '700', color: '#1f2937', marginBottom: '0.25rem' }}>
-            {monthlyTeamSummary.totalAssessments}
+            {teamMetrics.totalAssignments}
           </div>
           <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
-            Total Assessments
+            Total Assignments
           </div>
         </div>
 
@@ -730,10 +688,10 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
             </svg>
           </div>
           <div style={{ fontSize: '2rem', fontWeight: '700', color: '#1f2937', marginBottom: '0.25rem' }}>
-            {monthlyTeamSummary.totalCompletedCycles}
+            {teamMetrics.onTimeSubmissions}
           </div>
           <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
-            Completed Cycles
+            On-Time Submissions
           </div>
         </div>
 
@@ -743,13 +701,13 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
           padding: '1.5rem',
           borderRadius: '0.5rem',
           boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
-          border: `2px solid ${monthlyTeamSummary.teamKPI?.color || '#6b7280'}`,
+          border: `2px solid ${teamKPI?.color || '#6b7280'}`,
           transition: 'all 0.2s ease',
           cursor: 'pointer'
         }}
         onMouseEnter={(e) => {
           e.currentTarget.style.transform = 'translateY(-2px)';
-          e.currentTarget.style.boxShadow = `0 4px 12px ${monthlyTeamSummary.teamKPI?.color || '#6b7280'}40`;
+          e.currentTarget.style.boxShadow = `0 4px 12px ${teamKPI?.color || '#6b7280'}40`;
         }}
         onMouseLeave={(e) => {
           e.currentTarget.style.transform = 'translateY(0)';
@@ -758,149 +716,213 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
         >
           <div style={{ marginBottom: '0.5rem' }}>
             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M12 2L15.09 8.26L22 9L17 14L18.18 21L12 17.77L5.82 21L7 14L2 9L8.91 8.26L12 2Z" stroke={monthlyTeamSummary.teamKPI?.color || '#6b7280'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M12 2L15.09 8.26L22 9L17 14L18.18 21L12 17.77L5.82 21L7 14L2 9L8.91 8.26L12 2Z" stroke={teamKPI?.color || '#6b7280'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
           </div>
           <div style={{
             fontSize: '1.5rem',
             fontWeight: '700',
-            color: monthlyTeamSummary.teamKPI?.color || '#6b7280',
+            color: teamKPI?.color || '#6b7280',
             marginBottom: '0.25rem'
           }}>
-            {monthlyTeamSummary.teamKPI?.rating || 'N/A'}
+            {teamKPI?.rating || 'N/A'}
           </div>
           <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.5rem' }}>
-            Team Monthly KPI
+            Team Assignment KPI
           </div>
           <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
-            {Math.round(monthlyTeamSummary.averageCompletionRate)}% Completion Rate
+            {Math.round(teamMetrics.teamCompletionRate || 0)}% Completion Rate
           </div>
         </div>
       </div>
 
-      {/* Monthly Trends Chart */}
-      {monthlyTrends && monthlyTrends.length > 0 && (
-        <div style={{
-          backgroundColor: 'white',
-          padding: '1.5rem',
-          borderRadius: '0.5rem',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
-          marginBottom: '1.5rem'
+      {/* Assignment Summary */}
+      <div style={{
+        backgroundColor: 'white',
+        padding: '1.5rem',
+        borderRadius: '0.5rem',
+        boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+        marginBottom: '1.5rem'
+      }}>
+        <h3 style={{
+          fontSize: '1.125rem',
+          fontWeight: '600',
+          color: '#1f2937',
+          marginBottom: '1rem',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.5rem'
         }}>
-          <h3 style={{
-            fontSize: '1.125rem',
-            fontWeight: '600',
-            color: '#1f2937',
-            marginBottom: '1rem',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem'
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M14 2H6C5.46957 2 4.96086 2.21071 4.58579 2.58579C4.21071 2.96086 4 3.46957 4 4V20C4 20.5304 4.21071 21.0391 4.58579 21.4142C4.96086 21.7893 5.46957 22 6 22H18C18.5304 22 19.0391 21.7893 19.4142 21.4142C19.7893 21.0391 20 20.5304 20 20V8L14 2Z" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            <path d="M14 2V8H20" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            <path d="M16 13H8" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            <path d="M16 17H8" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            <path d="M10 9H8" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+          Assignment Summary
+        </h3>
+
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+          gap: '1rem'
+        }}>
+          <div style={{
+            padding: '1rem',
+            borderRadius: '0.375rem',
+            backgroundColor: '#f0fdf4',
+            border: '1px solid #86efac',
+            textAlign: 'center'
           }}>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M3 3V21H21" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M9 9L12 6L16 10L20 6" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-            Monthly Performance Trends
-          </h3>
+            <div style={{ fontSize: '0.75rem', fontWeight: '600', color: '#166534', marginBottom: '0.5rem' }}>
+              Completed
+            </div>
+            <div style={{
+              fontSize: '1.5rem',
+              fontWeight: '700',
+              color: '#10b981',
+              marginBottom: '0.25rem'
+            }}>
+              {teamMetrics.completedAssignments}
+            </div>
+            <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
+              {Math.round(teamMetrics.teamCompletionRate || 0)}% completion rate
+            </div>
+          </div>
 
           <div style={{
-            display: 'grid',
-            gridTemplateColumns: `repeat(${monthlyTrends.length}, 1fr)`,
-            gap: '1rem'
+            padding: '1rem',
+            borderRadius: '0.375rem',
+            backgroundColor: '#fef3c7',
+            border: '1px solid #fcd34d',
+            textAlign: 'center'
           }}>
-            {monthlyTrends.map((trend: MonthlyTrend, index: number) => (
-              <div key={index} style={{
-                padding: '1rem',
-                borderRadius: '0.375rem',
-                backgroundColor: '#f9fafb',
-                border: '1px solid #e5e7eb',
-                textAlign: 'center'
-              }}>
-                <div style={{ fontSize: '0.75rem', fontWeight: '600', color: '#6b7280', marginBottom: '0.5rem' }}>
-                  {trend.month}
-                </div>
+            <div style={{ fontSize: '0.75rem', fontWeight: '600', color: '#92400e', marginBottom: '0.5rem' }}>
+              On-Time
+            </div>
+            <div style={{
+              fontSize: '1.5rem',
+              fontWeight: '700',
+              color: '#f59e0b',
+              marginBottom: '0.25rem'
+            }}>
+              {teamMetrics.onTimeSubmissions}
+            </div>
+            <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
+              {Math.round(teamMetrics.teamOnTimeRate || 0)}% on-time rate
+            </div>
+          </div>
+
+          <div style={{
+            padding: '1rem',
+            borderRadius: '0.375rem',
+            backgroundColor: '#f3f4f6',
+            border: '1px solid #d1d5db',
+            textAlign: 'center'
+          }}>
+            <div style={{ fontSize: '0.75rem', fontWeight: '600', color: '#6b7280', marginBottom: '0.5rem' }}>
+              Pending
+            </div>
+            <div style={{
+              fontSize: '1.5rem',
+              fontWeight: '700',
+              color: '#6b7280',
+              marginBottom: '0.25rem'
+            }}>
+              {teamMetrics.totalAssignments - teamMetrics.completedAssignments}
+            </div>
+            <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
+              Remaining assignments
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Assignment Insights */}
+      <div style={{
+        backgroundColor: 'white',
+        padding: '1.5rem',
+        borderRadius: '0.5rem',
+        boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+        marginBottom: '1.5rem'
+      }}>
+        <h3 style={{
+          fontSize: '1.125rem',
+          fontWeight: '600',
+          color: '#1f2937',
+          marginBottom: '1rem',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.5rem'
+        }}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="12" cy="12" r="10" stroke="#3b82f6" strokeWidth="2"/>
+            <path d="M12 16V12" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round"/>
+            <path d="M12 8H12.01" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round"/>
+          </svg>
+          Assignment Insights
+        </h3>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+          <div className="monthly-insight" style={{
+            padding: '1rem',
+            borderRadius: '0.375rem',
+            backgroundColor: teamKPI.score >= 75 ? '#f0fdf4' : teamKPI.score >= 60 ? '#fef3c7' : '#fef2f2',
+            border: `1px solid ${teamKPI.score >= 75 ? '#86efac' : teamKPI.score >= 60 ? '#fcd34d' : '#fecaca'}`
+          }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
+              <div style={{ fontSize: '1.5rem' }}>
+                {teamKPI.score >= 75 ? '🏆' : teamKPI.score >= 60 ? '⚠️' : '❌'}
+              </div>
+              <div style={{ flex: 1 }}>
                 <div style={{
-                  fontSize: '1.25rem',
-                  fontWeight: '700',
-                  color: trend.teamKPI.color,
+                  fontSize: '0.875rem',
+                  fontWeight: '600',
+                  color: '#1f2937',
                   marginBottom: '0.25rem'
                 }}>
-                  {trend.teamKPI.rating}
-                </div>
-                <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.5rem' }}>
-                  {trend.completedCycles} cycles
+                  Team Performance: {teamKPI.rating}
                 </div>
                 <div style={{
                   fontSize: '0.75rem',
-                  color: '#3b82f6',
-                  fontWeight: '600'
+                  color: '#6b7280'
                 }}>
-                  {Math.round(trend.completionRate)}%
+                  {teamKPI.description}
                 </div>
               </div>
-            ))}
+            </div>
           </div>
-        </div>
-      )}
 
-      {/* Performance Insights */}
-      {performanceInsights && performanceInsights.length > 0 && (
-        <div style={{
-          backgroundColor: 'white',
-          padding: '1.5rem',
-          borderRadius: '0.5rem',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
-          marginBottom: '1.5rem'
-        }}>
-          <h3 style={{
-            fontSize: '1.125rem',
-            fontWeight: '600',
-            color: '#1f2937',
-            marginBottom: '1rem',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem'
+          <div className="monthly-insight" style={{
+            padding: '1rem',
+            borderRadius: '0.375rem',
+            backgroundColor: '#eff6ff',
+            border: '1px solid #93c5fd'
           }}>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <circle cx="12" cy="12" r="10" stroke="#3b82f6" strokeWidth="2"/>
-              <path d="M12 16V12" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round"/>
-              <path d="M12 8H12.01" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round"/>
-            </svg>
-            Performance Insights
-          </h3>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-            {performanceInsights.map((insight: PerformanceInsight, index: number) => (
-              <div key={index} className="monthly-insight" style={{
-                padding: '1rem',
-                borderRadius: '0.375rem',
-                backgroundColor: insight.type === 'success' ? '#f0fdf4' : insight.type === 'warning' ? '#fef3c7' : '#eff6ff',
-                border: `1px solid ${insight.type === 'success' ? '#86efac' : insight.type === 'warning' ? '#fcd34d' : '#93c5fd'}`
-              }}>
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
-                  <div style={{ fontSize: '1.5rem' }}>{getInsightIcon(insight.type)}</div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{
-                      fontSize: '0.875rem',
-                      fontWeight: '600',
-                      color: '#1f2937',
-                      marginBottom: '0.25rem'
-                    }}>
-                      {insight.title}
-                    </div>
-                    <div style={{
-                      fontSize: '0.75rem',
-                      color: '#6b7280'
-                    }}>
-                      {insight.message}
-                    </div>
-                  </div>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
+              <div style={{ fontSize: '1.5rem' }}>📊</div>
+              <div style={{ flex: 1 }}>
+                <div style={{
+                  fontSize: '0.875rem',
+                  fontWeight: '600',
+                  color: '#1f2937',
+                  marginBottom: '0.25rem'
+                }}>
+                  Assignment Summary
+                </div>
+                <div style={{
+                  fontSize: '0.75rem',
+                  color: '#6b7280'
+                }}>
+                  {teamMetrics.completedAssignments} out of {teamMetrics.totalAssignments} assignments completed this month. 
+                  {teamMetrics.onTimeSubmissions} were submitted on-time ({Math.round(teamMetrics.teamOnTimeRate || 0)}%).
                 </div>
               </div>
-            ))}
+            </div>
           </div>
         </div>
-      )}
+      </div>
 
        {/* Individual Worker Performance */}
        <div style={{
@@ -989,7 +1011,7 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
                <path d="M9 9L12 6L16 10L20 6" stroke="#1e40af" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
              </svg>
              <span style={{ fontSize: window.innerWidth <= 768 ? '0.75rem' : '0.875rem', fontWeight: '600', color: '#1e40af' }}>
-               Sorted by Completion Rate (Highest First)
+               Sorted by KPI Score (Highest First)
              </span>
            </div>
          </div>
@@ -997,7 +1019,7 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
          {/* Mobile Card View */}
          {window.innerWidth <= 768 ? (
            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-             {currentWorkers.map((worker: WorkerKPI, index: number) => (
+             {currentWorkers.map((worker: AssignmentWorkerKPI, index: number) => (
                <div key={worker.workerId} style={{
                  border: startIndex + index + 1 === 1 ? '2px solid #f59e0b' : '1px solid #e5e7eb',
                  borderRadius: '0.5rem',
@@ -1057,7 +1079,7 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
                        </div>
                      </div>
                      <div style={{ fontSize: '0.7rem', color: '#6b7280' }}>
-                       {worker.email} • {worker.team}
+                       {worker.workerEmail}
                      </div>
                    </div>
 
@@ -1066,12 +1088,12 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
                      <div style={{
                        padding: '0.25rem 0.5rem',
                        borderRadius: '0.25rem',
-                       backgroundColor: worker.monthlyMetrics?.monthlyKPI?.color || '#6b7280',
+                       backgroundColor: worker.kpi?.color || '#6b7280',
                        color: 'white',
                        fontSize: '0.7rem',
                        fontWeight: '600'
                      }}>
-                       {worker.monthlyMetrics?.monthlyKPI?.rating || 'N/A'}
+                       {worker.kpi?.rating || 'N/A'}
                      </div>
 
                      {/* Completion Rate */}
@@ -1080,7 +1102,7 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
                        fontWeight: '600',
                        color: '#3b82f6'
                      }}>
-                       {Math.round(worker.monthlyMetrics.completionRate)}%
+                       {Math.round(worker.kpi.completionRate)}%
                      </div>
 
                      {/* Expand Arrow */}
@@ -1115,10 +1137,10 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
                          borderRadius: '0.375rem'
                        }}>
                          <div style={{ fontSize: '0.7rem', color: '#6b7280', marginBottom: '0.25rem' }}>
-                           Total Assessments
+                           Total Assignments
                          </div>
                          <div style={{ fontSize: '1rem', fontWeight: '700', color: '#1f2937' }}>
-                           {worker.monthlyMetrics.totalAssessments}
+                           {worker.assignments.total}
                          </div>
                        </div>
 
@@ -1129,10 +1151,10 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
                          borderRadius: '0.375rem'
                        }}>
                          <div style={{ fontSize: '0.7rem', color: '#6b7280', marginBottom: '0.25rem' }}>
-                           Completed Cycles
+                           Completed
                          </div>
                          <div style={{ fontSize: '1rem', fontWeight: '700', color: '#1f2937' }}>
-                           {worker.monthlyMetrics.completedCycles}
+                           {worker.assignments.completed}
                          </div>
                        </div>
 
@@ -1143,10 +1165,10 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
                          borderRadius: '0.375rem'
                        }}>
                          <div style={{ fontSize: '0.7rem', color: '#6b7280', marginBottom: '0.25rem' }}>
-                           Avg Cycle KPI
+                           On-Time
                          </div>
                          <div style={{ fontSize: '1rem', fontWeight: '700', color: '#1f2937' }}>
-                           {worker.monthlyMetrics.averageCycleKPI}
+                           {worker.assignments.onTime}
                          </div>
                        </div>
 
@@ -1157,15 +1179,15 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
                          borderRadius: '0.375rem'
                        }}>
                          <div style={{ fontSize: '0.7rem', color: '#6b7280', marginBottom: '0.25rem' }}>
-                           Avg Fatigue Level
+                           Quality Score
                          </div>
                          <div style={{ fontSize: '1rem', fontWeight: '700', color: '#1f2937' }}>
-                           {worker.averageFatigueLevel}
+                           {Math.round(worker.kpi.qualityScore)}%
                          </div>
                        </div>
                      </div>
 
-                     {/* Readiness Breakdown */}
+                     {/* Assignment Status Breakdown */}
                      <div style={{
                        padding: '0.5rem',
                        backgroundColor: '#f9fafb',
@@ -1173,65 +1195,107 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
                        marginBottom: '0.75rem'
                      }}>
                        <div style={{ fontSize: '0.7rem', fontWeight: '600', color: '#6b7280', marginBottom: '0.5rem' }}>
-                         Readiness Breakdown
+                         Assignment Status
                        </div>
                        <div style={{ display: 'flex', gap: '0.5rem' }}>
                          <div style={{ flex: 1, textAlign: 'center' }}>
                            <div style={{ fontSize: '1rem', fontWeight: '700', color: '#10b981' }}>
-                             {worker.readinessBreakdown.fit}
+                             {worker.assignments.completed}
                            </div>
-                           <div style={{ fontSize: '0.6rem', color: '#6b7280' }}>Fit</div>
+                           <div style={{ fontSize: '0.6rem', color: '#6b7280' }}>Completed</div>
                          </div>
                          <div style={{ flex: 1, textAlign: 'center' }}>
                            <div style={{ fontSize: '1rem', fontWeight: '700', color: '#eab308' }}>
-                             {worker.readinessBreakdown.minor}
+                             {worker.assignments.pending}
                            </div>
-                           <div style={{ fontSize: '0.6rem', color: '#6b7280' }}>Minor</div>
+                           <div style={{ fontSize: '0.6rem', color: '#6b7280' }}>Pending</div>
                          </div>
                          <div style={{ flex: 1, textAlign: 'center' }}>
                            <div style={{ fontSize: '1rem', fontWeight: '700', color: '#ef4444' }}>
-                             {worker.readinessBreakdown.not_fit}
+                             {worker.assignments.overdue}
                            </div>
-                           <div style={{ fontSize: '0.6rem', color: '#6b7280' }}>Not Fit</div>
+                           <div style={{ fontSize: '0.6rem', color: '#6b7280' }}>Overdue</div>
                          </div>
                        </div>
                      </div>
 
-                     {/* Cycle Details */}
-                     {worker.cycleDetails && worker.cycleDetails.length > 0 && (
-                       <div>
-                         <div style={{ fontSize: '0.7rem', fontWeight: '600', color: '#6b7280', marginBottom: '0.5rem' }}>
-                           Completed Cycles This Month
+                     {/* KPI Details */}
+                     <div>
+                       <div style={{ fontSize: '0.7rem', fontWeight: '600', color: '#6b7280', marginBottom: '0.5rem' }}>
+                         Performance Metrics
+                       </div>
+                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                         <div style={{
+                           padding: '0.375rem',
+                           backgroundColor: '#f9fafb',
+                           borderRadius: '0.25rem',
+                           display: 'flex',
+                           justifyContent: 'space-between',
+                           alignItems: 'center',
+                           fontSize: '0.7rem'
+                         }}>
+                           <div style={{ color: '#6b7280', fontSize: '0.65rem' }}>
+                             Completion Rate
+                           </div>
+                           <div style={{
+                             padding: '0.125rem 0.375rem',
+                             borderRadius: '0.25rem',
+                             backgroundColor: '#10b981',
+                             color: 'white',
+                             fontWeight: '600',
+                             fontSize: '0.65rem'
+                           }}>
+                             {Math.round(worker.kpi.completionRate)}%
+                           </div>
                          </div>
-                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                           {worker.cycleDetails.map((cycle, index) => (
-                             <div key={index} style={{
-                               padding: '0.375rem',
-                               backgroundColor: '#f9fafb',
-                               borderRadius: '0.25rem',
-                               display: 'flex',
-                               justifyContent: 'space-between',
-                               alignItems: 'center',
-                               fontSize: '0.7rem'
-                             }}>
-                               <div style={{ color: '#6b7280', fontSize: '0.65rem' }}>
-                                 {new Date(cycle.cycleStart).toLocaleDateString()} - {new Date(cycle.completedAt).toLocaleDateString()}
-                               </div>
-                               <div style={{
-                                 padding: '0.125rem 0.375rem',
-                                 borderRadius: '0.25rem',
-                                 backgroundColor: getKPIColor(cycle.kpi.rating),
-                                 color: 'white',
-                                 fontWeight: '600',
-                                 fontSize: '0.65rem'
-                               }}>
-                                 {cycle.kpi.rating}
-                               </div>
-                             </div>
-                           ))}
+                         <div style={{
+                           padding: '0.375rem',
+                           backgroundColor: '#f9fafb',
+                           borderRadius: '0.25rem',
+                           display: 'flex',
+                           justifyContent: 'space-between',
+                           alignItems: 'center',
+                           fontSize: '0.7rem'
+                         }}>
+                           <div style={{ color: '#6b7280', fontSize: '0.65rem' }}>
+                             On-Time Rate
+                           </div>
+                           <div style={{
+                             padding: '0.125rem 0.375rem',
+                             borderRadius: '0.25rem',
+                             backgroundColor: '#f59e0b',
+                             color: 'white',
+                             fontWeight: '600',
+                             fontSize: '0.65rem'
+                           }}>
+                             {Math.round(worker.kpi.onTimeRate)}%
+                           </div>
+                         </div>
+                         <div style={{
+                           padding: '0.375rem',
+                           backgroundColor: '#f9fafb',
+                           borderRadius: '0.25rem',
+                           display: 'flex',
+                           justifyContent: 'space-between',
+                           alignItems: 'center',
+                           fontSize: '0.7rem'
+                         }}>
+                           <div style={{ color: '#6b7280', fontSize: '0.65rem' }}>
+                             Quality Score
+                           </div>
+                           <div style={{
+                             padding: '0.125rem 0.375rem',
+                             borderRadius: '0.25rem',
+                             backgroundColor: '#8b5cf6',
+                             color: 'white',
+                             fontWeight: '600',
+                             fontSize: '0.65rem'
+                           }}>
+                             {Math.round(worker.kpi.qualityScore)}%
+                           </div>
                          </div>
                        </div>
-                     )}
+                     </div>
                    </div>
                  )}
                </div>
@@ -1240,7 +1304,7 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
          ) : (
            /* Desktop View */
            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-             {currentWorkers.map((worker: WorkerKPI, index: number) => (
+             {currentWorkers.map((worker: AssignmentWorkerKPI, index: number) => (
               <div key={worker.workerId} style={{
                 border: startIndex + index + 1 === 1 ? '2px solid #f59e0b' : '1px solid #e5e7eb',
                 borderRadius: '0.5rem',
@@ -1306,7 +1370,7 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
                        </div>
                      </div>
                      <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
-                       {worker.email} • {worker.team}
+                       {worker.workerEmail}
                      </div>
                    </div>
 
@@ -1315,12 +1379,12 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
                     <div style={{
                       padding: '0.375rem 0.75rem',
                       borderRadius: '0.25rem',
-                      backgroundColor: worker.monthlyMetrics?.monthlyKPI?.color || '#6b7280',
+                      backgroundColor: worker.kpi?.color || '#6b7280',
                       color: 'white',
                       fontSize: '0.75rem',
                       fontWeight: '600'
                     }}>
-                      {worker.monthlyMetrics?.monthlyKPI?.rating || 'N/A'}
+                      {worker.kpi?.rating || 'N/A'}
                     </div>
 
                     {/* Completion Rate */}
@@ -1329,7 +1393,7 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
                       fontWeight: '600',
                       color: '#3b82f6'
                     }}>
-                      {Math.round(worker.monthlyMetrics.completionRate)}%
+                      {Math.round(worker.kpi.completionRate)}%
                     </div>
 
                     {/* Expand Arrow */}
@@ -1364,10 +1428,10 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
                         borderRadius: '0.375rem'
                       }}>
                         <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>
-                          Total Assessments
+                          Total Assignments
                         </div>
                         <div style={{ fontSize: '1.25rem', fontWeight: '700', color: '#1f2937' }}>
-                          {worker.monthlyMetrics.totalAssessments}
+                          {worker.assignments.total}
                         </div>
                       </div>
 
@@ -1378,10 +1442,10 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
                         borderRadius: '0.375rem'
                       }}>
                         <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>
-                          Completed Cycles
+                          Completed
                         </div>
                         <div style={{ fontSize: '1.25rem', fontWeight: '700', color: '#1f2937' }}>
-                          {worker.monthlyMetrics.completedCycles}
+                          {worker.assignments.completed}
                         </div>
                       </div>
 
@@ -1392,10 +1456,10 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
                         borderRadius: '0.375rem'
                       }}>
                         <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>
-                          Avg Cycle KPI
+                          On-Time
                         </div>
                         <div style={{ fontSize: '1.25rem', fontWeight: '700', color: '#1f2937' }}>
-                          {worker.monthlyMetrics.averageCycleKPI}
+                          {worker.assignments.onTime}
                         </div>
                       </div>
 
@@ -1406,15 +1470,15 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
                         borderRadius: '0.375rem'
                       }}>
                         <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>
-                          Avg Fatigue Level
+                          Quality Score
                         </div>
                         <div style={{ fontSize: '1.25rem', fontWeight: '700', color: '#1f2937' }}>
-                          {worker.averageFatigueLevel}
+                          {Math.round(worker.kpi.qualityScore)}%
                         </div>
                       </div>
                     </div>
 
-                    {/* Readiness Breakdown */}
+                    {/* Assignment Status Breakdown */}
                     <div style={{
                       padding: '0.75rem',
                       backgroundColor: '#f9fafb',
@@ -1422,64 +1486,104 @@ const MonthlyPerformanceSection: React.FC<MonthlyPerformanceSectionProps> = memo
                       marginBottom: '1rem'
                     }}>
                       <div style={{ fontSize: '0.75rem', fontWeight: '600', color: '#6b7280', marginBottom: '0.5rem' }}>
-                        Readiness Breakdown
+                        Assignment Status
                       </div>
                       <div style={{ display: 'flex', gap: '1rem' }}>
                         <div style={{ flex: 1, textAlign: 'center' }}>
                           <div style={{ fontSize: '1.125rem', fontWeight: '700', color: '#10b981' }}>
-                            {worker.readinessBreakdown.fit}
+                            {worker.assignments.completed}
                           </div>
-                          <div style={{ fontSize: '0.625rem', color: '#6b7280' }}>Fit</div>
+                          <div style={{ fontSize: '0.625rem', color: '#6b7280' }}>Completed</div>
                         </div>
                         <div style={{ flex: 1, textAlign: 'center' }}>
                           <div style={{ fontSize: '1.125rem', fontWeight: '700', color: '#eab308' }}>
-                            {worker.readinessBreakdown.minor}
+                            {worker.assignments.pending}
                           </div>
-                          <div style={{ fontSize: '0.625rem', color: '#6b7280' }}>Minor</div>
+                          <div style={{ fontSize: '0.625rem', color: '#6b7280' }}>Pending</div>
                         </div>
                         <div style={{ flex: 1, textAlign: 'center' }}>
                           <div style={{ fontSize: '1.125rem', fontWeight: '700', color: '#ef4444' }}>
-                            {worker.readinessBreakdown.not_fit}
+                            {worker.assignments.overdue}
                           </div>
-                          <div style={{ fontSize: '0.625rem', color: '#6b7280' }}>Not Fit</div>
+                          <div style={{ fontSize: '0.625rem', color: '#6b7280' }}>Overdue</div>
                         </div>
                       </div>
                     </div>
 
-                    {/* Cycle Details */}
-                    {worker.cycleDetails && worker.cycleDetails.length > 0 && (
-                      <div>
-                        <div style={{ fontSize: '0.75rem', fontWeight: '600', color: '#6b7280', marginBottom: '0.5rem' }}>
-                          Completed Cycles This Month
+                    {/* KPI Details */}
+                    <div>
+                      <div style={{ fontSize: '0.75rem', fontWeight: '600', color: '#6b7280', marginBottom: '0.5rem' }}>
+                        Performance Metrics
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                        <div style={{
+                          padding: '0.5rem',
+                          backgroundColor: '#f9fafb',
+                          borderRadius: '0.25rem',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          fontSize: '0.75rem'
+                        }}>
+                          <div style={{ color: '#6b7280' }}>
+                            Completion Rate
+                          </div>
+                          <div style={{
+                            padding: '0.25rem 0.5rem',
+                            borderRadius: '0.25rem',
+                            backgroundColor: '#10b981',
+                            color: 'white',
+                            fontWeight: '600'
+                          }}>
+                            {Math.round(worker.kpi.completionRate)}%
+                          </div>
                         </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                          {worker.cycleDetails.map((cycle, index) => (
-                            <div key={index} style={{
-                              padding: '0.5rem',
-                              backgroundColor: '#f9fafb',
-                              borderRadius: '0.25rem',
-                              display: 'flex',
-                              justifyContent: 'space-between',
-                              alignItems: 'center',
-                              fontSize: '0.75rem'
-                            }}>
-                              <div style={{ color: '#6b7280' }}>
-                                {new Date(cycle.cycleStart).toLocaleDateString()} - {new Date(cycle.completedAt).toLocaleDateString()}
-                              </div>
-                              <div style={{
-                                padding: '0.25rem 0.5rem',
-                                borderRadius: '0.25rem',
-                                backgroundColor: getKPIColor(cycle.kpi.rating),
-                                color: 'white',
-                                fontWeight: '600'
-                              }}>
-                                {cycle.kpi.rating}
-                              </div>
-                            </div>
-                          ))}
+                        <div style={{
+                          padding: '0.5rem',
+                          backgroundColor: '#f9fafb',
+                          borderRadius: '0.25rem',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          fontSize: '0.75rem'
+                        }}>
+                          <div style={{ color: '#6b7280' }}>
+                            On-Time Rate
+                          </div>
+                          <div style={{
+                            padding: '0.25rem 0.5rem',
+                            borderRadius: '0.25rem',
+                            backgroundColor: '#f59e0b',
+                            color: 'white',
+                            fontWeight: '600'
+                          }}>
+                            {Math.round(worker.kpi.onTimeRate)}%
+                          </div>
+                        </div>
+                        <div style={{
+                          padding: '0.5rem',
+                          backgroundColor: '#f9fafb',
+                          borderRadius: '0.25rem',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          fontSize: '0.75rem'
+                        }}>
+                          <div style={{ color: '#6b7280' }}>
+                            Quality Score
+                          </div>
+                          <div style={{
+                            padding: '0.25rem 0.5rem',
+                            borderRadius: '0.25rem',
+                            backgroundColor: '#8b5cf6',
+                            color: 'white',
+                            fontWeight: '600'
+                          }}>
+                            {Math.round(worker.kpi.qualityScore)}%
+                          </div>
                         </div>
                       </div>
-                    )}
+                    </div>
                    </div>
                  )}
                </div>

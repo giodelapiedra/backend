@@ -366,8 +366,8 @@ const TeamAnalytics: React.FC = () => {
         return;
       }
       
-      // Get work readiness trend data from Supabase
-      const trendData = await SupabaseAPI.getWorkReadinessTrendData(user.id, readinessDateRange, readinessStartDate, readinessEndDate);
+      // Get work readiness trend data from Supabase with force refresh to bypass cache
+      const trendData = await SupabaseAPI.getWorkReadinessTrendData(user.id, readinessDateRange, readinessStartDate, readinessEndDate, true);
       
       console.log('✅ TeamAnalytics: Work readiness trend data received:', trendData);
       console.log('📊 TeamAnalytics: Data points:', trendData?.analytics?.readinessTrendData?.length || 0);
@@ -494,7 +494,8 @@ const TeamAnalytics: React.FC = () => {
             user.id, 
             readinessDateRange, 
             readinessStartDate, 
-            readinessEndDate
+            readinessEndDate,
+            true  // Force refresh to bypass cache
           );
           
           console.log('📊 TeamAnalytics: Trend data received:', trendData);
@@ -2053,7 +2054,7 @@ const TeamAnalytics: React.FC = () => {
               marginBottom: window.innerWidth <= 768 ? '2rem' : '2rem'
             }}>
               <TrendChart
-                title={`Emissions Trend - Work Readiness Analytics ${analyticsData?.analytics?.readinessTrendData?.length > 0 ? `(${analyticsData.analytics.readinessTrendData.length} data points)` : '(No data yet)'}`}
+                title={`Emissions Trend - Work Readiness Analytics ${analyticsData?.analytics?.readinessTrendData?.length > 0 ? `(${analyticsData.analytics.readinessTrendData.length} ${analyticsData.analytics.readinessTrendData.length === 1 ? 'date' : 'dates'} with data)` : '(No submissions yet)'}`}
                 data={analyticsData?.analytics?.readinessTrendData?.length > 0 ? analyticsData.analytics.readinessTrendData.map((item: TrendDataItem) => ({
                   date: item.date,
                   fitForWork: item.fitForWork,
@@ -2066,19 +2067,27 @@ const TeamAnalytics: React.FC = () => {
                 externalTimePeriod={readinessDateRange === 'custom' ? 'week' : readinessDateRange as 'week' | 'month' | 'year'}
                 onTimePeriodChange={(period) => {
                   console.log('🔄 TeamAnalytics: Time period changed to:', period);
+                  console.log('🗑️ TeamAnalytics: Clearing cache for date range change...');
+                  
+                  // Clear work readiness trend cache
+                  SupabaseAPI.clearCache('work-readiness-trend');
+                  
                   // Update the date range state
                   if (period === 'week') {
                     setReadinessDateRange('week');
                     setReadinessStartDate(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
                     setReadinessEndDate(new Date());
+                    console.log('📅 TeamAnalytics: Set to WEEK range (last 7 days)');
                   } else if (period === 'month') {
                     setReadinessDateRange('month');
                     setReadinessStartDate(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000));
                     setReadinessEndDate(new Date());
+                    console.log('📅 TeamAnalytics: Set to MONTH range (last 30 days)');
                   } else if (period === 'year') {
                     setReadinessDateRange('year');
                     setReadinessStartDate(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000));
                     setReadinessEndDate(new Date());
+                    console.log('📅 TeamAnalytics: Set to YEAR range (last 365 days)');
                   }
                   // The useEffect will automatically trigger and fetch new data
                 }}
@@ -2093,12 +2102,20 @@ const TeamAnalytics: React.FC = () => {
                 border: '1px solid #e2e8f0'
               }}>
                 <Typography variant="caption" sx={{ color: '#64748b', fontSize: '0.75rem' }}>
-                  📊 Connected to live database • Data from: <code>{analyticsData?.teamLeader?.team || 'Team'}</code> work readiness assessments
+                  📊 Connected to live database • Team: <code>{analyticsData?.teamLeader?.team || 'Loading...'}</code>
+                </Typography>
+                <Typography variant="caption" sx={{ color: '#6366f1', fontSize: '0.75rem', ml: 1 }}>
+                  • Filter: <strong>{readinessDateRange.toUpperCase()}</strong>
                 </Typography>
                 {analyticsData?.analytics?.readinessTrendData?.length > 0 && (
-                  <Typography variant="caption" sx={{ color: '#10b981', fontSize: '0.75rem', ml: 1 }}>
-                    ✅ {analyticsData.analytics.readinessTrendData.length} data points loaded
-                  </Typography>
+                  <>
+                    <Typography variant="caption" sx={{ color: '#10b981', fontSize: '0.75rem', ml: 1 }}>
+                      • ✅ {analyticsData.analytics.readinessTrendData.length} {analyticsData.analytics.readinessTrendData.length === 1 ? 'date' : 'dates'} with submissions
+                    </Typography>
+                    <Typography variant="caption" sx={{ color: '#059669', fontSize: '0.75rem', ml: 1 }}>
+                      • {analyticsData.analytics.readinessTrendData.reduce((sum, item) => sum + item.total, 0)} total submissions
+                    </Typography>
+                  </>
                 )}
               </div>
             </div>

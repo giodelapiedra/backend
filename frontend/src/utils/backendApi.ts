@@ -1,12 +1,12 @@
 import axios from 'axios';
 import { authClient } from '../lib/supabase';
 
-// Backend API base URL
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'https://sociosystem.onrender.com';
+// Backend API base URL from environment variables
+const BACKEND_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001/api';
 
 // Create axios instance for backend API
 const backendApi = axios.create({
-  baseURL: `${BACKEND_URL}/api`,
+  baseURL: BACKEND_URL,
   timeout: 15000,
   headers: {
     'Content-Type': 'application/json',
@@ -93,10 +93,24 @@ export const kpiAPI = {
     });
   },
 
+  async getWorkerAssignmentKPI(workerId: string) {
+    return retryRequest(async () => {
+      const response = await backendApi.get(`/goal-kpi/worker/assignment-kpi?workerId=${workerId}`);
+      return response.data;
+    });
+  },
+
   // Team Leader KPI endpoints
   async getTeamWeeklySummary(teamLeaderId: string) {
     return retryRequest(async () => {
       const response = await backendApi.get(`/goal-kpi/team-leader/weekly-summary?teamLeaderId=${teamLeaderId}`);
+      return response.data;
+    });
+  },
+
+  async getTeamAssignmentSummary(teamLeaderId: string) {
+    return retryRequest(async () => {
+      const response = await backendApi.get(`/goal-kpi/team-leader/assignment-summary?teamLeaderId=${teamLeaderId}`);
       return response.data;
     });
   },

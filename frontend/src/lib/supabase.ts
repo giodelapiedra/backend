@@ -1,9 +1,17 @@
 import { createClient } from '@supabase/supabase-js';
 import { cookieStorage } from './cookieStorage';
 
-const supabaseUrl = 'https://dtcgzgbxhefwhqpeotrl.supabase.co';
-const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR0Y2d6Z2J4aGVmd2hxcGVvdHJsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTkxNDQ3MTgsImV4cCI6MjA3NDcyMDcxOH0.n557fWuqr8-e900nNhWOfeJTzdnhSzsv5tBW2pNM4gw';
-const supabaseServiceKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR0Y2d6Z2J4aGVmd2hxcGVvdHJsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1OTE0NDcxOCwiZXhwIjoyMDc0NzIwNzE4fQ.D1wSP12YM8jPtF-llVFiC4cI7xKJtRMtiaUuwRzJ3z8';
+// Get Supabase configuration from environment variables
+const supabaseUrl = process.env.REACT_APP_SUPABASE_URL || 'https://dtcgzgbxhefwhqpeotrl.supabase.co';
+const supabaseAnonKey = process.env.REACT_APP_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR0Y2d6Z2J4aGVmd2hxcGVvdHJsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTkxNDQ3MTgsImV4cCI6MjA3NDcyMDcxOH0.n557fWuqr8-e900nNhWOfeJTzdnhSzsv5tBW2pNM4gw';
+
+// Validate environment variables
+if (!supabaseUrl || !supabaseAnonKey) {
+  console.error('❌ Missing Supabase environment variables. Please check your .env.local file.');
+  throw new Error('Supabase configuration is missing');
+}
+
+console.log('✅ Supabase configuration loaded from environment variables');
 
 // Auth client with anon key for auth operations using cookie storage
 export const authClient = createClient(supabaseUrl, supabaseAnonKey, {
@@ -16,17 +24,15 @@ export const authClient = createClient(supabaseUrl, supabaseAnonKey, {
   }
 });
 
-// Data client with service role key for data operations
-export const dataClient = createClient(supabaseUrl, supabaseServiceKey, {
+// Data client - using same anon key but with different auth settings
+// NOTE: Service key should only be used in backend, not frontend
+export const dataClient = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
-    autoRefreshToken: false,
-    persistSession: false
-  },
-  global: {
-    headers: {
-      'Authorization': `Bearer ${supabaseServiceKey}`,
-      'apikey': supabaseServiceKey
-    }
+    autoRefreshToken: true,
+    persistSession: true,
+    detectSessionInUrl: true,
+    storage: cookieStorage,
+    storageKey: 'supabase.auth.token'
   }
 });
 
@@ -284,22 +290,22 @@ export const supabaseHelpers = {
         if (error.message?.includes('Bucket not found') || error.message?.includes('bucket')) {
           console.log('Creating physio bucket with anonymous access...');
           
-          // Create bucket using REST API
-          const createBucketResponse = await fetch('https://dtcgzgbxhefwhqpeotrl.supabase.co/rest/v1/storage/v1/bucket', {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR0Y2d6Z2J4aGVmd2hxcGVvdHJsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1OTE0NDcxOCwiZXhwIjoyMDc0NzIwNzE4fQ.D1wSP12YM8jPtF-llVFiC4cI7xKJtRMtiaUuwRzJ3z8`,
-              'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR0Y2d6Z2J4aGVmd2hxcGVvdHJsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1OTE0NDcxOCwiZXhwIjoyMDc0NzIwNzE4fQ.D1wSP12YM8jPtF-llVFiC4cI7xKJtRMtiaUuwRzJ3z8',
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-              id: 'physio',
-              name: 'physio',
-              public: true,
-              file_size_limit: 5242880,
-              allowed_mime_types: ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
-            })
-          });
+        // Create bucket using REST API with anon key
+        const createBucketResponse = await fetch(`${supabaseUrl}/rest/v1/storage/v1/bucket`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${supabaseAnonKey}`,
+            'apikey': supabaseAnonKey,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            id: 'physio',
+            name: 'physio',
+            public: true,
+            file_size_limit: 5242880,
+            allowed_mime_types: ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
+          })
+        });
           
           console.log('Bucket creation response:', createBucketResponse.status);
           
@@ -332,7 +338,7 @@ export const supabaseHelpers = {
       
       // Verify the URL format is correct for anonymous access
       const verifiedUrl = publicUrl.includes('supabase') ? publicUrl : 
-        `https://dtcgzgbxhefwhqpeotrl.supabase.co/storage/v1/object/public/physio/${filePath}`;
+        `${supabaseUrl}/storage/v1/object/public/physio/${filePath}`;
       
       console.log('🔗 Verified public URL for anonymous access:', verifiedUrl);
       console.log('🌍 URL format check:', verifiedUrl.includes('/public/') ? '✅ Correct' : '❌ Missing /public/');

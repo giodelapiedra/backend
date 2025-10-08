@@ -1,40 +1,16 @@
 services:
   - type: web
-    name: backend
+    name: kpi-api
     env: node
     buildCommand: npm install
-    startCommand: node server.js
-    plan: free
+    startCommand: npm start
     envVars:
-      - key: NODE_ENV
-        value: production
-      - key: PORT
-        value: 10000
+      - key: NODE_VERSION
+        value: 20.18.3
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_ANON_KEY
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
-      - key: DATABASE_URL
-        sync: false
-      - key: JWT_SECRET
-        sync: false
-      - key: JWT_EXPIRE
-        value: 7d
-      - key: CSRF_SECRET
-        sync: false
-      - key: CLOUDINARY_CLOUD_NAME
-        sync: false
-      - key: CLOUDINARY_API_KEY
-        sync: false
-      - key: CLOUDINARY_API_SECRET
-        sync: false
-      - key: ZOOM_ACCOUNT_ID
-        sync: false
-      - key: ZOOM_CLIENT_ID
-        sync: false
-      - key: ZOOM_CLIENT_SECRET
-        sync: false
-      - key: FRONTEND_URL
-        sync: false
+    healthCheckPath: /health

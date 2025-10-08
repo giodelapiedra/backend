@@ -79,28 +79,52 @@ interface TeamKPIInsight {
   data: any[];
 }
 
-interface TeamKPIData {
-  weekLabel: string;
-  overallTeamKPI: KPIData & {
-    participationRate?: number;
-    participationPenalty?: number;
-    baseScore?: number;
-    baseRating?: string;
-    adjustedRating?: string;
+interface AssignmentKPIData {
+  rating: string;
+  color: string;
+  description: string;
+  score: number;
+  completionRate: number;
+  onTimeRate: number;
+  qualityScore: number;
+  completedAssignments: number;
+  totalAssignments: number;
+}
+
+interface AssignmentMetrics {
+  totalAssignments: number;
+  completedAssignments: number;
+  onTimeSubmissions: number;
+  qualityScore: number;
+  completionRate: number;
+  onTimeRate: number;
+  totalMembers: number;
+}
+
+interface IndividualAssignmentKPI {
+  workerId: string;
+  workerName: string;
+  workerEmail: string;
+  kpi: AssignmentKPIData;
+  assignments: {
+    total: number;
+    completed: number;
+    onTime: number;
+    pending: number;
+    overdue: number;
   };
-  teamOverview: {
-    totalMembers: number;
-    weeklySubmissions: number;
-    weeklySubmissionRate: number;
-    teamKPI: string;
-    weekStart: string;
-    weekEnd: string;
-    todaySubmissions: number;
-    todaySubmissionRate: number;
-    todayDate: string;
+}
+
+interface TeamAssignmentKPIResponse {
+  success: boolean;
+  teamKPI: AssignmentKPIData;
+  teamMetrics: AssignmentMetrics;
+  individualKPIs: IndividualAssignmentKPI[];
+  period: {
+    start: string;
+    end: string;
+    month: string;
   };
-  individualKPIs: TeamMemberKPI[];
-  performanceInsights: TeamKPIInsight[];
 }
 
 interface TeamKPIDashboardProps {
@@ -113,7 +137,7 @@ const TeamKPIDashboard: React.FC<TeamKPIDashboardProps> = ({
   compact = false 
 }) => {
   const { user } = useAuth();
-  const [data, setData] = useState<TeamKPIData | null>(null);
+  const [data, setData] = useState<TeamAssignmentKPIResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -133,14 +157,14 @@ const TeamKPIDashboard: React.FC<TeamKPIDashboardProps> = ({
       console.log('👤 Current User:', user?.id, user?.role);
       console.log('🌐 Using Backend API');
       
-      // Use the new backend API
-      const result = await kpiAPI.getTeamWeeklySummary(teamLeaderId);
+      // Use the new assignment-based backend API
+      const result = await kpiAPI.getTeamAssignmentSummary(teamLeaderId);
       
       if (result.success) {
-        setData(result.data.teamKPI);
+        setData(result);
         setError(null);
       } else {
-        throw new Error(result.message || 'Failed to fetch team KPI data');
+        throw new Error(result.message || 'Failed to fetch team assignment KPI data');
       }
     } catch (err: any) {
       console.error('Error fetching team KPI data:', err);
@@ -167,8 +191,8 @@ const TeamKPIDashboard: React.FC<TeamKPIDashboardProps> = ({
     fetchTeamKPIData();
   };
 
-  // Sort members by completion rate (highest first) for ranking
-  const sortedMembers = data?.individualKPIs ? [...data.individualKPIs].sort((a, b) => b.weeklyKPIMetrics.completionRate - a.weeklyKPIMetrics.completionRate) : [];
+  // Sort members by KPI score (highest first) for ranking
+  const sortedMembers = data?.individualKPIs ? [...data.individualKPIs].sort((a, b) => b.kpi.score - a.kpi.score) : [];
   
   // Pagination logic
   const totalPages = Math.ceil((sortedMembers.length || 0) / membersPerPage);
@@ -674,13 +698,13 @@ const TeamKPIDashboard: React.FC<TeamKPIDashboardProps> = ({
 
   if (!data) return null;
 
-  const overallKPI = data.overallTeamKPI;
+  const teamKPI = data.teamKPI;
+  const teamMetrics = data.teamMetrics;
   
   // Debug logging
-  console.log('🔍 Frontend Team KPI Data:', data);
-  console.log('🔍 Team Overview:', data.teamOverview);
-  console.log('🔍 Overall KPI:', overallKPI);
-  const teamOverview = data.teamOverview;
+  console.log('🔍 Frontend Team Assignment KPI Data:', data);
+  console.log('🔍 Team Metrics:', teamMetrics);
+  console.log('🔍 Team KPI:', teamKPI);
 
   return (
     <Box sx={{ width: '100%' }}>
@@ -700,7 +724,7 @@ const TeamKPIDashboard: React.FC<TeamKPIDashboardProps> = ({
           left: 0,
           right: 0,
           height: '6px',
-          background: `linear-gradient(90deg, ${overallKPI.color}, ${overallKPI.color}88)`,
+          background: `linear-gradient(90deg, ${teamKPI.color}, ${teamKPI.color}88)`,
         }} />
 
         <CardContent sx={{ p: 4 }}>
@@ -724,10 +748,10 @@ const TeamKPIDashboard: React.FC<TeamKPIDashboardProps> = ({
               </Box>
               <Box>
                 <Typography variant="h5" sx={{ fontWeight: 700, color: '#1e293b' }}>
-                  Team Performance Dashboard
+                  Team Assignment Performance
                 </Typography>
                 <Typography variant="body1" sx={{ color: '#64748b', mt: 0.5 }}>
-                  {data.weekLabel}
+                  {data.period.month}
                 </Typography>
               </Box>
             </Box>
@@ -762,7 +786,7 @@ const TeamKPIDashboard: React.FC<TeamKPIDashboardProps> = ({
             <Grid item xs={12} sm={3}>
               <Box sx={{ textAlign: 'center', p: 3, backgroundColor: '#f8fafc', borderRadius: 2 }}>
                 <Typography variant="h4" sx={{ fontWeight: 700, color: '#1e293b', mb: 1 }}>
-                  {teamOverview.totalMembers}
+                  {teamMetrics.totalMembers}
                 </Typography>
                 <Typography variant="body2" sx={{ color: '#64748b' }}>
                   Total Team Members
@@ -772,29 +796,29 @@ const TeamKPIDashboard: React.FC<TeamKPIDashboardProps> = ({
             <Grid item xs={12} sm={3}>
               <Box sx={{ textAlign: 'center', p: 3, backgroundColor: '#f8fafc', borderRadius: 2 }}>
                 <Typography variant="h4" sx={{ fontWeight: 700, color: '#1e293b', mb: 1 }}>
-                  {teamOverview.weeklySubmissions}
+                  {teamMetrics.completedAssignments}/{teamMetrics.totalAssignments}
                 </Typography>
                 <Typography variant="body2" sx={{ color: '#64748b' }}>
-                  Active This Week
+                  Assignments Completed
                 </Typography>
               </Box>
             </Grid>
             <Grid item xs={12} sm={3}>
               <Box sx={{ textAlign: 'center', p: 3, backgroundColor: '#f8fafc', borderRadius: 2 }}>
                 <Typography variant="h4" sx={{ fontWeight: 700, color: '#1e293b', mb: 1 }}>
-                  {teamOverview.weeklySubmissionRate}%
+                  {teamMetrics.onTimeRate}%
                 </Typography>
                 <Typography variant="body2" sx={{ color: '#64748b' }}>
-                  Weekly Submissions
+                  On-Time Submissions
                 </Typography>
               </Box>
             </Grid>
             <Grid item xs={12} sm={3}>
               <Box sx={{ textAlign: 'center' }}>
                 <Chip
-                  icon={getKPIIcon(overallKPI.rating)}
-                  label={`${overallKPI.rating} Team KPI`}
-                  color={getKPIButtonColor(overallKPI.rating) as any}
+                  icon={getKPIIcon(teamKPI.rating)}
+                  label={`${teamKPI.rating} Team KPI`}
+                  color={getKPIButtonColor(teamKPI.rating) as any}
                   size="medium"
                   sx={{ 
                     fontWeight: 600,
@@ -816,7 +840,7 @@ const TeamKPIDashboard: React.FC<TeamKPIDashboardProps> = ({
                   color: '#9ca3af',
                   fontSize: '0.75rem'
                 }}>
-                  {teamOverview.weeklySubmissions}/{teamOverview.totalMembers} members this week
+                  {teamMetrics.completedAssignments}/{teamMetrics.totalMembers} members this month
                 </Typography>
               </Box>
             </Grid>
@@ -835,46 +859,46 @@ const TeamKPIDashboard: React.FC<TeamKPIDashboardProps> = ({
               <Grid item xs={12} sm={6} md={3}>
                 <Box sx={{ textAlign: 'center', p: 2, backgroundColor: 'white', borderRadius: 2, border: '1px solid #e5e7eb' }}>
                   <Typography variant="h5" sx={{ fontWeight: 700, color: '#059669', mb: 0.5 }}>
-                    {teamOverview.weeklySubmissions}
+                    {teamMetrics.completedAssignments}
                   </Typography>
                   <Typography variant="caption" sx={{ color: '#6b7280', fontWeight: 500 }}>
-                    Weekly Submissions
+                    Completed Assignments
                   </Typography>
                   <Typography variant="caption" sx={{ display: 'block', color: '#9ca3af', fontSize: '0.7rem', mt: 0.5 }}>
-                    Members who submitted this week
+                    Members who completed assignments
                   </Typography>
                 </Box>
               </Grid>
               <Grid item xs={12} sm={6} md={3}>
                 <Box sx={{ textAlign: 'center', p: 2, backgroundColor: 'white', borderRadius: 2, border: '1px solid #e5e7eb' }}>
                   <Typography variant="h5" sx={{ fontWeight: 700, color: '#3b82f6', mb: 0.5 }}>
-                    {teamOverview.weeklySubmissionRate}%
+                    {teamMetrics.completionRate}%
                   </Typography>
                   <Typography variant="caption" sx={{ color: '#6b7280', fontWeight: 500 }}>
-                    Weekly Rate
+                    Completion Rate
                   </Typography>
                   <Typography variant="caption" sx={{ display: 'block', color: '#9ca3af', fontSize: '0.7rem', mt: 0.5 }}>
-                    Percentage this week
+                    Assignment completion percentage
                   </Typography>
                 </Box>
               </Grid>
               <Grid item xs={12} sm={6} md={3}>
                 <Box sx={{ textAlign: 'center', p: 2, backgroundColor: 'white', borderRadius: 2, border: '1px solid #e5e7eb' }}>
                   <Typography variant="h5" sx={{ fontWeight: 700, color: '#dc2626', mb: 0.5 }}>
-                    {teamOverview.todaySubmissions}
+                    {teamMetrics.onTimeSubmissions}
                   </Typography>
                   <Typography variant="caption" sx={{ color: '#6b7280', fontWeight: 500 }}>
-                    Today's Submissions
+                    On-Time Submissions
                   </Typography>
                   <Typography variant="caption" sx={{ display: 'block', color: '#9ca3af', fontSize: '0.7rem', mt: 0.5 }}>
-                    {teamOverview.todaySubmissionRate}% submitted today
+                    {teamMetrics.onTimeRate}% submitted on-time
                   </Typography>
                 </Box>
               </Grid>
               <Grid item xs={12} sm={6} md={3}>
                 <Box sx={{ textAlign: 'center', p: 2, backgroundColor: 'white', borderRadius: 2, border: '1px solid #e5e7eb' }}>
                   <Typography variant="h5" sx={{ fontWeight: 700, color: '#f59e0b', mb: 0.5 }}>
-                    {teamOverview.totalMembers}
+                    {teamMetrics.totalMembers}
                   </Typography>
                   <Typography variant="caption" sx={{ color: '#6b7280', fontWeight: 500 }}>
                     Total Team Members
@@ -889,23 +913,23 @@ const TeamKPIDashboard: React.FC<TeamKPIDashboardProps> = ({
             {/* Week Information */}
             <Box sx={{ mt: 3, p: 2, backgroundColor: '#f8fafc', borderRadius: 2, border: '1px solid #e2e8f0' }}>
               <Typography variant="body2" sx={{ color: '#475569', fontWeight: 500, mb: 1 }}>
-                📅 Current Week: {teamOverview.weekStart} to {teamOverview.weekEnd}
+                📅 Current Period: {data.period.start} to {data.period.end}
               </Typography>
               <Typography variant="body2" sx={{ color: '#dc2626', fontWeight: 500, mb: 1 }}>
-                📅 Today ({teamOverview.todayDate}): {teamOverview.todaySubmissions}/{teamOverview.totalMembers} members submitted ({teamOverview.todaySubmissionRate}%)
+                📅 Assignment Summary: {teamMetrics.completedAssignments}/{teamMetrics.totalAssignments} assignments completed ({teamMetrics.completionRate}%)
               </Typography>
               <Typography variant="caption" sx={{ color: '#64748b' }}>
-                Team performance is calculated based on work readiness submissions during this week period.
+                Team performance is calculated based on assignment completion rates and quality scores.
               </Typography>
             </Box>
           </Box>
         </CardContent>
       </Card>
 
-      {/* Performance Insights */}
-      {data.performanceInsights.length > 0 && (
+      {/* Performance Insights - Removed for assignment-based system */}
+      {false && (
         <Grid container spacing={3} sx={{ mb: 3 }}>
-          {data.performanceInsights.map((insight, index) => (
+          {[].map((insight: any, index: number) => (
             <Grid item xs={12} key={index}>
               <Alert
                 severity={insight.type as any}
@@ -1047,13 +1071,13 @@ const TeamKPIDashboard: React.FC<TeamKPIDashboardProps> = ({
                           {member.workerName}
                         </Typography>
                         <Typography variant="caption" sx={{ color: '#6b7280', display: 'block' }}>
-                          {member.email}
+                          {member.workerEmail}
                         </Typography>
                       </Box>
                       <Chip
-                        icon={getKPIIcon(member.weeklyKPIMetrics.kpi.rating)}
-                        label={member.weeklyKPIMetrics.kpi.rating}
-                        color={getKPIButtonColor(member.weeklyKPIMetrics.kpi.rating) as any}
+                        icon={getKPIIcon(member.kpi.rating)}
+                        label={member.kpi.rating}
+                        color={getKPIButtonColor(member.kpi.rating) as any}
                         size="small"
                         sx={{ fontWeight: 500, fontSize: '0.75rem' }}
                       />
@@ -1066,19 +1090,19 @@ const TeamKPIDashboard: React.FC<TeamKPIDashboardProps> = ({
                           Progress
                         </Typography>
                         <Typography variant="caption" sx={{ color: '#6b7280', fontWeight: 600 }}>
-                          {member.weeklyKPIMetrics.completionRate}%
+                          {member.kpi.completionRate}%
                         </Typography>
                       </Box>
                       <LinearProgress
                         variant="determinate"
-                        value={member.weeklyKPIMetrics.completionRate}
+                        value={member.kpi.completionRate}
                         sx={{
                           height: 6,
                           borderRadius: 3,
                           backgroundColor: '#e5e7eb',
                           '& .MuiLinearProgress-bar': {
                             borderRadius: 3,
-                            backgroundColor: member.weeklyKPIMetrics.kpi.color,
+                            backgroundColor: member.kpi.color,
                           }
                         }}
                       />
@@ -1096,22 +1120,22 @@ const TeamKPIDashboard: React.FC<TeamKPIDashboardProps> = ({
                           Completion
                         </Typography>
                         <Typography variant="body2" sx={{ fontWeight: 600, color: '#1f2937' }}>
-                          {member.weeklyKPIMetrics.completedDays}/{member.weeklyKPIMetrics.totalWorkDays}
+                          {member.assignments.completed}/{member.assignments.total}
                         </Typography>
                       </Box>
                       <Box sx={{ textAlign: 'center', p: 1, backgroundColor: '#f9fafb', borderRadius: 1 }}>
                         <Typography variant="caption" sx={{ color: '#6b7280', display: 'block', mb: 0.5 }}>
-                          Streak
+                          On-Time
                         </Typography>
                         <Typography variant="body2" sx={{ fontWeight: 600, color: '#1f2937' }}>
-                          {member.streakDays} days
+                          {member.assignments.onTime} on-time
                         </Typography>
                       </Box>
                     </Box>
 
                     {/* Status */}
                     <Box sx={{ display: 'flex', justifyContent: 'center' }}>
-                      {member.missedDays === 0 ? (
+                      {member.assignments.overdue === 0 ? (
                         <Chip 
                           icon={<CheckCircle sx={{ fontSize: 14 }} />}
                           label="On Track" 
@@ -1119,7 +1143,7 @@ const TeamKPIDashboard: React.FC<TeamKPIDashboardProps> = ({
                           size="small"
                           sx={{ fontSize: '0.75rem' }}
                         />
-                      ) : member.missedDays <= 2 ? (
+                      ) : member.assignments.overdue <= 2 ? (
                         <Chip 
                           icon={<Warning sx={{ fontSize: 14 }} />}
                           label="Minor Delay" 
@@ -1204,9 +1228,9 @@ const TeamKPIDashboard: React.FC<TeamKPIDashboardProps> = ({
                       <Avatar sx={{ 
                         width: 32, 
                         height: 32,
-                        backgroundColor: getKPIButtonColor(member.weeklyKPIMetrics.kpi.rating) === 'success' ? '#dcfce7' :
-                                        getKPIButtonColor(member.weeklyKPIMetrics.kpi.rating) === 'primary' ? '#dbeafe' :
-                                        getKPIButtonColor(member.weeklyKPIMetrics.kpi.rating) === 'warning' ? '#fef3c7' : '#fecaca',
+                        backgroundColor: getKPIButtonColor(member.kpi.rating) === 'success' ? '#dcfce7' :
+                                        getKPIButtonColor(member.kpi.rating) === 'primary' ? '#dbeafe' :
+                                        getKPIButtonColor(member.kpi.rating) === 'warning' ? '#fef3c7' : '#fecaca',
                         fontSize: '0.875rem',
                         fontWeight: 600
                       }}>
@@ -1217,7 +1241,7 @@ const TeamKPIDashboard: React.FC<TeamKPIDashboardProps> = ({
                           {member.workerName}
                         </Typography>
                         <Typography variant="caption" sx={{ color: '#6b7280' }}>
-                          {member.email}
+                          {member.workerEmail}
                         </Typography>
                       </Box>
                     </Box>
@@ -1225,9 +1249,9 @@ const TeamKPIDashboard: React.FC<TeamKPIDashboardProps> = ({
                   
                   <TableCell>
                     <Chip
-                      icon={getKPIIcon(member.weeklyKPIMetrics.kpi.rating)}
-                      label={member.weeklyKPIMetrics.kpi.rating}
-                      color={getKPIButtonColor(member.weeklyKPIMetrics.kpi.rating) as any}
+                      icon={getKPIIcon(member.kpi.rating)}
+                      label={member.kpi.rating}
+                      color={getKPIButtonColor(member.kpi.rating) as any}
                       size="small"
                       sx={{ fontWeight: 500 }}
                     />
@@ -1236,14 +1260,14 @@ const TeamKPIDashboard: React.FC<TeamKPIDashboardProps> = ({
                   <TableCell sx={{ minWidth: 120 }}>
                     <LinearProgress
                       variant="determinate"
-                      value={member.weeklyKPIMetrics.completionRate}
+                      value={member.kpi.completionRate}
                       sx={{
                         height: 6,
                         borderRadius: 3,
                         backgroundColor: '#e5e7eb',
                         '& .MuiLinearProgress-bar': {
                           borderRadius: 3,
-                          backgroundColor: member.weeklyKPIMetrics.kpi.color,
+                          backgroundColor: member.kpi.color,
                         }
                       }}
                     />
@@ -1251,26 +1275,26 @@ const TeamKPIDashboard: React.FC<TeamKPIDashboardProps> = ({
                   
                   <TableCell>
                     <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                      {member.weeklyKPIMetrics.completedDays}/{member.weeklyKPIMetrics.totalWorkDays} days
+                      {member.assignments.completed}/{member.assignments.total} assignments
                     </Typography>
                     <Typography variant="caption" sx={{ color: '#6b7280' }}>
-                      {member.weeklyKPIMetrics.completionRate}%
+                      {member.kpi.completionRate}%
                     </Typography>
                   </TableCell>
                   
                   <TableCell>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                       <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                        {member.streakDays}
+                        {member.assignments.onTime}
                       </Typography>
                       <Typography variant="caption" sx={{ color: '#6b7280' }}>
-                        days
+                        on-time
                       </Typography>
                     </Box>
                   </TableCell>
                   
                   <TableCell>
-                    {member.missedDays === 0 ? (
+                    {member.assignments.overdue === 0 ? (
                       <Chip 
                         icon={<CheckCircle sx={{ fontSize: 14 }} />}
                         label="On Track" 
@@ -1278,7 +1302,7 @@ const TeamKPIDashboard: React.FC<TeamKPIDashboardProps> = ({
                         size="small"
                         sx={{ fontSize: '0.75rem' }}
                       />
-                    ) : member.missedDays <= 2 ? (
+                    ) : member.assignments.overdue <= 2 ? (
                       <Chip 
                         icon={<Warning sx={{ fontSize: 14 }} />}
                         label="Minor Delay" 

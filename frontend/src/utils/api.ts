@@ -7,7 +7,7 @@ let csrfToken: string | null = null;
 // Create axios instance with base configuration
 // DISABLED: Using Supabase instead of backend API
 const api = axios.create({
-  baseURL: process.env.REACT_APP_API_URL || 'https://sociosystem.onrender.com/api', // DISABLED - Using Supabase
+  baseURL: process.env.REACT_APP_API_URL || 'http://localhost:5001/api', // DISABLED - Using Supabase
   timeout: 15000,
   withCredentials: true, // Important for CSRF and cookie-based auth
   headers: {

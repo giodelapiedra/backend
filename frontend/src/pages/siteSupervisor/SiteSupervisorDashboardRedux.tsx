@@ -51,7 +51,7 @@ import { dataClient } from '../../lib/supabase';
 import LayoutWithSidebar from '../../components/LayoutWithSidebar';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { useGetIncidentsQuery, useCreateIncidentMutation, incidentsApi } from '../../store/api/incidentsApi';
-import { useGetTeamsQuery, useGetTeamMembersQuery, teamsApi } from '../../store/api/teamsApi';
+import { useGetTeamsQuery, useGetTeamMembersQuery, useGetUnselectedWorkersQuery, teamsApi } from '../../store/api/teamsApi';
 import { useGetCasesQuery, casesApi } from '../../store/api/casesApi';
 import {
   setSelectedIncident,
@@ -158,6 +158,9 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
   // Confirmation dialog state
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   
+  // Team leader ID state
+  const [selectedTeamLeaderId, setSelectedTeamLeaderId] = useState<string>('');
+  
   // Redux state
   const { 
     selectedIncident, 
@@ -165,11 +168,6 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
     selectedPhotos, 
     photoPreviewUrls 
   } = useAppSelector((state: any) => state.incidents);
-  
-  const { 
-    selectedTeam, 
-    teamMembers 
-  } = useAppSelector((state: any) => state.teams);
   
   const { 
     loading, 
@@ -211,16 +209,16 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
   });
   
   const { 
-    data: teamMembersData, 
-    isLoading: teamMembersLoading, 
-    error: teamMembersError 
-  } = useGetTeamMembersQuery(
-    { teamLeaderId: user?.id || '', teamName: selectedTeam },
-    { skip: !user?.id || !selectedTeam }
+    data: unselectedWorkersData, 
+    isLoading: unselectedWorkersLoading, 
+    error: unselectedWorkersError 
+  } = useGetUnselectedWorkersQuery(
+    { teamLeaderId: selectedTeamLeaderId || '', date: undefined }, // Remove date filter to see all records
+    { skip: !selectedTeamLeaderId }
   );
 
   // Combined loading state for better UX
-  const isAnyLoading = incidentsLoading || casesLoading || teamsLoading || teamMembersLoading;
+  const isAnyLoading = incidentsLoading || casesLoading || teamsLoading || unselectedWorkersLoading;
 
   const [createIncident, { isLoading: creatingIncident }] = useCreateIncidentMutation();
 
@@ -229,6 +227,26 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
   const cases = casesData?.cases || [];
   const teams = teamsData?.teams || [];
   const currentTeam = teamsData?.currentTeam || null;
+  // teamMembers comes from Redux state, not from API directly
+
+  // Redux teamMembers state
+  const { 
+    selectedTeam, 
+    teamMembers 
+  } = useAppSelector((state: any) => state.teams);
+  
+  // Debug logging for unselected workers
+  useEffect(() => {
+    console.log('🔍 Unselected Workers Debug:', {
+      selectedTeamLeaderId,
+      unselectedWorkersData,
+      unselectedWorkersLoading,
+      unselectedWorkersError,
+      today: new Date().toISOString().split('T')[0],
+      teamMembers: teamMembers,
+      teamMembersLength: teamMembers?.length || 0
+    });
+  }, [selectedTeamLeaderId, unselectedWorkersData, unselectedWorkersLoading, unselectedWorkersError, teamMembers]);
 
   // Fetch notifications (same logic as /notifications page)
   const fetchNotifications = useCallback(async () => {
@@ -421,10 +439,37 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
 
   // Effects
   useEffect(() => {
-    if (teamMembersData?.teamMembers) {
-      dispatch(setTeamMembers(teamMembersData.teamMembers));
+    console.log('🔄 Unselected workers effect triggered');
+    console.log('📊 selectedTeamLeaderId:', selectedTeamLeaderId);
+    console.log('📊 unselectedWorkersData:', unselectedWorkersData);
+    
+    if (unselectedWorkersData?.unselectedWorkers) {
+      console.log('📋 Processing unselected workers:', unselectedWorkersData.unselectedWorkers.length);
+      console.log('📋 Raw unselected workers data:', unselectedWorkersData.unselectedWorkers);
+      
+      // Transform unselected workers data to match the expected format
+      const formattedWorkers = unselectedWorkersData.unselectedWorkers.map((unselected: any) => {
+        console.log('📋 Processing worker:', unselected);
+        const formatted = {
+          id: unselected.worker_id, // Use worker_id from the main object
+          first_name: unselected.worker.first_name,
+          last_name: unselected.worker.last_name,
+          email: unselected.worker.email,
+          reason: unselected.reason,
+          notes: unselected.notes || 'No notes provided',
+          caseStatus: unselected.case_status || 'open'
+        };
+        console.log('📋 Formatted worker:', formatted);
+        return formatted;
+      });
+      
+      console.log('✅ All formatted workers:', formattedWorkers);
+      dispatch(setTeamMembers(formattedWorkers));
+    } else {
+      console.log('❌ No unselected workers data found');
+      dispatch(setTeamMembers([]));
     }
-  }, [teamMembersData, dispatch]);
+  }, [unselectedWorkersData, dispatch]);
 
   // Auto-select current team if available
   useEffect(() => {
@@ -446,16 +491,16 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
       selectedTeam,
       teams,
       teamMembers,
-      teamMembersData,
+      unselectedWorkersData,
       teamsData,
       teamsLoading,
       teamsError
     });
-  }, [user, selectedTeam, teams, teamMembers, teamMembersData, teamsData, teamsLoading, teamsError]);
+  }, [user, selectedTeam, teams, teamMembers, unselectedWorkersData, teamsData, teamsLoading, teamsError]);
 
   useEffect(() => {
-    if (incidentsError || casesError || teamsError || teamMembersError) {
-      const errorMessage = incidentsError || casesError || teamsError || teamMembersError;
+    if (incidentsError || casesError || teamsError || unselectedWorkersError) {
+      const errorMessage = incidentsError || casesError || teamsError || unselectedWorkersError;
       let errorString = 'Failed to fetch data';
       
       if (typeof errorMessage === 'string') {
@@ -479,7 +524,7 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
       
       dispatch(setError(errorString));
     }
-  }, [incidentsError, casesError, teamsError, teamMembersError, dispatch]);
+  }, [incidentsError, casesError, teamsError, unselectedWorkersError, dispatch]);
 
   // Handlers
   const handleCreateIncidentClick = useCallback(() => {
@@ -511,23 +556,7 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
 
   const handleCreateIncident = useCallback(async () => {
     try {
-      // Validate required fields
-      if (!incidentForm.worker) {
-        dispatch(setError('Please select a worker'));
-        return;
-      }
-      if (!incidentForm.incidentDate) {
-        dispatch(setError('Please select an incident date'));
-        return;
-      }
-      if (!incidentForm.incidentType) {
-        dispatch(setError('Please select an incident type'));
-        return;
-      }
-      if (!incidentForm.severity) {
-        dispatch(setError('Please select a severity level'));
-        return;
-      }
+      // Validate only the essential field
       if (!incidentForm.description.trim()) {
         dispatch(setError('Please provide a description'));
         return;
@@ -538,16 +567,53 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
         return;
       }
 
-      // Prepare incident data
-      const incidentData = {
-        reported_by: incidentForm.worker, // Use selected worker instead of supervisor
-        incident_type: incidentForm.incidentType,
-        severity: incidentForm.severity,
-        description: incidentForm.description,
-      };
+      // Check if we need to refresh the auth token
+      try {
+        const { data: { session }, error: sessionError } = await dataClient.auth.getSession();
+        if (sessionError || !session) {
+          console.log('🔄 Session expired, refreshing...');
+          // Try to refresh the session
+          const { data: refreshData, error: refreshError } = await dataClient.auth.refreshSession();
+          if (refreshError) {
+            console.error('❌ Failed to refresh session:', refreshError);
+            dispatch(setError('Session expired. Please log out and log back in.'));
+            return;
+          }
+          console.log('✅ Session refreshed successfully');
+        }
+      } catch (authError) {
+        console.error('❌ Auth check failed:', authError);
+        dispatch(setError('Authentication error. Please refresh the page and try again.'));
+        return;
+      }
 
-      console.log('Form submitting incident data:', incidentData);
+      // Prepare incident data with proper team filtering logic
+      const incidentData: any = {
+        description: incidentForm.description,
+        reported_by_id: user.id, // Site supervisor who is reporting the incident
+        worker_id: incidentForm.worker || user.id, // Selected unselected worker from filtered team
+        severity: incidentForm.severity || 'low', // Include severity to prevent "unknown" values
+        incident_type: incidentForm.incidentType || 'other' // Include incident type to prevent "N/A" values
+      };
+      
+      console.log('🎯 Creating incident with team-filtered worker data');
+      console.log('📊 Selected team:', selectedTeam);
+      console.log('📊 Selected team leader ID:', selectedTeamLeaderId);
+      console.log('📊 Selected worker ID:', incidentForm.worker);
+      console.log('📊 Reporter ID:', user.id);
+      
+      // Debug: Find the selected worker details
+      const selectedWorker = teamMembers.find((member: any) => member.id === incidentForm.worker);
+      console.log('🔍 Selected worker details:', selectedWorker);
+      console.log('🔍 Team members available:', teamMembers.length);
+
+      console.log('Form submitting incident data:', JSON.stringify(incidentData, null, 2));
       console.log('Form severity:', incidentForm.severity);
+      console.log('Form incident type:', incidentForm.incidentType);
+      console.log('Form worker:', incidentForm.worker);
+      console.log('Form incident date:', incidentForm.incidentDate);
+      console.log('Form description:', incidentForm.description);
+      console.log('User ID:', user.id);
 
       // Create incident
       const result = await createIncident(incidentData).unwrap();
@@ -622,20 +688,88 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
       console.log('✅ All storage cleared and data refreshed');
 
     } catch (err: any) {
-      console.error('Error creating incident:', err);
-      dispatch(setError(err.message || 'Failed to create incident'));
+      console.error('❌ Error creating incident:', err);
+      console.error('❌ Error type:', typeof err);
+      console.error('❌ Error stringified:', JSON.stringify(err, null, 2));
+      
+      // Extract error message from different possible locations
+      let errorMessage = 'Failed to create incident';
+      
+      if (err?.message) {
+        errorMessage = err.message;
+      } else if (err?.data?.message) {
+        errorMessage = err.data.message;
+      } else if (err?.data?.error?.message) {
+        errorMessage = err.data.error.message;
+      } else if (typeof err === 'string') {
+        errorMessage = err;
+      } else if (err?.status) {
+        errorMessage = `Server error (${err.status}): ${err.data?.message || 'Unknown server error'}`;
+      } else if (err?.code) {
+        errorMessage = `Database error (${err.code}): ${err.message || 'Unknown database error'}`;
+      }
+      
+      console.error('❌ Final error message:', errorMessage);
+      dispatch(setError(errorMessage));
     } finally {
       // Close confirmation dialog
       setShowConfirmDialog(false);
     }
   }, [incidentForm, selectedPhotos, user, createIncident, dispatch, refetchIncidents, refetchTeams]);
 
-  const handleTeamSelection = useCallback((teamId: string) => {
-    console.log('Team selected:', teamId);
-    dispatch(setSelectedTeam(teamId));
+  const handleTeamSelection = useCallback(async (teamName: string) => {
+    console.log('🎯 Team selected:', teamName);
+    dispatch(setSelectedTeam(teamName));
     
     // Clear worker selection when team changes
     dispatch(updateIncidentForm({ worker: '' }));
+    
+    // Find the team leader for this team
+    try {
+      console.log('🔍 Searching for team leader with team:', teamName);
+      const { data: teamLeader, error } = await dataClient
+        .from('users')
+        .select('id, first_name, last_name, email, role, team')
+        .eq('role', 'team_leader')
+        .eq('team', teamName)
+        .single();
+      
+      if (error) {
+        console.error('❌ Error finding team leader:', error);
+        console.log('🔍 Trying to find any user with this team...');
+        
+        // Fallback: try to find any user with this team
+        const { data: anyUser, error: anyUserError } = await dataClient
+          .from('users')
+          .select('id, first_name, last_name, email, role, team')
+          .eq('team', teamName)
+          .limit(1)
+          .single();
+        
+        if (anyUserError) {
+          console.error('❌ No users found for team:', teamName);
+          setSelectedTeamLeaderId('');
+          return;
+        }
+        
+        console.log('✅ Found user for team (fallback):', anyUser);
+        setSelectedTeamLeaderId(anyUser.id);
+        return;
+      }
+      
+      if (teamLeader) {
+        console.log('✅ Found team leader:', teamLeader);
+        console.log('🎯 Setting team leader ID:', teamLeader.id);
+        // Store the team leader ID for fetching unselected workers
+        setSelectedTeamLeaderId(teamLeader.id);
+      } else {
+        console.log('❌ No team leader found for team:', teamName);
+        setSelectedTeamLeaderId('');
+      }
+    } catch (err) {
+      console.error('❌ Error fetching team leader:', err);
+      setSelectedTeamLeaderId('');
+    }
   }, [dispatch]);
 
   const handlePhotoSelect = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
@@ -833,7 +967,7 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
           </Box>
         </Box>
 
-        {/* Error and Success Messages */}
+        {/* Error Messages */}
         {error && (
           <Alert severity="error" sx={{ mb: 2 }} onClose={() => dispatch(setError(null))}>
             {typeof error === 'string' ? error : 
@@ -844,12 +978,150 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
              'An error occurred'}
           </Alert>
         )}
-        
-        {successMessage && (
-          <Alert severity="success" sx={{ mb: 2 }} onClose={() => dispatch(setSuccessMessage(null))}>
-            {successMessage}
-          </Alert>
-        )}
+
+        {/* Professional Success Dialog Modal */}
+        <Dialog
+          open={!!successMessage}
+          onClose={() => dispatch(setSuccessMessage(null))}
+          maxWidth="sm"
+          fullWidth
+          PaperProps={{
+            sx: {
+              borderRadius: '16px',
+              boxShadow: '0 20px 60px rgba(0, 0, 0, 0.1)',
+              border: '1px solid rgba(34, 197, 94, 0.2)',
+              overflow: 'hidden'
+            }
+          }}
+        >
+          <DialogContent sx={{ p: 0, position: 'relative' }}>
+            {/* Success Header with Gradient */}
+            <Box
+              sx={{
+                background: 'linear-gradient(135deg, #10B981 0%, #059669 100%)',
+                color: 'white',
+                p: 4,
+                textAlign: 'center',
+                position: 'relative',
+                overflow: 'hidden'
+              }}
+            >
+              {/* Background Pattern */}
+              <Box
+                sx={{
+                  position: 'absolute',
+                  top: -50,
+                  right: -50,
+                  width: 100,
+                  height: 100,
+                  borderRadius: '50%',
+                  background: 'rgba(255, 255, 255, 0.1)',
+                  opacity: 0.3
+                }}
+              />
+              <Box
+                sx={{
+                  position: 'absolute',
+                  bottom: -30,
+                  left: -30,
+                  width: 60,
+                  height: 60,
+                  borderRadius: '50%',
+                  background: 'rgba(255, 255, 255, 0.1)',
+                  opacity: 0.2
+                }}
+              />
+              
+              {/* Success Icon */}
+              <Box
+                sx={{
+                  width: 80,
+                  height: 80,
+                  borderRadius: '50%',
+                  background: 'rgba(255, 255, 255, 0.2)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  mx: 'auto',
+                  mb: 2,
+                  position: 'relative',
+                  zIndex: 1
+                }}
+              >
+                <CheckCircle sx={{ fontSize: 48, color: 'white' }} />
+              </Box>
+              
+              <Typography variant="h5" sx={{ fontWeight: 700, mb: 1, position: 'relative', zIndex: 1 }}>
+                Incident Reported Successfully!
+              </Typography>
+              <Typography variant="body2" sx={{ opacity: 0.9, position: 'relative', zIndex: 1 }}>
+                Your incident has been processed and assigned
+              </Typography>
+            </Box>
+
+            {/* Content Area */}
+            <Box sx={{ p: 4 }}>
+              <Typography variant="body1" sx={{ mb: 3, color: 'text.primary', lineHeight: 1.6 }}>
+                {successMessage}
+              </Typography>
+
+              {/* Action Items */}
+              <Box sx={{ 
+                bgcolor: 'grey.50', 
+                borderRadius: '12px', 
+                p: 3, 
+                mb: 3,
+                border: '1px solid',
+                borderColor: 'grey.200'
+              }}>
+                <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 2, color: 'text.primary' }}>
+                  What happens next:
+                </Typography>
+                <Box component="ul" sx={{ m: 0, pl: 2, '& li': { mb: 1, color: 'text.secondary' } }}>
+                  <li>Case manager will review the incident</li>
+                  <li>Worker will be notified of case assignment</li>
+                  <li>Follow-up actions will be coordinated</li>
+                  <li>You can track progress in the dashboard</li>
+                </Box>
+              </Box>
+
+              {/* Quick Actions */}
+              <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center' }}>
+                <Button
+                  variant="outlined"
+                  onClick={() => {
+                    dispatch(setSuccessMessage(null));
+                    dispatch(openDialog('incidentDialog'));
+                  }}
+                  sx={{
+                    borderRadius: '8px',
+                    textTransform: 'none',
+                    fontWeight: 600,
+                    px: 3
+                  }}
+                >
+                  Report Another Incident
+                </Button>
+                <Button
+                  variant="contained"
+                  onClick={() => dispatch(setSuccessMessage(null))}
+                  sx={{
+                    borderRadius: '8px',
+                    textTransform: 'none',
+                    fontWeight: 600,
+                    px: 3,
+                    background: 'linear-gradient(135deg, #10B981 0%, #059669 100%)',
+                    '&:hover': {
+                      background: 'linear-gradient(135deg, #059669 0%, #047857 100%)',
+                    }
+                  }}
+                >
+                  Continue to Dashboard
+                </Button>
+              </Box>
+            </Box>
+          </DialogContent>
+        </Dialog>
 
         {/* Enhanced Summary Cards with Professional Spacing */}
         <Box sx={{ 
@@ -1232,7 +1504,13 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
                         />
                       </TableCell>
                       <TableCell>
-                        <IconButton size="small">
+                        <IconButton 
+                          size="small"
+                          onClick={() => {
+                            dispatch(setSelectedIncident(incident));
+                            dispatch(openDialog('incidentDetailsDialog' as any));
+                          }}
+                        >
                           <Visibility />
                         </IconButton>
                       </TableCell>
@@ -1270,15 +1548,31 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
                       <em>Teams loaded: {teams.length}</em>
                     </MenuItem>
                     {teams.length > 0 ? (
-                      teams.map((team: string) => (
-                        <MenuItem key={team} value={team}>
-                          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
-                            <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                              {team}
-                            </Typography>
-                          </Box>
-                        </MenuItem>
-                      ))
+                      teams.map((team: string, index: number) => {
+                        // Debug log to see actual team structure
+                        console.log('Team data:', team);
+                        
+                        return (
+                          <MenuItem key={`team-${index}`} value={team}>
+                            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', width: '100%' }}>
+                              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+                                <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                                  {team}
+                                </Typography>
+                                <Chip 
+                                  label="Team"
+                                  size="small"
+                                  color="primary"
+                                  sx={{ fontSize: '0.688rem', height: 20 }}
+                                />
+                              </Box>
+                              <Typography variant="caption" color="text.secondary">
+                                Team Name: {team}
+                              </Typography>
+                            </Box>
+                          </MenuItem>
+                        );
+                      })
                     ) : (
                       <MenuItem disabled>
                         No teams available
@@ -1288,38 +1582,176 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
                 </FormControl>
               </Box>
               
-              {/* Team Member Selection */}
+              {/* Unselected Worker Selection */}
               <Box sx={{ mb: 2 }}>
                 <Typography variant="h6" gutterBottom>
-                  Select Worker
+                  Select Unselected Worker
+                </Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
+                  Only showing workers from unselected_workers table
                 </Typography>
                 <FormControl fullWidth required>
-                  <InputLabel>Worker *</InputLabel>
+                  <InputLabel>Unselected Worker *</InputLabel>
                   <Select
                     value={incidentForm.worker}
                     onChange={(e) => handleFormChange('worker', e.target.value)}
-                    label="Worker *"
+                    label="Unselected Worker *"
                   >
+                    {console.log('🔍 Rendering dropdown with teamMembers:', teamMembers)}
                     {teamMembers.length > 0 ? (
-                      teamMembers.map((member: any) => (
-                        <MenuItem key={member.id} value={member.id}>
-                          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
-                            <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                              {member.first_name} {member.last_name}
-                            </Typography>
-                            <Typography variant="caption" color="text.secondary">
-                              {member.email}
-                            </Typography>
-                          </Box>
-                        </MenuItem>
-                      ))
+                      teamMembers.map((member: any) => {
+                        console.log('🔍 Rendering MenuItem for:', member);
+                        return (
+                          <MenuItem key={member.id} value={member.id}>
+                            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', width: '100%' }}>
+                              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+                                <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                                  {member.first_name} {member.last_name}
+                                </Typography>
+                                <Chip
+                                  label={member.reason === 'sick' ? 'Sick' : 
+                                         member.reason === 'not_rostered' ? 'Not Rostered' :
+                                         member.reason === 'on_leave_rdo' ? 'On Leave/RDO' :
+                                         member.reason === 'injured_medical' ? 'Injured/Medical' :
+                                         member.reason === 'transferred' ? 'Transferred' :
+                                         member.reason || 'Not Rostered'}
+                                  size="small"
+                                  color="warning"
+                                  sx={{ 
+                                    fontSize: '0.688rem', 
+                                    height: 20, 
+                                    fontWeight: 'bold',
+                                    backgroundColor: member.reason === 'sick' ? '#ef4444' : 
+                                                   member.reason === 'injured_medical' ? '#f59e0b' : 
+                                                   member.reason === 'on_leave_rdo' ? '#3b82f6' : '#6b7280'
+                                  }}
+                                />
+                              </Box>
+                              <Typography variant="caption" color="text.secondary">
+                                {member.email}
+                              </Typography>
+                              {member.notes && member.notes !== 'No notes provided' && (
+                                <Typography variant="caption" sx={{ color: '#6b7280', fontStyle: 'italic', display: 'block', mt: 0.5 }}>
+                                  Note: {member.notes}
+                                </Typography>
+                              )}
+                            </Box>
+                          </MenuItem>
+                        );
+                      })
                     ) : (
                       <MenuItem disabled>
-                        {selectedTeam ? 'No team members found' : 'Please select a team first'}
+                        {selectedTeam ? 'No unselected workers found' : 'Please select a team first'}
                       </MenuItem>
                     )}
                   </Select>
                 </FormControl>
+                {teamMembers.length > 0 && (
+                  <Alert severity="info" sx={{ mt: 1, py: 0.5 }}>
+                    Showing {teamMembers.length} unselected worker{teamMembers.length !== 1 ? 's' : ''} from unselected_workers table
+                    <br />
+                    <Typography variant="caption" sx={{ fontFamily: 'monospace', fontSize: '0.7rem' }}>
+                      Debug: {JSON.stringify(teamMembers.slice(0, 2), null, 2)}
+                    </Typography>
+                  </Alert>
+                )}
+                {selectedTeam && teamMembers.length === 0 && (
+                  <Alert severity="warning" sx={{ mt: 1, py: 0.5 }}>
+                    No unselected workers found in unselected_workers table for this team.
+                    <br />
+                    <Button 
+                      size="small" 
+                      onClick={async () => {
+                        console.log('🔄 Refreshing token...');
+                        try {
+                          // Get fresh token from Supabase
+                          const { data: { session }, error } = await dataClient.auth.getSession();
+                          if (error) {
+                            console.error('❌ Error getting session:', error);
+                            return;
+                          }
+                          
+                          if (session?.access_token) {
+                            localStorage.setItem('token', session.access_token);
+                            console.log('✅ Token refreshed successfully');
+                            console.log('🔍 New token:', session.access_token.substring(0, 50) + '...');
+                          } else {
+                            console.error('❌ No session found');
+                          }
+                        } catch (err) {
+                          console.error('❌ Token refresh error:', err);
+                        }
+                      }}
+                      sx={{ mt: 1, mr: 1 }}
+                    >
+                      Refresh Token
+                    </Button>
+                    <Button 
+                      size="small" 
+                      onClick={async () => {
+                        console.log('🔍 Testing API call manually...');
+                        console.log('🔍 Current user:', user);
+                        console.log('🔍 User role:', user?.role);
+                        console.log('🔍 Token:', localStorage.getItem('token'));
+                        console.log('🔍 Token length:', localStorage.getItem('token')?.length);
+                        console.log('🔍 Team Leader ID:', selectedTeamLeaderId);
+                        
+                        // Check if token exists and is valid format
+                        const token = localStorage.getItem('token');
+                        if (!token) {
+                          console.error('❌ No token found in localStorage');
+                          return;
+                        }
+                        
+                        // Try to decode token to check if it's expired
+                        try {
+                          const tokenParts = token.split('.');
+                          if (tokenParts.length === 3) {
+                            const payload = JSON.parse(atob(tokenParts[1]));
+                            console.log('🔍 Token payload:', payload);
+                            console.log('🔍 Token expires at:', new Date(payload.exp * 1000));
+                            console.log('🔍 Current time:', new Date());
+                            console.log('🔍 Token expired?', new Date() > new Date(payload.exp * 1000));
+                          }
+                        } catch (tokenError) {
+                          console.error('❌ Token decode error:', tokenError);
+                        }
+                        
+                        try {
+                          const response = await fetch(`http://localhost:5001/api/work-readiness-assignments/unselected?teamLeaderId=${selectedTeamLeaderId}`, {
+                            headers: {
+                              'Authorization': `Bearer ${localStorage.getItem('token')}`,
+                              'Content-Type': 'application/json'
+                            }
+                          });
+                          
+                          console.log('🔍 Response status:', response.status);
+                          console.log('🔍 Response headers:', Object.fromEntries(response.headers.entries()));
+                          
+                          const responseText = await response.text();
+                          console.log('🔍 Response text (first 500 chars):', responseText.substring(0, 500));
+                          
+                          if (response.ok) {
+                            try {
+                              const data = JSON.parse(responseText);
+                              console.log('🔍 Manual API response:', data);
+                            } catch (parseError) {
+                              console.error('🔍 JSON Parse Error:', parseError);
+                              console.log('🔍 Full response text:', responseText);
+                            }
+                          } else {
+                            console.error('🔍 API Error:', response.status, responseText);
+                          }
+                        } catch (err) {
+                          console.error('🔍 Manual API error:', err);
+                        }
+                      }}
+                      sx={{ mt: 1 }}
+                    >
+                      Test API Call
+                    </Button>
+                  </Alert>
+                )}
               </Box>
 
               {/* Incident Details */}
@@ -1473,7 +1905,10 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
             </Typography>
             <Box sx={{ bgcolor: 'grey.50', p: 2, borderRadius: 1 }}>
               <Typography variant="body2" color="text.secondary">
-                <strong>Worker:</strong> {incidentForm.worker ? `${incidentForm.worker.first_name || incidentForm.worker.firstName} ${incidentForm.worker.last_name || incidentForm.worker.lastName}` : 'N/A'}
+                <strong>Worker:</strong> {(() => {
+                  const selectedWorker = teamMembers.find((member: any) => member.id === incidentForm.worker);
+                  return selectedWorker ? `${selectedWorker.first_name} ${selectedWorker.last_name}` : 'N/A';
+                })()}
               </Typography>
               <Typography variant="body2" color="text.secondary">
                 <strong>Type:</strong> {incidentForm.incidentType || 'N/A'}
@@ -1500,6 +1935,202 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
               color="primary"
             >
               {creatingIncident ? <CircularProgress size={20} /> : 'Yes, Report Incident'}
+            </Button>
+          </DialogActions>
+        </Dialog>
+
+        {/* Incident Details Dialog */}
+        <Dialog
+          open={dialogs.incidentDetailsDialog}
+          onClose={() => dispatch(closeDialog('incidentDetailsDialog' as any))}
+          maxWidth="md"
+          fullWidth
+          PaperProps={{
+            sx: {
+              borderRadius: '16px',
+              boxShadow: '0 20px 60px rgba(0, 0, 0, 0.1)',
+            }
+          }}
+        >
+          <DialogTitle sx={{ 
+            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', 
+            color: 'white',
+            textAlign: 'center',
+            py: 3
+          }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2 }}>
+              <Report sx={{ fontSize: 28 }} />
+              <Typography variant="h5" component="div">
+                Incident Details
+              </Typography>
+            </Box>
+          </DialogTitle>
+          <DialogContent sx={{ p: 4 }}>
+            {selectedIncident && (
+              <Box>
+                {/* Incident Header */}
+                <Box sx={{ 
+                  bgcolor: 'grey.50', 
+                  p: 3, 
+                  borderRadius: 2, 
+                  mb: 3,
+                  border: '1px solid',
+                  borderColor: 'grey.200'
+                }}>
+                  <Grid container spacing={2}>
+                    <Grid item xs={12} sm={6}>
+                      <Typography variant="h6" color="primary" gutterBottom>
+                        {selectedIncident.incident_number || `INC-${selectedIncident.id.slice(-8)}`}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        <strong>Date:</strong> {selectedIncident.incident_date ? 
+                          new Date(selectedIncident.incident_date).toLocaleDateString() : 
+                          selectedIncident.created_at ? 
+                          new Date(selectedIncident.created_at).toLocaleDateString() : 'N/A'}
+                      </Typography>
+                    </Grid>
+                    <Grid item xs={12} sm={6}>
+                      <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
+                        <Chip
+                          label={selectedIncident.severity || 'unknown'}
+                          color={
+                            selectedIncident.severity === 'high' || selectedIncident.severity === 'lost_time' || selectedIncident.severity === 'fatality' ? 'error' :
+                            selectedIncident.severity === 'medium' || selectedIncident.severity === 'medical_treatment' ? 'warning' : 'success'
+                          }
+                          size="small"
+                        />
+                        <Chip
+                          label={selectedIncident.status || 'reported'}
+                          color={selectedIncident.status === 'reported' ? 'info' : 'success'}
+                          size="small"
+                        />
+                      </Box>
+                      <Typography variant="body2" color="text.secondary">
+                        <strong>Type:</strong> {selectedIncident.incident_type || 'N/A'}
+                      </Typography>
+                    </Grid>
+                  </Grid>
+                </Box>
+
+                {/* Incident Information */}
+                <Box sx={{ mb: 3 }}>
+                  <Typography variant="h6" gutterBottom sx={{ color: 'text.primary', mb: 2 }}>
+                    Incident Information
+                  </Typography>
+                  <Box sx={{ pl: 2 }}>
+                    <Typography variant="body1" sx={{ mb: 2, lineHeight: 1.6 }}>
+                      <strong>Description:</strong>
+                    </Typography>
+                    <Box sx={{ 
+                      bgcolor: 'grey.50', 
+                      p: 2, 
+                      borderRadius: 1, 
+                      border: '1px solid',
+                      borderColor: 'grey.200',
+                      mb: 2
+                    }}>
+                      <Typography variant="body2" sx={{ lineHeight: 1.6 }}>
+                        {selectedIncident.description || 'No description provided'}
+                      </Typography>
+                    </Box>
+                  </Box>
+                </Box>
+
+                {/* People Involved */}
+                <Box sx={{ mb: 3 }}>
+                  <Typography variant="h6" gutterBottom sx={{ color: 'text.primary', mb: 2 }}>
+                    People Involved
+                  </Typography>
+                  <Grid container spacing={2}>
+                    <Grid item xs={12} sm={6}>
+                      <Box sx={{ 
+                        bgcolor: 'blue.50', 
+                        p: 2, 
+                        borderRadius: 1,
+                        border: '1px solid',
+                        borderColor: 'blue.200'
+                      }}>
+                        <Typography variant="subtitle2" color="primary" gutterBottom>
+                          Reported By
+                        </Typography>
+                        <Typography variant="body2">
+                          {selectedIncident.reported_by ? 
+                            `${selectedIncident.reported_by.first_name} ${selectedIncident.reported_by.last_name}` : 
+                            'N/A'}
+                        </Typography>
+                        {selectedIncident.reported_by?.email && (
+                          <Typography variant="caption" color="text.secondary">
+                            {selectedIncident.reported_by.email}
+                          </Typography>
+                        )}
+                      </Box>
+                    </Grid>
+                    <Grid item xs={12} sm={6}>
+                      <Box sx={{ 
+                        bgcolor: 'green.50', 
+                        p: 2, 
+                        borderRadius: 1,
+                        border: '1px solid',
+                        borderColor: 'green.200'
+                      }}>
+                        <Typography variant="subtitle2" color="success.main" gutterBottom>
+                          Worker Involved
+                        </Typography>
+                        <Typography variant="body2">
+                          {selectedIncident.worker ? 
+                            `${selectedIncident.worker.first_name} ${selectedIncident.worker.last_name}` : 
+                            'N/A'}
+                        </Typography>
+                        {selectedIncident.worker?.email && (
+                          <Typography variant="caption" color="text.secondary">
+                            {selectedIncident.worker.email}
+                          </Typography>
+                        )}
+                      </Box>
+                    </Grid>
+                  </Grid>
+                </Box>
+
+                {/* Additional Information */}
+                <Box>
+                  <Typography variant="h6" gutterBottom sx={{ color: 'text.primary', mb: 2 }}>
+                    Additional Information
+                  </Typography>
+                  <Box sx={{ 
+                    bgcolor: 'grey.50', 
+                    p: 2, 
+                    borderRadius: 1,
+                    border: '1px solid',
+                    borderColor: 'grey.200'
+                  }}>
+                    <Typography variant="body2" sx={{ mb: 1 }}>
+                      <strong>Created:</strong> {selectedIncident.created_at ? 
+                        new Date(selectedIncident.created_at).toLocaleString() : 'N/A'}
+                    </Typography>
+                    <Typography variant="body2">
+                      <strong>Incident ID:</strong> {selectedIncident.id}
+                    </Typography>
+                  </Box>
+                </Box>
+              </Box>
+            )}
+          </DialogContent>
+          <DialogActions sx={{ p: 3, pt: 0 }}>
+            <Button 
+              onClick={() => dispatch(closeDialog('incidentDetailsDialog' as any))}
+              variant="outlined"
+            >
+              Close
+            </Button>
+            <Button 
+              variant="contained"
+              startIcon={<Edit />}
+              onClick={() => {
+                // TODO: Implement edit functionality
+                dispatch(closeDialog('incidentDetailsDialog' as any));
+              }}
+            >
+              Edit Incident
             </Button>
           </DialogActions>
         </Dialog>

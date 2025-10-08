@@ -173,7 +173,7 @@ const SiteSupervisorDashboard: React.FC = () => {
     }
     
     try {
-      console.log('[SECURED] Fetching teams data for supervisor:', user?.firstName, user?.lastName);
+      console.log('[SECURED] Fetching teams with active cases for supervisor:', user?.firstName, user?.lastName);
       
       // Security validation
       if (!user || user.role !== 'site_supervisor') {
@@ -182,12 +182,22 @@ const SiteSupervisorDashboard: React.FC = () => {
         return;
       }
 
-      // Skip API call - using Supabase auth
-      console.log('[INFO] Teams fetch skipped - using Supabase auth');
+      // Fetch teams with active cases from the backend
+      const response = await api.get('/cases/teams-with-cases');
       
-      // Set empty teams for now
-      setTeams([]);
-      localStorage.setItem(lastFetchKey, now.toString()); // Update rate limit
+      if (response.data.success) {
+        const teamsData = response.data.teams || [];
+        console.log('[SUCCESS] Teams with cases fetched:', {
+          teamsCount: teamsData.length,
+          teams: teamsData.map((t: any) => ({ name: t.teamName, cases: t.activeCases }))
+        });
+        
+        setTeams(teamsData);
+        localStorage.setItem(lastFetchKey, now.toString()); // Update rate limit
+      } else {
+        console.warn('[WARNING] Teams fetch returned unsuccessful response');
+        setTeams([]);
+      }
       
     } catch (err: any) {
       console.error('[ERROR] Teams fetch failed:', {
@@ -207,7 +217,7 @@ const SiteSupervisorDashboard: React.FC = () => {
       } else if (err.code === 'ECONNABORTED') {
         console.log('[INFO] Teams request timed out - no data available');
       } else {
-        console.log('[INFO] No teams data found');
+        console.log('[INFO] No teams data found or error occurred');
       }
       
       setTeams([]); // Clear teams on error
@@ -269,13 +279,13 @@ const SiteSupervisorDashboard: React.FC = () => {
     }
   }, [user, fetchData, fetchTeamsData]);
 
-  const handleTeamSelection = (teamId: string) => {
+  const handleTeamSelection = async (teamLeaderId: string) => {
     // Input sanitization
-    const sanitizedTeamId = (teamId || '').toString().trim();
+    const sanitizedTeamLeaderId = (teamLeaderId || '').toString().trim();
     
-    // Validate team ID format (should be a valid MongoDB ObjectId or team reference)
-    if (!sanitizedTeamId || sanitizedTeamId.length < 10) {
-      console.warn('[SECURITY] Invalid team ID provided:', teamId);
+    // Validate team leader ID format
+    if (!sanitizedTeamLeaderId) {
+      console.warn('[SECURITY] Invalid team leader ID provided:', teamLeaderId);
       return;
     }
     
@@ -283,31 +293,55 @@ const SiteSupervisorDashboard: React.FC = () => {
     console.log('[SECURED] Team selection by supervisor:', {
       userId: user?.id,
       userName: `${user?.firstName} ${user?.lastName}`,
-      selectedTeamId: sanitizedTeamId,
+      selectedTeamLeaderId: sanitizedTeamLeaderId,
       timestamp: new Date().toISOString()
     });
     
-    setSelectedTeam(sanitizedTeamId);
-    const team = teams.find(t => t.teamId === sanitizedTeamId);
+    setSelectedTeam(sanitizedTeamLeaderId);
+    const team = teams.find(t => t.teamLeaderId === sanitizedTeamLeaderId);
     
     if (team) {
-      // Validate team data before setting
-      const validatedMembers = team.members.filter((member: any) => 
-        member && member.id && member.name && typeof member.name === 'string'
-      ).map((member: any) => ({
-        ...member,
-        id: member.id.toString(),
-        name: member.name.trim().substring(0, 100),
-        email: (member.email || '').trim().substring(0, 255)
-      }));
+      try {
+        console.log(`[DEBUG] Fetching unselected workers for team: ${team.teamName} with leader ID: ${sanitizedTeamLeaderId}`);
+        
+        // Get today's date
+        const today = new Date().toISOString().split('T')[0];
+        
+        // Get ONLY unselected workers from the unselected_workers table
+        const unselectedResponse = await api.get(`/work-readiness-assignments/unselected?teamLeaderId=${sanitizedTeamLeaderId}&date=${today}`);
+        
+        if (unselectedResponse.data.success && unselectedResponse.data.unselectedWorkers) {
+          // Only show workers who are in the unselected_workers table with non-closed case status
+          const unselectedWorkers = unselectedResponse.data.unselectedWorkers
+            .filter((unselected: any) => unselected.case_status !== 'closed')
+            .map((unselected: any) => ({
+              id: unselected.worker.id,
+              name: `${unselected.worker.first_name} ${unselected.worker.last_name}`,
+              email: unselected.worker.email,
+              reason: unselected.reason,
+              notes: unselected.notes || 'No notes provided',
+              caseStatus: unselected.case_status || 'open'
+            }));
+          
+          setTeamMembers(unselectedWorkers);
+          
+          console.log(`[INFO] Team selected: ${team.teamName} with ${unselectedWorkers.length} unselected workers`);
+        } else {
+          console.warn('[WARNING] No unselected workers found:', unselectedResponse.data);
+          setTeamMembers([]);
+        }
+      } catch (error: any) {
+        console.error('[ERROR] Failed to fetch unselected workers:', error.message);
+        
+        // Show a more user-friendly error message
+        setError(`Failed to fetch unselected workers for team ${team.teamName}. Please try again.`);
+        setTeamMembers([]);
+      }
       
-      setTeamMembers(validatedMembers);
       // Clear worker selection when team changes
       setIncidentForm({ ...incidentForm, worker: '' });
-      
-      console.log(`[INFO] Team selected: ${team.teamName} with ${validatedMembers.length} members`);
     } else {
-      console.warn('[SECURITY] Team not found for ID:', sanitizedTeamId);
+      console.warn('[SECURITY] Team not found for ID:', sanitizedTeamLeaderId);
       setTeamMembers([]);
     }
   };
@@ -463,6 +497,18 @@ const SiteSupervisorDashboard: React.FC = () => {
       case 'investigating': return 'warning';
       case 'reported': return 'default';
       default: return 'default';
+    }
+  };
+  
+  const getReasonLabel = (reason: string) => {
+    switch (reason) {
+      case 'sick': return 'Sick';
+      case 'on_leave_rdo': return 'On leave / RDO';
+      case 'transferred': return 'Transferred';
+      case 'injured_medical': return 'Injured / Medical';
+      case 'not_rostered': return 'Not rostered';
+      case 'not_assigned': return 'Not assigned';
+      default: return reason;
     }
   };
 
@@ -866,9 +912,14 @@ const SiteSupervisorDashboard: React.FC = () => {
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
               {/* Team Selection */}
               <Box sx={{ mb: 2 }}>
-                <Typography variant="h6" gutterBottom>
-                  Select Team
-                </Typography>
+                <Box sx={{ mb: 1 }}>
+                  <Typography variant="subtitle2" color="primary">
+                    Step 1: Select Team
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    Select a team to view their unselected workers
+                  </Typography>
+                </Box>
                 <FormControl fullWidth required>
                   <InputLabel>Team *</InputLabel>
                     <Select
@@ -876,34 +927,50 @@ const SiteSupervisorDashboard: React.FC = () => {
                     onChange={(e) => handleTeamSelection(e.target.value)}
                     >
                     <MenuItem disabled>
-                      <em>Teams loaded: {teams.length}</em>
+                      <em>Available teams: {teams.length}</em>
                       </MenuItem>
                     {teams.length > 0 ? (
                       teams.map((team) => (
-                        <MenuItem key={team.teamId} value={team.teamId}>
-                          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
-                            <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                              {team.teamName}
-                            </Typography>
+                        <MenuItem key={team.teamLeaderId} value={team.teamLeaderId}>
+                          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', width: '100%' }}>
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+                              <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                                {team.teamName}
+                              </Typography>
+                              <Chip 
+                                label={`${team.activeCases} cases`}
+                                size="small"
+                                color={team.activeCases > 5 ? 'error' : team.activeCases > 2 ? 'warning' : 'success'}
+                                sx={{ fontSize: '0.688rem', height: 20 }}
+                              />
+                            </Box>
                             <Typography variant="caption" color="text.secondary">
-                              Team Leader: {team.teamLeader.name} • {team.totalMembers} members
+                              Team Leader: {team.teamLeader.name} • {team.totalMembers} workers
                             </Typography>
                           </Box>
                         </MenuItem>
                       ))
                     ) : (
                       <MenuItem disabled>
-                        No teams available
+                        No teams with active cases
                       </MenuItem>
                     )}
                     </Select>
                   </FormControl>
               </Box>
               
-              {/* Team Member Selection */}
+              {/* Unselected Worker Selection */}
               <Box sx={{ flex: '1 1 300px', minWidth: '300px' }}>
+                <Box sx={{ mb: 1 }}>
+                  <Typography variant="subtitle2" color="primary">
+                    Step 2: Select Unselected Worker
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    Only showing workers from unselected_workers table
+                  </Typography>
+                </Box>
                 <FormControl fullWidth required>
-                  <InputLabel>Team Member *</InputLabel>
+                  <InputLabel>Select Unselected Worker *</InputLabel>
                   <Select
                     value={incidentForm.worker}
                     onChange={(e) => setIncidentForm({ ...incidentForm, worker: e.target.value })}
@@ -912,27 +979,52 @@ const SiteSupervisorDashboard: React.FC = () => {
                     {teamMembers.length > 0 ? (
                       teamMembers.map((member: any) => (
                         <MenuItem key={member.id} value={member.id}>
-                          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
-                            <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                              {member.name}
-                            </Typography>
+                          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', width: '100%' }}>
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+                              <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                                {member.name}
+                              </Typography>
+                              <Chip
+                                label={getReasonLabel(member.reason || 'not_rostered')}
+                                size="small"
+                                color="warning"
+                                sx={{ 
+                                  fontSize: '0.688rem', 
+                                  height: 20, 
+                                  fontWeight: 'bold',
+                                  backgroundColor: member.reason === 'sick' ? '#ef4444' : 
+                                                 member.reason === 'injured_medical' ? '#f59e0b' : 
+                                                 member.reason === 'on_leave_rdo' ? '#3b82f6' : '#6b7280'
+                                }}
+                              />
+                            </Box>
                             <Typography variant="caption" color="text.secondary">
-                              {member.email} • {member.role} • {member.package}
+                              {member.email}
                             </Typography>
+                            {member.notes && (
+                              <Typography variant="caption" sx={{ color: '#6b7280', fontStyle: 'italic', display: 'block', mt: 0.5 }}>
+                                Note: {member.notes}
+                              </Typography>
+                            )}
                           </Box>
                         </MenuItem>
                       ))
                     ) : (
                       <MenuItem disabled>
-                        {!selectedTeam ? 'Please select a team first' : 'No team members available'}
+                        {!selectedTeam ? 'Please select a team first' : 'No unselected workers available'}
                       </MenuItem>
                     )}
                   </Select>
                 </FormControl>
                 {teamMembers.length > 0 && (
-                  <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-                    Showing {teamMembers.length} team members
-                  </Typography>
+                  <Alert severity="info" sx={{ mt: 1, py: 0.5 }}>
+                    Showing {teamMembers.length} unassigned worker{teamMembers.length !== 1 ? 's' : ''}
+                  </Alert>
+                )}
+                {selectedTeam && teamMembers.length === 0 && (
+                  <Alert severity="warning" sx={{ mt: 1, py: 0.5 }}>
+                    No unassigned workers found. All workers are assigned to work readiness today.
+                  </Alert>
                 )}
               </Box>
 

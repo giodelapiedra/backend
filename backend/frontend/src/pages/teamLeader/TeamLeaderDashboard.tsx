@@ -2224,52 +2224,6 @@ const TeamLeaderDashboard: React.FC = () => {
 
     
 
-
-      {/* Team Members - Modern Card Layout */}
-      <Box sx={{ 
-        background: { xs: 'white', md: 'rgba(255, 255, 255, 0.8)' },
-        backdropFilter: { md: 'blur(10px)' },
-        borderRadius: { xs: '12px', md: '1rem' },
-        border: { xs: 'none', md: '1px solid rgba(255, 255, 255, 0.2)' },
-        boxShadow: { xs: '0 2px 8px rgba(0,0,0,0.08)', md: '0 8px 32px 0 rgba(31, 38, 135, 0.37)' },
-        transition: 'all 0.3s ease-in-out',
-        position: 'relative',
-        zIndex: 1,
-        margin: { xs: '0 16px 16px 16px', md: '0 0 2rem 0' },
-        marginBottom: { xs: '16px', md: '2rem' }
-      }}>
-        {/* Header with Search and Filter - Mobile Optimized */}
-        <Box sx={{ 
-          padding: { xs: '20px', md: '1.5rem' },
-          borderBottom: '1px solid #e5e7eb',
-          display: 'flex',
-          flexDirection: { xs: 'column', md: 'row' },
-          justifyContent: 'space-between',
-          alignItems: { xs: 'flex-start', md: 'center' },
-          gap: { xs: '1rem', md: 0 },
-          background: { xs: '#ffffff', md: 'transparent' }
-        }}>
-          <Box>
-            <Typography variant="h6" sx={{ 
-              fontSize: { xs: '1.1rem', md: '1.25rem' },
-              fontWeight: 600, 
-              color: '#1a202c',
-              fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
-              textShadow: '0 1px 2px rgba(0,0,0,0.1)',
-              margin: '0 0 0.25rem 0'
-            }}>
-              Team Members
-            </Typography>
-            <Typography variant="body2" sx={{ 
-              fontSize: { xs: '0.8rem', md: '0.875rem' },
-              color: '#6b7280',
-              margin: 0,
-              fontFamily: { xs: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', md: 'inherit' }
-            }}>
-              Your Team Members Overview
-            </Typography>
-          </Box>
-          
           
           <div style={{ 
             display: 'flex', 

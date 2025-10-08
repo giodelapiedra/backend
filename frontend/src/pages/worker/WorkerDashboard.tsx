@@ -144,7 +144,7 @@ const WorkerDashboard: React.FC = memo(() => {
       console.log('🎯 Starting login cycle for worker:', user.id);
       console.log('🎯 User role:', user.role);
       
-      const response = await fetch(`${process.env.REACT_APP_API_BASE_URL || 'https://sociosystem.onrender.com'}/api/goal-kpi/login-cycle`, {
+      const response = await fetch(`${process.env.REACT_APP_API_BASE_URL || 'http://localhost:5001'}/api/goal-kpi/login-cycle`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -218,50 +218,55 @@ const WorkerDashboard: React.FC = memo(() => {
     try {
       if (!user?.id) return;
       
-      console.log('🔍 Checking last work readiness submission for user:', user.id);
+      console.log('🔍 Checking if worker can submit work readiness...');
       
-      // Get the most recent submission (not just today's)
-      const { data, error } = await dataClient
-        .from('work_readiness')
-        .select('*')
-        .eq('worker_id', user.id)
-        .order('submitted_at', { ascending: false })
-        .limit(1);
+      // Check if worker has an active assignment for today
+      const { BackendAssignmentAPI } = await import('../../utils/backendAssignmentApi');
+      const result = await BackendAssignmentAPI.canSubmitWorkReadiness();
       
-      if (error) {
-        console.error('❌ Error fetching last submission:', error);
-        setHasSubmittedToday(false);
-        setTodaySubmission(null);
-        return;
-      }
-      
-      if (data && data.length > 0) {
-        const lastSubmission = data[0];
-        const lastSubmissionTime = new Date(lastSubmission.submitted_at);
-        const now = new Date();
-        const hoursSinceLastSubmission = (now.getTime() - lastSubmissionTime.getTime()) / (1000 * 60 * 60);
-        
-        console.log('📅 Last submission:', lastSubmission.submitted_at);
-        console.log('⏰ Hours since last submission:', hoursSinceLastSubmission);
-        
-        if (hoursSinceLastSubmission < 24) {
-        setHasSubmittedToday(true);
-          setTodaySubmission(lastSubmission);
-          calculateTimeUntilNextSubmission(lastSubmission.submitted_at);
-          console.log('✅ Work readiness is disabled - last submission was', Math.round(hoursSinceLastSubmission), 'hours ago');
-      } else {
-        setHasSubmittedToday(false);
-        setTodaySubmission(null);
-          setTimeUntilNextSubmission('');
-          console.log('✅ Work readiness is enabled - last submission was', Math.round(hoursSinceLastSubmission), 'hours ago');
+      if (result.success) {
+        if (result.canSubmit) {
+          // Worker has assignment - check if already submitted
+          const { data, error } = await dataClient
+            .from('work_readiness')
+            .select('*')
+            .eq('worker_id', user.id)
+            .gte('submitted_at', new Date().toISOString().split('T')[0] + 'T00:00:00.000Z')
+            .lte('submitted_at', new Date().toISOString().split('T')[0] + 'T23:59:59.999Z')
+            .order('submitted_at', { ascending: false })
+            .limit(1);
+
+          if (error) {
+            console.error('❌ Error fetching work readiness data:', error);
+            setHasSubmittedToday(false);
+            setTodaySubmission(null);
+            return;
+          }
+          
+          if (data && data.length > 0) {
+            // Already submitted today
+            setHasSubmittedToday(true);
+            setTodaySubmission(data[0]);
+            console.log('✅ Work readiness already submitted today');
+          } else {
+            // Has assignment but not submitted yet
+            setHasSubmittedToday(false);
+            setTodaySubmission(null);
+            console.log('✅ Work readiness enabled - has assignment for today');
+          }
+        } else {
+          // No assignment for today
+          setHasSubmittedToday(true); // Disable the button
+          setTodaySubmission(null);
+          console.log('❌ Work readiness disabled - no assignment for today');
         }
       } else {
+        console.error('❌ Error checking assignment:', result.message);
         setHasSubmittedToday(false);
         setTodaySubmission(null);
-        console.log('❌ No previous submissions found');
       }
     } catch (error) {
-      console.error('❌ Error checking last submission:', error);
+      console.error('❌ Error checking assignment status:', error);
       setHasSubmittedToday(false);
       setTodaySubmission(null);
     }
@@ -604,8 +609,8 @@ const WorkerDashboard: React.FC = memo(() => {
       }
       
       // Convert simple form data to work readiness format
-      // Map 0-10 scale to appropriate database values
-      const fatigueLevel = Math.max(0, Math.min(10, data.fatigueLevel)); // Ensure 0-10 range
+      // Map 0-10 scale to appropriate database values (backend expects 1-10)
+      const fatigueLevel = Math.max(1, Math.min(10, data.fatigueLevel || 1)); // Ensure 1-10 range
       
       let workReadinessData = {
         worker_id: user.id,
@@ -626,18 +631,21 @@ const WorkerDashboard: React.FC = memo(() => {
       
       // Submit work readiness data with cycle tracking
       try {
-        const cycleResponse = await fetch(`${process.env.REACT_APP_API_BASE_URL || 'https://sociosystem.onrender.com'}/api/goal-kpi/submit-assessment`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ 
-            workerId: user.id,
-            assessmentData: workReadinessData
-          })
-        });
+        const { kpiAPI } = await import('../../utils/backendApi');
         
-        const cycleResult = await cycleResponse.json();
+        // Prepare assessment data in the format expected by the backend
+        const assessmentData = {
+          readinessLevel: workReadinessData.readiness_level,
+          fatigueLevel: workReadinessData.fatigue_level,
+          mood: workReadinessData.mood,
+          painDiscomfort: workReadinessData.pain_discomfort,
+          notes: workReadinessData.notes
+        };
+        
+        const cycleResult = await kpiAPI.submitAssessment({ 
+          workerId: user.id,
+          assessmentData: assessmentData
+        });
         
         if (cycleResult.success) {
           console.log('✅ Work readiness submitted with cycle data:', cycleResult.message);
@@ -850,7 +858,7 @@ const WorkerDashboard: React.FC = memo(() => {
         worker_id: user.id,
         team_leader_id: teamLeaderId,
         team: user.team || 'DEFAULT TEAM',
-        fatigue_level: parseInt(workReadinessForm.fatigueLevel),
+        fatigue_level: Math.max(1, Math.min(10, parseInt(workReadinessForm.fatigueLevel) || 1)),
         pain_discomfort: workReadinessForm.painDiscomfort,
         readiness_level: workReadinessForm.readinessLevel,
         mood: workReadinessForm.mood,
@@ -862,18 +870,21 @@ const WorkerDashboard: React.FC = memo(() => {
       console.log('Submitting work readiness data:', workReadinessData);
       
       // Submit work readiness data with cycle tracking
-      const cycleResponse = await fetch(`${process.env.REACT_APP_API_BASE_URL || 'http://localhost:5000'}/api/goal-kpi/submit-assessment`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ 
-          workerId: user.id,
-          assessmentData: workReadinessData
-        })
-      });
+      const { kpiAPI } = await import('../../utils/backendApi');
       
-      const cycleResult = await cycleResponse.json();
+      // Prepare assessment data in the format expected by the backend
+      const assessmentData = {
+        readinessLevel: workReadinessData.readiness_level,
+        fatigueLevel: workReadinessData.fatigue_level,
+        mood: workReadinessData.mood,
+        painDiscomfort: workReadinessData.pain_discomfort,
+        notes: workReadinessData.notes
+      };
+      
+      const cycleResult = await kpiAPI.submitAssessment({ 
+        workerId: user.id,
+        assessmentData: assessmentData
+      });
       
       if (cycleResult.success) {
         console.log('✅ Work readiness submitted with cycle data:', cycleResult.message);
@@ -1320,14 +1331,17 @@ const WorkerDashboard: React.FC = memo(() => {
             >
               <CardContent sx={{ textAlign: 'center', py: 4 }}>
                 <Box sx={{ mb: 2 }}>
-                  {hasSubmittedToday ? (
+                  {hasSubmittedToday && todaySubmission ? (
                     <CheckCircle sx={{ fontSize: 48, color: '#10b981' }} />
+                  ) : hasSubmittedToday && !todaySubmission ? (
+                    <Work sx={{ fontSize: 48, color: '#ef4444' }} />
                   ) : (
                     <Work sx={{ fontSize: 48, color: '#1e293b' }} />
                   )}
                 </Box>
                 <Typography variant="h5" sx={{ fontWeight: 600, color: hasSubmittedToday ? '#10b981' : '#1e293b' }}>
-                  {hasSubmittedToday ? 'Already Submitted Today' : 'Work Readiness'}
+                  {hasSubmittedToday && todaySubmission ? 'Already Submitted Today' : 
+                   hasSubmittedToday && !todaySubmission ? 'No Assignment Today' : 'Work Readiness'}
                 </Typography>
                 {hasSubmittedToday && todaySubmission && (
                   <Box sx={{ mt: 1 }}>
@@ -1343,11 +1357,49 @@ const WorkerDashboard: React.FC = memo(() => {
                       }
                     })()}
                     </Typography>
-                    {timeUntilNextSubmission && (
-                      <Typography variant="body2" sx={{ color: '#f59e0b', fontWeight: 600, mt: 0.5 }}>
-                        Next submission in: {timeUntilNextSubmission}
-                  </Typography>
-                    )}
+                  </Box>
+                )}
+                {hasSubmittedToday && !todaySubmission && (
+                  <Box sx={{ mt: 1 }}>
+                    <Typography variant="body2" sx={{ color: '#ef4444', fontWeight: 500 }}>
+                      Wait for your team leader to assign you work readiness
+                    </Typography>
+                  </Box>
+                )}
+                {!hasSubmittedToday && (
+                  <Box sx={{ mt: 2 }}>
+                    <Alert 
+                      severity="info" 
+                      sx={{ 
+                        backgroundColor: '#e0f2fe', 
+                        border: '1px solid #0288d1',
+                        '& .MuiAlert-icon': { color: '#0288d1' },
+                        '& .MuiAlert-message': { color: '#01579b' }
+                      }}
+                    >
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                        ⏰ Complete by end of day (11:59 PM)
+                      </Typography>
+                      <Typography variant="caption" sx={{ display: 'block', mt: 0.5, mb: 2 }}>
+                        You have been assigned work readiness assessment for today. Please complete it before the end of the day.
+                      </Typography>
+                      <Button
+                        variant="contained"
+                        size="small"
+                        onClick={handleWorkReadinessClick}
+                        sx={{
+                          backgroundColor: '#0288d1',
+                          color: 'white',
+                          fontWeight: 600,
+                          textTransform: 'none',
+                          '&:hover': {
+                            backgroundColor: '#01579b',
+                          }
+                        }}
+                      >
+                        Start Assessment
+                      </Button>
+                    </Alert>
                   </Box>
                 )}
               </CardContent>

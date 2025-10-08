@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { authClient, dataClient } from '../lib/supabase';
 
-// Authentication logging functions
+// Authentication logging functions - simplified version
 const logAuthenticationEvent = async (
   userId: string,
   email: string,
@@ -11,77 +11,21 @@ const logAuthenticationEvent = async (
   failureReason?: string
 ) => {
   try {
-    // Get user info for logging
-    const { data: userProfile } = await dataClient
-      .from('users')
-      .select('first_name, last_name, role')
-      .eq('id', userId)
-      .single();
-
-    const userName = userProfile 
-      ? `${userProfile.first_name || ''} ${userProfile.last_name || ''}`.trim()
-      : email;
-    
-    const userRole = userProfile?.role || 'worker';
-
-    // Try the enhanced schema first, fallback to basic schema
-    try {
-      await dataClient
-        .from('authentication_logs')
-        .insert({
-          user_id: userId,
-          user_email: email,
-          user_name: userName,
-          user_role: userRole,
-          action: action,
-          ip_address: 'unknown',
-          user_agent: navigator.userAgent || 'unknown',
-          success: success,
-          session_id: sessionId,
-          failure_reason: failureReason,
-          created_at: new Date().toISOString()
-        });
-    } catch (schemaError) {
-      // Fallback to basic schema (no action, success, created_at fields)
-      console.warn('Using basic auth log schema fallback');
-      await dataClient
-        .from('authentication_logs')
-        .insert({
-          user_id: userId,
-          user_email: email,
-          user_name: userName,
-          user_role: userRole
-        });
-    }
-
     console.log(`✅ Authentication ${action} logged for user: ${email}`);
+    // Note: Authentication logging can be implemented later if needed
+    // For now, we'll just log to console
   } catch (error) {
     console.error(`❌ Failed to log authentication ${action}:`, error);
-    throw error;
   }
 };
 
 const logFailedAuthenticationEvent = async (email: string, failureReason: string) => {
   try {
-    await dataClient
-      .from('authentication_logs')
-      .insert({
-        user_id: null, // User ID unknown for failed login
-        user_email: email,
-        user_name: email,
-        user_role: 'unknown',
-        action: 'login',
-        ip_address: 'unknown',
-        user_agent: navigator.userAgent || 'unknown',
-        success: false,
-        failure_reason: failureReason,
-        created_at: new Date().toISOString()
-      });
-
     console.log(`✅ Failed authentication attempt logged for: ${email}`);
+    // Note: Authentication logging can be implemented later if needed
+    // For now, we'll just log to console
   } catch (error) {
     console.error(`❌ Failed to log failed authentication attempt:`, error);
-    throw error;
   }
 };
 
@@ -146,8 +90,17 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     const initAuth = async () => {
       try {
-        // Get initial session
-        const { data: { session }, error: sessionError } = await authClient.auth.getSession();
+        // Add timeout to prevent infinite loading
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('Auth initialization timeout')), 5000);
+        });
+        
+        const sessionPromise = authClient.auth.getSession();
+        
+        const { data: { session }, error: sessionError } = await Promise.race([
+          sessionPromise,
+          timeoutPromise
+        ]) as any;
         
         if (sessionError) {
           console.error('❌ Error getting initial session:', sessionError);
@@ -166,7 +119,31 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         if (session?.user) {
           console.log('✅ Initial user found:', session.user.id);
           if (isSubscribed) {
-            await loadUserProfile(session.user.id);
+            // Load user profile from auth metadata instead of database
+            const transformedUser: User = {
+              id: session.user.id,
+              firstName: session.user.user_metadata?.first_name || session.user.user_metadata?.full_name?.split(' ')[0] || '',
+              lastName: session.user.user_metadata?.last_name || session.user.user_metadata?.full_name?.split(' ')[1] || '',
+              email: session.user.email || '',
+              role: session.user.user_metadata?.role || 'worker',
+              team: session.user.user_metadata?.team || session.user.user_metadata?.default_team || 'TEAM GEO',
+              phone: session.user.user_metadata?.phone || '',
+              address: session.user.user_metadata?.address || {},
+              employer_id: session.user.user_metadata?.employer_id || '',
+              is_active: true,
+              last_login: session.user.last_sign_in_at || '',
+              profileImage: session.user.user_metadata?.avatar_url || '',
+              emergencyContact: session.user.user_metadata?.emergency_contact || {},
+              medicalInfo: session.user.user_metadata?.medical_info || {},
+              package: session.user.user_metadata?.package || ''
+            };
+            
+            setUser(transformedUser);
+            setLoading(false);
+            console.log('✅ User profile loaded from auth metadata');
+            console.log('🔍 User data:', transformedUser);
+            console.log('🔍 User team:', transformedUser.team);
+            console.log('🔍 User role:', transformedUser.role);
           }
         } else {
           console.log('ℹ️ No initial session');
@@ -185,6 +162,14 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     // Start auth initialization
     initAuth();
+    
+    // Fallback timeout to ensure loading is always set to false
+    const fallbackTimeout = setTimeout(() => {
+      if (isSubscribed && loading) {
+        console.warn('⚠️ Auth initialization fallback timeout - setting loading to false');
+        setLoading(false);
+      }
+    }, 10000);
 
     // Listen for auth changes
     const { data: { subscription } } = authClient.auth.onAuthStateChange(async (event, session) => {
@@ -197,10 +182,28 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (event === 'SIGNED_IN' && session?.user) {
         console.log('✅ User signed in, loading profile...');
         try {
-          // Only load profile if we don't already have a user
-          if (!user) {
-            await loadUserProfile(session.user.id);
-          }
+          // Create user profile from auth metadata
+          const transformedUser: User = {
+            id: session.user.id,
+            firstName: session.user.user_metadata?.first_name || session.user.user_metadata?.full_name?.split(' ')[0] || '',
+            lastName: session.user.user_metadata?.last_name || session.user.user_metadata?.full_name?.split(' ')[1] || '',
+            email: session.user.email || '',
+            role: session.user.user_metadata?.role || 'worker',
+            team: session.user.user_metadata?.team || session.user.user_metadata?.default_team || 'TEAM GEO',
+            phone: session.user.user_metadata?.phone || '',
+            address: session.user.user_metadata?.address || {},
+            employer_id: session.user.user_metadata?.employer_id || '',
+            is_active: true,
+            last_login: session.user.last_sign_in_at || '',
+            profileImage: session.user.user_metadata?.avatar_url || '',
+            emergencyContact: session.user.user_metadata?.emergency_contact || {},
+            medicalInfo: session.user.user_metadata?.medical_info || {},
+            package: session.user.user_metadata?.package || ''
+          };
+          
+          setUser(transformedUser);
+          setLoading(false);
+          console.log('✅ User profile loaded from auth metadata on sign in');
         } catch (error) {
           console.error('❌ Failed to load user profile:', error);
           setError('Failed to load user profile');
@@ -223,6 +226,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return () => {
       console.log('🧹 Cleaning up auth state...');
       isSubscribed = false;
+      clearTimeout(fallbackTimeout);
       subscription.unsubscribe();
     };
   }, []);
@@ -231,75 +235,54 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     try {
       console.log('🔄 Loading user profile for ID:', userId);
       
-      // Skip session check and go directly to profile fetch
-      console.log('📝 Fetching user profile directly (bypassing session check)...');
+      // First, get the user from Supabase Auth
+      const { data: authUser, error: authError } = await authClient.auth.getUser();
       
-      const profilePromise = dataClient
-        .from('users')
-        .select('*')
-        .eq('id', userId)
-        .single();
-      
-      const profileTimeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Profile fetch timeout after 5 seconds')), 5000);
-      });
-      
-      const result = await Promise.race([
-        profilePromise,
-        profileTimeoutPromise
-      ]) as any;
-      
-      const { data: userProfile, error } = result;
-      
-      if (error) {
-        console.error('❌ Error fetching user profile:', error);
-        console.error('Error details:', JSON.stringify(error, null, 2));
-        setError('Profile fetch error: ' + error.message);
+      if (authError) {
+        console.error('❌ Error getting auth user:', authError);
+        setError('Authentication error: ' + authError.message);
         setLoading(false);
         return;
       }
       
-      if (!userProfile) {
-        console.error('❌ No user profile found for ID:', userId);
-        setError('User profile not found');
+      if (!authUser.user) {
+        console.error('❌ No authenticated user found');
+        setError('No authenticated user');
         setLoading(false);
         return;
       }
       
-      console.log('✅ Raw user profile:', userProfile);
+      console.log('✅ Auth user found:', authUser.user);
       
-      // Transform snake_case to camelCase for frontend compatibility
+      // Create user profile from auth user data
       const transformedUser: User = {
-        id: userProfile.id,
-        firstName: userProfile.first_name || '',
-        lastName: userProfile.last_name || '',
-        email: userProfile.email || '',
-        role: userProfile.role || '',
-        team: userProfile.team || '',
-        phone: userProfile.phone || '',
-        address: userProfile.address || {},
-        employer_id: userProfile.employer_id || '',
-        is_active: userProfile.is_active || false,
-        last_login: userProfile.last_login || '',
-        profileImage: userProfile.profile_image_url || '',
-        emergencyContact: userProfile.emergency_contact || {},
-        medicalInfo: userProfile.medical_info || {},
-        package: userProfile.package || ''
+        id: authUser.user.id,
+        firstName: authUser.user.user_metadata?.first_name || authUser.user.user_metadata?.full_name?.split(' ')[0] || '',
+        lastName: authUser.user.user_metadata?.last_name || authUser.user.user_metadata?.full_name?.split(' ')[1] || '',
+        email: authUser.user.email || '',
+        role: authUser.user.user_metadata?.role || 'worker',
+        team: authUser.user.user_metadata?.team || authUser.user.user_metadata?.default_team || 'TEAM GEO',
+        phone: authUser.user.user_metadata?.phone || '',
+        address: authUser.user.user_metadata?.address || {},
+        employer_id: authUser.user.user_metadata?.employer_id || '',
+        is_active: true,
+        last_login: authUser.user.last_sign_in_at || '',
+        profileImage: authUser.user.user_metadata?.avatar_url || '',
+        emergencyContact: authUser.user.user_metadata?.emergency_contact || {},
+        medicalInfo: authUser.user.user_metadata?.medical_info || {},
+        package: authUser.user.user_metadata?.package || ''
       };
       
-      console.log('✅ Transformed user:', transformedUser);
+      console.log('✅ Transformed user from auth:', transformedUser);
       
       // Set user and navigate
       setUser(transformedUser);
       setLoading(false);
       
-      // Log success
-      console.log('✅ Profile loaded successfully, redirecting to dashboard...');
+      console.log('✅ Profile loaded successfully from auth data');
       
     } catch (error: any) {
       console.error('❌ Error loading user profile:', error);
-      console.error('Error details:', JSON.stringify(error, null, 2));
-      console.error('Stack trace:', error.stack);
       setError(error.message);
       setLoading(false);
     }
@@ -371,7 +354,15 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           data: {
             first_name: userData.firstName,
             last_name: userData.lastName,
-            role: userData.role
+            role: userData.role,
+            team: userData.team,
+            phone: userData.phone,
+            address: userData.address,
+            emergency_contact: userData.emergencyContact,
+            medical_info: userData.medicalInfo,
+            employer_id: userData.employer,
+            default_team: userData.defaultTeam,
+            managed_teams: userData.managedTeams
           }
         }
       });
@@ -379,33 +370,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (authError) throw authError;
       
       if (authData.user) {
-        // Create user profile in users table
-        const profileData = {
-          id: authData.user.id,
-          first_name: userData.firstName,
-          last_name: userData.lastName,
-          email: userData.email,
-          role: userData.role,
-          phone: userData.phone,
-          address: userData.address || {},
-          emergency_contact: userData.emergencyContact || {},
-          medical_info: userData.medicalInfo || {},
-          team: userData.team,
-          default_team: userData.defaultTeam,
-          managed_teams: userData.managedTeams,
-          is_active: true
-        };
-        
-        const { error: profileError } = await dataClient
-          .from('users')
-          .insert([profileData]);
-        
-        if (profileError) {
-          console.error('Profile creation error:', profileError);
-          // Continue anyway, profile might be created by trigger
-        }
-        
-        console.log('Registration successful');
+        console.log('Registration successful - user created in auth');
+        // User profile data is now stored in auth metadata, no need for separate users table
       }
     } catch (error: any) {
       console.error('Registration error:', error);
@@ -423,44 +389,43 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         console.log('=== REFRESH USER DEBUG ===');
         console.log('Refreshing user profile for ID:', session.user.id);
         
-        const { data: userProfile, error } = await dataClient
-          .from('users')
-          .select('*')
-          .eq('id', session.user.id)
-          .single();
+        // Get fresh user data from auth
+        const { data: authUser, error: authError } = await authClient.auth.getUser();
         
-        if (error) {
-          console.error('Error refreshing user profile:', error);
-          console.error('Error details:', JSON.stringify(error, null, 2));
+        if (authError) {
+          console.error('Error refreshing auth user:', authError);
           return;
         }
         
-        console.log('Raw user profile from database:', userProfile);
-        console.log('Database first_name:', userProfile?.first_name);
-        console.log('Database last_name:', userProfile?.last_name);
-        console.log('=== END REFRESH USER DEBUG ===');
+        if (!authUser.user) {
+          console.error('No auth user found during refresh');
+          return;
+        }
+        
+        console.log('Raw auth user from refresh:', authUser.user);
         
         // Transform snake_case to camelCase for frontend compatibility
         const transformedUser: User = {
-          id: userProfile.id,
-          firstName: userProfile.first_name || '',
-          lastName: userProfile.last_name || '',
-          email: userProfile.email || '',
-          role: userProfile.role || '',
-          team: userProfile.team || '',
-          phone: userProfile.phone || '',
-          address: userProfile.address || {},
-          employer_id: userProfile.employer_id || '',
-          is_active: userProfile.is_active || false,
-          last_login: userProfile.last_login || '',
-          profileImage: userProfile.profile_image_url || '',
-          emergencyContact: userProfile.emergency_contact || {},
-          medicalInfo: userProfile.medical_info || {},
-          package: userProfile.package || ''
+          id: authUser.user.id,
+          firstName: authUser.user.user_metadata?.first_name || authUser.user.user_metadata?.full_name?.split(' ')[0] || '',
+          lastName: authUser.user.user_metadata?.last_name || authUser.user.user_metadata?.full_name?.split(' ')[1] || '',
+          email: authUser.user.email || '',
+          role: authUser.user.user_metadata?.role || 'worker',
+          team: authUser.user.user_metadata?.team || authUser.user.user_metadata?.default_team || 'TEAM GEO',
+          phone: authUser.user.user_metadata?.phone || '',
+          address: authUser.user.user_metadata?.address || {},
+          employer_id: authUser.user.user_metadata?.employer_id || '',
+          is_active: true,
+          last_login: authUser.user.last_sign_in_at || '',
+          profileImage: authUser.user.user_metadata?.avatar_url || '',
+          emergencyContact: authUser.user.user_metadata?.emergency_contact || {},
+          medicalInfo: authUser.user.user_metadata?.medical_info || {},
+          package: authUser.user.user_metadata?.package || ''
         };
         
         setUser(transformedUser);
-        console.log('User data refreshed:', transformedUser);
+        console.log('User data refreshed from auth:', transformedUser);
+        console.log('=== END REFRESH USER DEBUG ===');
       }
     } catch (error: any) {
       console.error('Error refreshing user data:', error);

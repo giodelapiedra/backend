@@ -240,6 +240,95 @@ export const teamsApi = createApi({
       },
       invalidatesTags: ['User'],
     }),
+
+    getUnselectedWorkers: builder.query({
+      queryFn: async ({ teamLeaderId, date }: { teamLeaderId: string; date?: string }) => {
+        try {
+          console.log('getUnselectedWorkers query called with:', { teamLeaderId, date });
+          
+          if (!teamLeaderId) {
+            console.log('No teamLeaderId provided, returning empty unselected workers');
+            return { data: { unselectedWorkers: [] } };
+          }
+
+          // Build URL - only add date parameter if provided
+          let url = `http://localhost:5001/api/work-readiness-assignments/unselected?teamLeaderId=${teamLeaderId}`;
+          if (date) {
+            url += `&date=${date}`;
+            console.log('🔍 Filtering by date:', date);
+          } else {
+            console.log('🔍 NO date filter - fetching ALL records');
+          }
+
+          // Get fresh session token from Supabase
+          const { data: { session }, error: sessionError } = await dataClient.auth.getSession();
+          if (sessionError || !session?.access_token) {
+            console.error('❌ No valid session token available:', sessionError);
+            throw new Error('Authentication required. Please log in again.');
+          }
+
+          // Fetch unselected workers from the backend API
+          const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${session.access_token}`
+            }
+          });
+
+          console.log('API Response status:', response.status);
+          console.log('API Response headers:', response.headers);
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            console.error('API Error Response:', errorText);
+            throw new Error(`HTTP error! status: ${response.status}, message: ${errorText.substring(0, 100)}`);
+          }
+
+          const responseText = await response.text();
+          console.log('API Response text:', responseText.substring(0, 200));
+          
+          let data;
+          try {
+            data = JSON.parse(responseText);
+          } catch (parseError) {
+            console.error('Failed to parse JSON response:', parseError);
+            console.error('Response was:', responseText);
+            throw new Error('Invalid JSON response from server');
+          }
+          
+          if (data.success && data.unselectedWorkers) {
+            console.log('🔍 Raw API response count:', data.unselectedWorkers.length);
+            console.log('🔍 Raw workers from API:', data.unselectedWorkers);
+            
+            // Show ALL unselected workers (including old cases that are not closed)
+            const allUnselectedWorkers = data.unselectedWorkers.filter((worker: any) => {
+              console.log('🔍 Checking worker:', worker.worker?.first_name, worker.worker?.last_name, 'case_status:', worker.case_status);
+              const isNotClosed = worker.case_status !== 'closed';
+              console.log('🔍 Include worker?', isNotClosed);
+              return isNotClosed;
+            });
+            
+            console.log('✅ Unselected workers after filtering:', allUnselectedWorkers.length, 'workers (excluding closed cases)');
+            console.log('✅ Filtered workers data:', allUnselectedWorkers);
+            return { data: { unselectedWorkers: allUnselectedWorkers } };
+          } else {
+            console.log('❌ No unselected workers found or invalid response');
+            return { data: { unselectedWorkers: [] } };
+          }
+        } catch (error) {
+          console.error('getUnselectedWorkers error:', error);
+          // Return a serializable error object
+          return { 
+            error: { 
+              status: 500, 
+              data: error instanceof Error ? error.message : String(error) 
+            } 
+          };
+        }
+      },
+      providesTags: ['User'],
+    }),
   }),
 });
 
@@ -248,4 +337,5 @@ export const {
   useGetTeamMembersQuery,
   useCreateTeamMutation,
   useUpdateUserTeamMutation,
+  useGetUnselectedWorkersQuery,
 } = teamsApi;

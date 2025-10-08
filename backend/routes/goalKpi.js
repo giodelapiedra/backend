@@ -1,10 +1,14 @@
 const express = require('express');
 const router = express.Router();
-const { authMiddleware } = require('../middleware/auth');
+const { authenticateToken, requireRole } = require('../middleware/authSupabase');
+const { validatePagination, validateDateRange } = require('../middleware/validators');
 const asyncHandler = require('../middleware/asyncHandler');
+const { validateTeamLeaderId, validateWorkerId, validateWorkReadinessData } = require('../middleware/validation');
 const { supabase } = require('../config/supabase');
 const {
   getWorkerWeeklyProgress,
+  getWorkerAssignmentKPI,
+  getTeamLeaderAssignmentKPI,
   getTeamWeeklyKPI,
   getTeamMonitoringDashboard,
   getMonthlyPerformanceTracking,
@@ -26,18 +30,23 @@ const {
  * goals and KPIs based on work readiness submissions.
  */
 
-// Worker routes - temporarily without auth for testing
-router.get('/worker/weekly-progress', asyncHandler(getWorkerWeeklyProgress));
+// Apply authentication to all routes
+router.use(authenticateToken);
 
-// Team Leader routes - temporarily without auth for testing
-router.get('/team-leader/weekly-summary', asyncHandler(getTeamWeeklyKPI));
-router.get('/team-leader/monitoring-dashboard', asyncHandler(getTeamMonitoringDashboard));
-router.get('/team-leader/monthly-performance', asyncHandler(getMonthlyPerformanceTracking));
+// Worker routes - now with authentication and validation
+router.get('/worker/weekly-progress', validatePagination, validateDateRange, getWorkerWeeklyProgress);
+router.get('/worker/assignment-kpi', validateWorkerId, validatePagination, validateDateRange, getWorkerAssignmentKPI);
 
-// Login cycle handler - temporarily without auth for testing
-router.post('/login-cycle', asyncHandler(handleLogin));
+// Team Leader routes - now with authentication and validation
+router.get('/team-leader/weekly-summary', validateTeamLeaderId, validatePagination, validateDateRange, getTeamWeeklyKPI);
+router.get('/team-leader/assignment-summary', validateTeamLeaderId, validatePagination, validateDateRange, getTeamLeaderAssignmentKPI);
+router.get('/team-leader/monitoring-dashboard', validateTeamLeaderId, validatePagination, validateDateRange, getTeamMonitoringDashboard);
+router.get('/team-leader/monthly-performance', validatePagination, getMonthlyPerformanceTracking);
 
-// Assessment submission handler - temporarily without auth for testing
-router.post('/submit-assessment', asyncHandler(handleAssessmentSubmission));
+// Login cycle handler - now with authentication
+router.post('/login-cycle', handleLogin);
+
+// Assessment submission handler - with validation
+router.post('/submit-assessment', validateWorkReadinessData, handleAssessmentSubmission);
 
 module.exports = router;

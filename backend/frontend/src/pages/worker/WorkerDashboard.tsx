@@ -27,6 +27,7 @@ import { useNavigate } from 'react-router-dom';
 import api from '../../utils/api';
 import { SupabaseAPI } from '../../utils/supabaseApi';
 import { dataClient } from '../../lib/supabase';
+import { config } from '../../config/environment'; // ✅ SECURITY: Use centralized config
 
 // Interfaces
 interface Case {
@@ -141,10 +142,9 @@ const WorkerDashboard: React.FC = memo(() => {
         return;
       }
       
-      console.log('🎯 Starting login cycle for worker:', user.id);
-      console.log('🎯 User role:', user.role);
+      // ✅ OPTIMIZATION: Removed console.log for production
       
-      const response = await fetch(`${process.env.REACT_APP_API_BASE_URL || 'http://localhost:5000'}/api/goal-kpi/login-cycle`, {
+      const response = await fetch(`${config.api.baseUrl}/api/goal-kpi/login-cycle`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -325,6 +325,7 @@ const SimpleWorkReadiness: React.FC<SimpleWorkReadinessProps> = ({
             </Typography>
           </Box>
 
+
           {/* Pain Level */}
           <Box sx={{ mb: 3 }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>

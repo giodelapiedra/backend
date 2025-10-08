@@ -27,12 +27,14 @@ import Analytics from './pages/employer/Analytics';
 import CaseManagerDashboardRedux from './pages/caseManager/CaseManagerDashboardRedux';
 import SiteSupervisorDashboardRedux from './pages/siteSupervisor/SiteSupervisorDashboardRedux';
 import TeamLeaderMonitoring from './pages/siteSupervisor/TeamLeaderMonitoring';
+import MultiTeamAnalytics from './components/MultiTeamAnalytics';
 import GPInsurerDashboard from './pages/gpInsurer/GPInsurerDashboard';
 import TeamLeaderDashboard from './pages/teamLeader/TeamLeaderDashboard';
 import TeamAnalytics from './pages/teamLeader/TeamAnalytics';
 import TeamMemberManagement from './pages/teamLeader/TeamMemberManagement';
 import WorkReadinessDashboard from './pages/teamLeader/WorkReadinessDashboard';
 import AssessmentLogs from './pages/teamLeader/AssessmentLogs';
+import WorkReadinessAssignments from './pages/teamLeader/WorkReadinessAssignments';
 import Cases from './pages/Cases';
 import CaseDetails from './pages/CaseDetails';
 import CheckInsPage from './pages/CheckInsPage';
@@ -326,6 +328,12 @@ function App() {
               </ProtectedRoute>
             } />
             
+            <Route path="/site-supervisor/multi-team-analytics" element={
+              <ProtectedRoute allowedRoles={['site_supervisor']}>
+                <MultiTeamAnalytics />
+              </ProtectedRoute>
+            } />
+            
             <Route path="/gp-insurer" element={
               <ProtectedRoute allowedRoles={['gp_insurer']}>
                 <GPInsurerDashboard />
@@ -353,6 +361,12 @@ function App() {
             <Route path="/team-leader/work-readiness" element={
               <ProtectedRoute allowedRoles={['team_leader']}>
                 <WorkReadinessDashboard />
+              </ProtectedRoute>
+            } />
+            
+            <Route path="/team-leader/assignments" element={
+              <ProtectedRoute allowedRoles={['team_leader']}>
+                <WorkReadinessAssignments />
               </ProtectedRoute>
             } />
             

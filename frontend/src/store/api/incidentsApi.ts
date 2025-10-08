@@ -60,23 +60,121 @@ export const incidentsApi = createApi({
         try {
           console.log('Creating incident with data:', incidentData);
           
+          // Validate only the most essential field
+          if (!incidentData.description || incidentData.description.trim() === '') {
+            throw new Error('description is required');
+          }
+
+          // Map frontend severity values to database enum values
+          const severityMapping: { [key: string]: string } = {
+            'low': 'near_miss',
+            'medium': 'first_aid', 
+            'high': 'medical_treatment',
+            'critical': 'lost_time',
+            'fatal': 'fatality'
+          };
+
+          // Map frontend incident type values to database enum values
+          const incidentTypeMapping: { [key: string]: string } = {
+            'slip_fall': 'slip_fall',
+            'strain_injury': 'overexertion', // Map strain_injury to overexertion
+            'cut_laceration': 'cut_laceration',
+            'burn': 'burn',
+            'struck_by': 'struck_by',
+            'struck_against': 'struck_against',
+            'overexertion': 'overexertion',
+            'crush': 'crush',
+            'other': 'other'
+          };
+
+          // Map severity if provided, otherwise use default
+          let mappedSeverity = 'near_miss'; // Default severity
+          if (incidentData.severity) {
+            const severityMapping: { [key: string]: string } = {
+              'low': 'near_miss',
+              'medium': 'first_aid', 
+              'high': 'medical_treatment',
+              'critical': 'lost_time',
+              'fatal': 'fatality'
+            };
+            mappedSeverity = severityMapping[incidentData.severity] || 'near_miss';
+          }
+          
+          console.log(`🎯 Severity mapping: ${incidentData.severity || 'not provided'} -> ${mappedSeverity}`);
+
+          // Map incident type if provided, otherwise use default
+          let mappedIncidentType = 'other'; // Default incident type
+          if (incidentData.incident_type) {
+            const incidentTypeMapping: { [key: string]: string } = {
+              'slip_fall': 'slip_fall',
+              'strain_injury': 'overexertion',
+              'cut_laceration': 'cut_laceration',
+              'burn': 'burn',
+              'struck_by': 'struck_by',
+              'struck_against': 'struck_against',
+              'overexertion': 'overexertion',
+              'crush': 'crush',
+              'other': 'other'
+            };
+            mappedIncidentType = incidentTypeMapping[incidentData.incident_type] || 'other';
+          }
+          
+          console.log(`🎯 Incident type mapping: ${incidentData.incident_type || 'not provided'} -> ${mappedIncidentType}`);
+
+          // Map frontend data to database schema - with worker_id column
+          const mappedIncidentData: any = {
+            description: incidentData.description,
+            reported_by: incidentData.reported_by_id,  // Site supervisor who reported
+            worker_id: incidentData.worker_id,  // Worker who had the incident
+            severity: mappedSeverity,  // Mapped severity value
+            incident_type: mappedIncidentType  // Mapped incident type
+          };
+          
+          console.log('🎯 Using complete incident data mapping with worker_id');
+          console.log('📊 Including worker_id for proper incident tracking');
+          
+          console.log('Mapped incident data:', JSON.stringify(mappedIncidentData, null, 2));
+          
+          console.log('All validations passed, attempting to create incident...');
+          
+          // Test if incidents table exists by doing a simple count query first
+          try {
+            const { count, error: countError } = await dataClient
+              .from('incidents')
+              .select('*', { count: 'exact', head: true });
+            
+            if (countError) {
+              console.error('Error checking incidents table:', countError);
+              throw new Error(`Incidents table error: ${countError.message}`);
+            }
+            console.log('Incidents table accessible, current count:', count);
+          } catch (tableError) {
+            console.error('Cannot access incidents table:', tableError);
+            throw new Error(`Cannot access incidents table: ${tableError}`);
+          }
+          
           // First, create the incident
               const { data: incident, error: incidentError } = await dataClient
                 .from('incidents')
-                .insert(incidentData)
-                .select(`
-                  *,
-                  reported_by:users!reported_by(id, first_name, last_name, email)
-                `)
+                .insert(mappedIncidentData)
+                .select('*')
                 .single();
           
           if (incidentError) {
             console.error('Error creating incident:', incidentError);
+            console.error('Incident data that failed:', JSON.stringify(mappedIncidentData, null, 2));
+            console.error('Error details:', JSON.stringify({
+              code: incidentError.code,
+              message: incidentError.message,
+              details: incidentError.details,
+              hint: incidentError.hint
+            }, null, 2));
             throw incidentError;
           }
           
           console.log('Incident created successfully:', incident);
           console.log('Incident severity:', incident.severity);
+          console.log('Incident ID:', incident.id);
           
           // Find available case manager
           const { data: caseManagers, error: caseManagerError } = await dataClient
@@ -100,51 +198,57 @@ export const incidentsApi = createApi({
             // Create case automatically
             const caseData = {
               case_number: `CASE-${new Date().getFullYear()}-${Date.now()}`,
-              worker_id: incidentData.reported_by, // This is now the actual worker who had the incident
+              worker_id: mappedIncidentData.worker_id, // Use the actual worker who had the incident
+              employer_id: mappedIncidentData.reported_by, // Use the site supervisor as employer
               case_manager_id: caseManager.id,
               incident_id: incident.id, // Link the case to the incident
-              status: 'new'
+              status: 'new',
+              priority: 'medium'
             };
+            
+            console.log('🎯 Creating case with data:', JSON.stringify(caseData, null, 2));
             
             const { data: newCase, error: caseError } = await dataClient
               .from('cases')
               .insert(caseData)
-              .select(`
-                *,
-                worker:users!worker_id(id, first_name, last_name, email),
-                case_manager:users!case_manager_id(id, first_name, last_name, email)
-              `)
+              .select('*')
               .single();
             
             if (caseError) {
-              console.error('Error creating case:', caseError);
+              console.error('❌ Error creating case:', JSON.stringify(caseError, null, 2));
+              console.error('❌ Case data that failed:', JSON.stringify(caseData, null, 2));
               // Don't fail incident creation if case creation fails
             } else {
-              console.log('Case created successfully:', newCase);
+              console.log('✅ Case created successfully:', JSON.stringify(newCase, null, 2));
+              
+              // Update the incident with the case_id
+              console.log('🎯 Updating incident with case_id:', newCase.id);
+              const { error: updateIncidentError } = await dataClient
+                .from('incidents')
+                .update({ case_id: newCase.id })
+                .eq('id', incident.id);
+              
+              if (updateIncidentError) {
+                console.error('❌ Error updating incident with case_id:', JSON.stringify(updateIncidentError, null, 2));
+                console.error('❌ Incident ID:', incident.id);
+                console.error('❌ Case ID:', newCase.id);
+              } else {
+                console.log('✅ Incident updated with case_id:', newCase.id);
+                console.log('✅ Incident ID:', incident.id);
+                console.log('✅ Case ID:', newCase.id);
+              }
             }
             
-            // Send notification to case manager
-            const isHighSeverity = incident.severity === 'high';
-            
-            // Map form severity values to database constraint values
-            const mapSeverity = (severity: string) => {
-              switch (severity) {
-                case 'high': return 'medical_treatment';
-                case 'medium': return 'first_aid';
-                case 'low': return 'near_miss';
-                default: return 'near_miss';
-              }
-            };
-            
+            // Send notification to case manager (using correct column names)
             const notificationData = {
-              user_id: caseManager.id,
-              type: 'incident_reported',
+              recipient_id: caseManager.id, // Use recipient_id instead of user_id
+              type: 'case_assignment', // Use valid notification type
               title: 'New Incident Reported',
-              message: `A new incident has been reported and assigned to you. Case: ${newCase?.case_number || 'Pending'} - Worker: ${newCase?.worker?.first_name} ${newCase?.worker?.last_name}`,
-              severity: mapSeverity(incident.severity),
-              priority: isHighSeverity ? 'high' : 'medium',
-              incident_id: incident.id,
-              case_id: newCase?.id
+              message: `A new incident has been reported and assigned to you. Case: ${newCase?.case_number || 'Pending'}`,
+              priority: 'medium', // Default priority
+              related_incident_id: incident.id, // Use related_incident_id instead of incident_id
+              related_case_id: newCase?.id, // Use related_case_id instead of case_id
+              action_url: 'http://localhost:3000/site-supervisor' // Add action URL for viewing incidents dashboard
             };
             
             console.log('Creating notification with data:', notificationData);
@@ -159,20 +263,19 @@ export const incidentsApi = createApi({
             } else {
               console.log('✅ Notification sent to case manager:', caseManager.email);
               console.log('✅ Notification created:', notificationResult);
-              console.log('✅ Notification severity:', notificationData.severity);
               console.log('✅ Notification priority:', notificationData.priority);
             }
             
-            // Send notification to worker
+            // Send notification to worker (using correct column names)
             const workerNotificationData = {
-              user_id: incident.reported_by, // This is now the actual worker who had the incident
-              type: 'incident_case_created',
+              recipient_id: mappedIncidentData.worker_id, // Use recipient_id instead of user_id
+              type: 'case_assignment', // Use valid notification type
               title: 'Incident Case Created',
-              message: `A case has been created for your incident. Case: ${newCase?.case_number || 'Pending'} - ${newCase?.worker?.first_name} ${newCase?.worker?.last_name}`,
-              severity: mapSeverity(incident.severity),
-              priority: isHighSeverity ? 'high' : 'medium',
-              incident_id: incident.id,
-              case_id: newCase?.id
+              message: `A case has been created for your incident. Case: ${newCase?.case_number || 'Pending'}`,
+              priority: 'medium', // Default priority
+              related_incident_id: incident.id, // Use related_incident_id instead of incident_id
+              related_case_id: newCase?.id, // Use related_case_id instead of case_id
+              action_url: 'http://localhost:3000/site-supervisor' // Add action URL for viewing incidents dashboard
             };
             
             const { error: workerNotificationError } = await dataClient
@@ -191,6 +294,8 @@ export const incidentsApi = createApi({
           return { data: { incident, caseManager, caseCreated: !!caseManager } };
         } catch (error) {
           console.error('Error in createIncident:', error);
+          console.error('Error type:', typeof error);
+          console.error('Error stringified:', JSON.stringify(error, null, 2));
           return { error: { status: 500, data: error } };
         }
       },
@@ -204,6 +309,8 @@ export const incidentsApi = createApi({
           dispatch(incidentsApi.util.invalidateTags(['Case']));
         } catch (error) {
           console.error('Error in createIncident mutation:', error);
+          console.error('Mutation error type:', typeof error);
+          console.error('Mutation error stringified:', JSON.stringify(error, null, 2));
         }
       },
     }),

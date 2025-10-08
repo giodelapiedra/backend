@@ -1,5 +1,7 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 
+// UI Slice for managing application state
+
 interface UIState {
   loading: boolean;
   error: string | null;
@@ -7,6 +9,7 @@ interface UIState {
   lastFetchTime: number;
   dialogs: {
     incidentDialog: boolean;
+    incidentDetailsDialog: boolean;
     teamDialog: boolean;
     memberDialog: boolean;
     assignmentDialog: boolean;
@@ -21,6 +24,7 @@ const initialState: UIState = {
   lastFetchTime: 0,
   dialogs: {
     incidentDialog: false,
+    incidentDetailsDialog: false,
     teamDialog: false,
     memberDialog: false,
     assignmentDialog: false,

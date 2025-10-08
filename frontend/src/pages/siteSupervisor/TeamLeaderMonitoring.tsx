@@ -168,7 +168,7 @@ const TeamLeaderMonitoring: React.FC = () => {
       const kpiPromises = teamLeaders.map(async (teamLeader) => {
         try {
           console.log(`🔍 Fetching KPI for team leader ${teamLeader._id}`);
-          const response = await fetch(`${process.env.REACT_APP_API_BASE_URL || 'https://sociosystem.onrender.com'}/api/goal-kpi/team-leader/weekly-summary?teamLeaderId=${teamLeader._id}`, {
+          const response = await fetch(`${process.env.REACT_APP_API_BASE_URL || 'http://localhost:5001'}/api/goal-kpi/team-leader/weekly-summary?teamLeaderId=${teamLeader._id}`, {
             method: 'GET',
             headers: {
               'Authorization': `Bearer ${session.access_token}`,

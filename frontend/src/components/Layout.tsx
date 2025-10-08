@@ -22,6 +22,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext.supabase';
 import { useSidebar } from '../contexts/SidebarContext';
 import { dataClient } from '../lib/supabase';
+import NotificationService from '../utils/notificationService';
 import { getProfileImageProps } from '../utils/imageUtils';
 import ModernSidebar from './ModernSidebar';
 import MobileBottomNavigation from './MobileBottomNavigation';
@@ -62,16 +63,9 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       if (user?.id) {
         try {
           console.log('Fetching unread notifications for layout badge...');
-          const { data: notificationsData, error: notificationsError } = await dataClient
-            .from('notifications')
-            .select('*')
-            .eq('recipient_id', user.id)
-            .eq('is_read', false);
-          
-          if (!notificationsError && notificationsData) {
-            console.log('Unread notifications count:', notificationsData.length);
-            setUnreadNotificationCount(notificationsData.length);
-          }
+          const count = await NotificationService.fetchUnreadCount(user.id);
+          console.log('Unread notifications count:', count);
+          setUnreadNotificationCount(count);
         } catch (err) {
           console.error('Error fetching unread notifications:', err);
         }

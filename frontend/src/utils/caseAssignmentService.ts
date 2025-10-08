@@ -54,9 +54,7 @@ export class CaseAssignmentService {
       await NotificationService.sendCaseAssignmentNotification(
         assignmentData.clinicianId,
         assignmentData.caseManagerId,
-        assignmentData.caseId,
-        caseNumber,
-        workerName
+        assignmentData.caseId
       );
 
       // Update case in database with clinician assignment
@@ -268,9 +266,8 @@ export class CaseAssignmentService {
           updatedCase.case_manager_id,
           updatedBy,
           caseId,
-          updatedCase.case_number || `CASE-${caseId.slice(-6)}`,
-          'Status Updated',
-          `Case status changed to ${newStatus}. ${notes || ''}`
+          newStatus,
+          notes
         );
       }
 
@@ -280,9 +277,8 @@ export class CaseAssignmentService {
           updatedCase.worker_id,
           updatedBy,
           caseId,
-          updatedCase.case_number || `CASE-${caseId.slice(-6)}`,
-          'Case Status Update',
-          `Your case status has been updated to ${newStatus}. ${notes || ''}`
+          newStatus,
+          notes
         );
       }
 

@@ -10,18 +10,20 @@ import LayoutWithSidebar from '../../components/LayoutWithSidebar';
 import { getProfileImageProps } from '../../utils/imageUtils';
 import { dataClient } from '../../lib/supabase';
 import { Line } from 'react-chartjs-2';
-import { Box, Typography, Button, Card, CardContent, Grid, Fade } from '@mui/material';
+import { Box, Typography, Button, Card, CardContent, Grid, Fade, Tabs, Tab } from '@mui/material';
 import { 
   People, 
   TrendingUp, 
   Assignment, 
-  CheckCircle 
+  CheckCircle,
+  Timeline
 } from '@mui/icons-material';
 import StatCard from '../../components/StatCard';
 import TrendChart from '../../components/TrendChart';
 import RecentActivityItem from '../../components/RecentActivityItem';
 import TeamKPIDashboard from '../../components/TeamKPIDashboard';
 import MonthlyPerformanceSection from '../../components/MonthlyPerformanceSection';
+import MonthlyAssignmentTracking from '../../components/MonthlyAssignmentTracking';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -244,6 +246,7 @@ const TeamLeaderDashboard: React.FC = () => {
   // Search and filter states
   const [searchQuery, setSearchQuery] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
+  const [mainTab, setMainTab] = useState(0); // Default to Monthly Assignment Performance Tracking
 
   // React Query hooks
   const { 
@@ -603,6 +606,13 @@ const TeamLeaderDashboard: React.FC = () => {
       managedTeams: analyticsData.teamLeader.managedTeams || []
     };
   }, [analyticsData]);
+
+  // One-team-per-leader guard
+  const hasExistingTeam = useMemo(() => {
+    const hasDefault = !!teamData?.defaultTeam && teamData.defaultTeam.trim() !== '';
+    const hasManaged = (teamData?.managedTeams?.length || 0) > 0;
+    return hasDefault || hasManaged;
+  }, [teamData]);
 
   // Chart data from trend data - Connected to database
   const chartData = useMemo(() => {
@@ -1025,6 +1035,12 @@ const TeamLeaderDashboard: React.FC = () => {
 
     if (!user?.id) {
       setToast({ message: 'User not authenticated', type: 'error' });
+      return;
+    }
+
+    // Enforce one team per team leader
+    if (hasExistingTeam) {
+      setToast({ message: 'You already have a team. Only one team per team leader is allowed.', type: 'error' });
       return;
     }
 
@@ -1592,17 +1608,26 @@ const TeamLeaderDashboard: React.FC = () => {
           </h3>
           <button
             type="button"
-            onClick={() => setShowCreateTeam(true)}
+            onClick={() => {
+              if (hasExistingTeam) {
+                setToast({ message: 'You can only create one team.', type: 'error' });
+                return;
+              }
+              setShowCreateTeam(true);
+            }}
+            disabled={hasExistingTeam}
             style={{
-              backgroundColor: '#16a34a',
+              backgroundColor: hasExistingTeam ? '#9ca3af' : '#16a34a',
               color: 'white',
               padding: '0.5rem 1rem',
               borderRadius: '0.375rem',
               border: 'none',
-              cursor: 'pointer'
+              cursor: hasExistingTeam ? 'not-allowed' : 'pointer',
+              opacity: hasExistingTeam ? 0.8 : 1
             }}
+            title={hasExistingTeam ? 'Each team leader can only create one team' : 'Create a new team'}
           >
-            Create New Team
+            {hasExistingTeam ? 'Team Already Created' : 'Create New Team'}
           </button>
         </div>
         
@@ -1692,11 +1717,74 @@ const TeamLeaderDashboard: React.FC = () => {
           </div>
         )}
         </Box>
-
-      {/* Weekly Goals & KPI Dashboard */}
-      <Box sx={{ mb: 4 }}>
-        <TeamKPIDashboard teamLeaderId={user?.id || ''} />
+      {/* Main Dashboard Tabs (mobile-first, pill style) */}
+      <Box sx={{ px: { xs: 1.5, md: 0 }, mb: 3 }}>
+        <Tabs
+          value={mainTab}
+          onChange={(e, v) => setMainTab(v)}
+          variant="scrollable"
+          scrollButtons
+          allowScrollButtonsMobile
+          sx={{
+            minHeight: 0,
+            '& .MuiTabs-flexContainer': {
+              gap: 1,
+            },
+            '& .MuiTab-root': {
+              minHeight: 38,
+              textTransform: 'none',
+              borderRadius: 9999,
+              px: 2,
+              fontWeight: 600,
+              color: '#475569',
+              backgroundColor: '#f1f5f9',
+            },
+            '& .Mui-selected': {
+              color: '#111827 !important',
+              backgroundColor: '#e0e7ff !important',
+            },
+            '& .MuiTabs-indicator': {
+              display: 'none',
+            },
+          }}
+        >
+          <Tab iconPosition="start" icon={<Assignment sx={{ fontSize: 18 }} />} label="Monthly Tracking" />
+          <Tab iconPosition="start" icon={<TrendingUp sx={{ fontSize: 18 }} />} label="Team KPI" />
+          <Tab iconPosition="start" icon={<People sx={{ fontSize: 18 }} />} label="Team Members" />
+          <Tab iconPosition="start" icon={<Timeline sx={{ fontSize: 18 }} />} label="Weekly Goals" />
+        </Tabs>
       </Box>
+
+      {/* Tab 0: Monthly Assignment Performance Tracking (MAIN/DEFAULT) */}
+      {mainTab === 0 && user?.id && user?.team && (
+        <Box sx={{ mb: 4, p: { xs: 1, md: 0 } }}>
+          <MonthlyAssignmentTracking 
+            teamLeaderId={user.id} 
+            team={user.team} 
+          />
+        </Box>
+      )}
+
+      {/* Tab 1: Team Assignment Performance */}
+      {mainTab === 1 && (
+        <Box sx={{ mb: 4, p: { xs: 1, md: 0 } }}>
+          <TeamKPIDashboard teamLeaderId={user?.id || ''} />
+        </Box>
+      )}
+
+      {/* Tab 2: Team Members */}
+      {mainTab === 2 && (
+        <React.Fragment>
+          {/* Team Members content moved here from below */}
+        </React.Fragment>
+      )}
+
+      {/* Tab 3: Weekly Goals & KPI */}
+      {mainTab === 3 && (
+        <Box sx={{ mb: 4, p: { xs: 1, md: 0 } }}>
+          <MonthlyPerformanceSection teamLeaderId={user?.id} />
+        </Box>
+      )}
 
 
       {/* Floating Notifications Popup */}
@@ -2226,6 +2314,7 @@ const TeamLeaderDashboard: React.FC = () => {
 
 
       {/* Team Members - Modern Card Layout */}
+      {mainTab === 2 && (
       <Box sx={{ 
         background: { xs: 'white', md: 'rgba(255, 255, 255, 0.8)' },
         backdropFilter: { md: 'blur(10px)' },
@@ -3155,6 +3244,7 @@ const TeamLeaderDashboard: React.FC = () => {
           </div>
         )}
       </Box>
+      )}
 
       {/* Create User Modal */}
       {showCreateUser && (
@@ -4246,8 +4336,7 @@ const TeamLeaderDashboard: React.FC = () => {
         </div>
       )}
 
-      {/* Monthly Performance Tracking Section */}
-      <MonthlyPerformanceSection teamLeaderId={user?.id} />
+      {/* Monthly Performance Tracking Section - Moved to Tab 3 */}
 
       {/* Toast */}
       {toast && (
