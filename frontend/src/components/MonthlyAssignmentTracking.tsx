@@ -146,11 +146,22 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
       
       console.log('All Assignments:', assignmentsResponse.assignments);
       
-      // Store current month assignments for system start date calculation
-      setCurrentMonthAssignments(assignmentsResponse.assignments || []);
+      // ✅ DATA INTEGRITY CHECK: Validate assignment data
+      const validAssignments = assignmentsResponse.assignments?.filter((a: any) => {
+        const hasRequiredFields = a.assigned_date && a.due_time && a.status;
+        if (!hasRequiredFields) {
+          console.warn('⚠️ Invalid assignment missing required fields:', a.id);
+        }
+        return hasRequiredFields;
+      }) || [];
       
-      // Filter data for selected month
-      const monthAssignments = assignmentsResponse.assignments?.filter((assignment: any) => {
+      console.log(`✅ Data Validation: ${validAssignments.length}/${assignmentsResponse.assignments?.length || 0} valid assignments`);
+      
+      // Store current month assignments for system start date calculation
+      setCurrentMonthAssignments(validAssignments);
+      
+      // Filter data for selected month using VALIDATED assignments
+      const monthAssignments = validAssignments.filter((assignment: any) => {
         const assignmentDate = new Date(assignment.assigned_date);
         // Normalize dates to avoid timezone issues
         const assignmentDateOnly = new Date(assignmentDate.getFullYear(), assignmentDate.getMonth(), assignmentDate.getDate());
@@ -159,7 +170,7 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
         
         console.log('Assignment Date:', assignmentDateOnly, 'vs Range:', startDateOnly, 'to', endDateOnly);
         return assignmentDateOnly >= startDateOnly && assignmentDateOnly <= endDateOnly;
-      }) || [];
+      });
       
       console.log('Filtered Month Assignments:', monthAssignments);
       
@@ -191,6 +202,13 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
   };
 
   const calculateMonthlyMetrics = (assignments: any[], unselected: any[]): MonthlyMetrics => {
+    console.log('📊 ===== CALCULATING MONTHLY METRICS =====');
+    console.log(`📋 Total Assignments: ${assignments.length}`);
+    
+    // ✅ SHIFT-BASED DEADLINE VALIDATION
+    const shiftsUsed = assignments.filter(a => a.due_time).length;
+    console.log(`✅ Assignments with shift-based deadlines: ${shiftsUsed}/${assignments.length}`);
+    
     // Find the first assignment date to determine when system started
     const assignmentDates = assignments.map(a => new Date(a.assigned_date)).sort((a, b) => a.getTime() - b.getTime());
     const firstAssignmentDate = assignmentDates.length > 0 ? assignmentDates[0] : null;
@@ -211,11 +229,12 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
     
     const totalAssignments = assignments.length;
     const completedAssignments = assignments.filter(a => a.status === 'completed').length;
+    // FIXED: Use actual shift-based deadline from database, not hardcoded 24 hours
     const onTimeSubmissions = assignments.filter(a => {
-      if (a.status !== 'completed') return false;
-      const assignedDate = new Date(a.assigned_date);
-      const completedDate = new Date(a.completed_at || a.updated_at);
-      return completedDate <= new Date(assignedDate.getTime() + 24 * 60 * 60 * 1000); // Within 24 hours
+      if (a.status !== 'completed' || !a.completed_at || !a.due_time) return false;
+      const completedDate = new Date(a.completed_at);
+      const dueTime = new Date(a.due_time); // Shift-based deadline from DB
+      return completedDate <= dueTime; // Compare against actual deadline
     }).length;
     const overdueSubmissions = assignments.filter(a => a.status === 'overdue').length;
     const notStartedAssignments = assignments.filter(a => a.status === 'pending').length;
@@ -269,13 +288,15 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
     const pendingRate = totalAssignments > 0 ? (notStartedAssignments / totalAssignments) * 100 : 0;
     const efficiencyRate = completedAssignments > 0 ? (onTimeSubmissions / completedAssignments) * 100 : 0;
     
-    console.log('📊 IMPROVED METRICS CALCULATION:');
+    console.log('📊 ===== SHIFT-BASED METRICS CALCULATION =====');
     console.log(`   Total Assignments: ${totalAssignments}`);
     console.log(`   Completed: ${completedAssignments} (${completionRate.toFixed(1)}%)`);
-    console.log(`   On-Time: ${onTimeSubmissions} (${onTimeRate.toFixed(1)}%)`);
-    console.log(`   Overdue: ${overdueSubmissions} (${lateRate.toFixed(1)}%)`);
-    console.log(`   Pending: ${notStartedAssignments} (${pendingRate.toFixed(1)}%)`);
-    console.log(`   Efficiency: ${efficiencyRate.toFixed(1)}% (on-time/completed)`);
+    console.log(`   ✅ On-Time (shift-based): ${onTimeSubmissions} (${onTimeRate.toFixed(1)}%)`);
+    console.log(`   ⚠️ Overdue: ${overdueSubmissions} (${lateRate.toFixed(1)}%)`);
+    console.log(`   ⏳ Pending: ${notStartedAssignments} (${pendingRate.toFixed(1)}%)`);
+    console.log(`   🎯 Efficiency: ${efficiencyRate.toFixed(1)}% (on-time/completed)`);
+    console.log(`   ⏰ Avg Response Time: ${averageResponseTime.toFixed(1)} hours`);
+    console.log('==========================================');
     
     // Month-over-month changes: real-time neutral (0) until previous-period data is available
     // When previous-month data exists, compute deltas against prior period
@@ -333,11 +354,12 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
       });
       
       const completed = weekAssignments.filter(a => a.status === 'completed').length;
+      // FIXED: Use shift-based deadline from database
       const onTime = weekAssignments.filter(a => {
-        if (a.status !== 'completed') return false;
-        const assignedDate = new Date(a.assigned_date);
-        const completedDate = new Date(a.completed_at || a.updated_at);
-        return completedDate <= new Date(assignedDate.getTime() + 24 * 60 * 60 * 1000);
+        if (a.status !== 'completed' || !a.completed_at || !a.due_time) return false;
+        const completedDate = new Date(a.completed_at);
+        const dueTime = new Date(a.due_time);
+        return completedDate <= dueTime;
       }).length;
       
       weeks.push({
@@ -389,11 +411,13 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
         worker.completed++;
         worker.completedAssignments.push(assignment);
         
-        // Check if on time
-        const assignedDate = new Date(assignment.assigned_date);
-        const completedDate = new Date(assignment.completed_at || assignment.updated_at);
-        if (completedDate <= new Date(assignedDate.getTime() + 24 * 60 * 60 * 1000)) {
-          worker.onTime++;
+        // FIXED: Check if on time using shift-based deadline
+        if (assignment.completed_at && assignment.due_time) {
+          const completedDate = new Date(assignment.completed_at);
+          const dueTime = new Date(assignment.due_time);
+          if (completedDate <= dueTime) {
+            worker.onTime++;
+          }
         }
       }
     });

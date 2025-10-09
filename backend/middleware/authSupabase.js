@@ -1,4 +1,3 @@
-const jwt = require('jsonwebtoken');
 const { createClient } = require('@supabase/supabase-js');
 
 // Initialize Supabase client with environment variables
@@ -18,30 +17,6 @@ const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
     persistSession: false
   }
 });
-
-/**
- * Generate JWT token
- */
-const generateToken = (userId, userEmail, userRole) => {
-  return jwt.sign(
-    { 
-      userId, 
-      email: userEmail,
-      role: userRole 
-    }, 
-    process.env.JWT_SECRET || 'your-secret-key',
-    {
-      expiresIn: process.env.JWT_EXPIRE || '7d'
-    }
-  );
-};
-
-/**
- * Verify JWT token
- */
-const verifyToken = (token) => {
-  return jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
-};
 
 /**
  * Authentication middleware for Supabase
@@ -64,6 +39,9 @@ const authenticateToken = async (req, res, next) => {
     }
 
     console.log('🔍 Token found, verifying with Supabase...');
+    console.log('🔍 Token length:', token.length);
+    console.log('🔍 Token preview:', token.substring(0, 50) + '...');
+    
     // Verify Supabase JWT token
     const { data: { user: authUser }, error: authError } = await supabaseAdmin.auth.getUser(token);
 
@@ -179,8 +157,6 @@ const optionalAuth = async (req, res, next) => {
 };
 
 module.exports = {
-  generateToken,
-  verifyToken,
   authenticateToken,
   requireRole,
   optionalAuth

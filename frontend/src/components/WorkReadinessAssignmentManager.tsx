@@ -45,6 +45,7 @@ import {
 } from '@mui/icons-material';
 import { SupabaseAPI } from '../utils/supabaseApi';
 import { BackendAssignmentAPI } from '../utils/backendAssignmentApi';
+import { authClient } from '../lib/supabase';
 
 interface Assignment {
   id: string;
@@ -106,7 +107,13 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
   const [openDialog, setOpenDialog] = useState(false);
   const [selectedWorkers, setSelectedWorkers] = useState<string[]>([]);
   const [unselectedWorkerReasons, setUnselectedWorkerReasons] = useState<{[key: string]: {reason: string, notes: string}}>({});
-  const [assignedDate, setAssignedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [assignedDate, setAssignedDate] = useState(() => {
+    // Get today's date in PHT
+    const now = new Date();
+    const phtOffset = 8 * 60; // 8 hours in minutes
+    const phtTime = new Date(now.getTime() + (phtOffset * 60 * 1000));
+    return phtTime.toISOString().split('T')[0];
+  });
   const [notes, setNotes] = useState('');
   
   // Confirmation and Success Dialog states
@@ -114,9 +121,65 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
   const [showSuccessDialog, setShowSuccessDialog] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
   
+  // Team leader shift information
+  const [currentShift, setCurrentShift] = useState<{
+    shift_name: string;
+    start_time: string;
+    end_time: string;
+    color: string;
+  } | null>(null);
+  
   // Completed Worker Dialog states
   const [showCompletedWorkerDialog, setShowCompletedWorkerDialog] = useState(false);
   const [completedWorkerMessage, setCompletedWorkerMessage] = useState('');
+
+  // API configuration
+  const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001/api';
+
+  // Helper function to get auth token
+  const getAuthToken = async () => {
+    try {
+      const { data: { session } } = await authClient.auth.getSession();
+      return session?.access_token || null;
+    } catch (error) {
+      console.error('Error getting auth token:', error);
+      return null;
+    }
+  };
+
+  // Fetch team leader's current shift
+  const fetchCurrentShift = async () => {
+    try {
+      const token = await getAuthToken();
+      if (!token) {
+        console.warn('No auth token available for shift data');
+        return;
+      }
+
+      const response = await fetch(`${API_BASE_URL}/shifts/history/${teamLeaderId}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        // Find the current active shift
+        const activeShift = data.data?.find((shift: any) => shift.is_active);
+        if (activeShift) {
+          setCurrentShift({
+            shift_name: activeShift.shift_types.name,
+            start_time: activeShift.shift_types.start_time,
+            end_time: activeShift.shift_types.end_time,
+            color: activeShift.shift_types.color
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching current shift:', error);
+    }
+  };
   
   // Cancel confirmation dialog state
   const [showCancelDialog, setShowCancelDialog] = useState(false);
@@ -127,7 +190,13 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
   } | null>(null);
   
   // Filter states
-  const [filterDate, setFilterDate] = useState(new Date().toISOString().split('T')[0]);
+  const [filterDate, setFilterDate] = useState(() => {
+    // Get today's date in PHT
+    const now = new Date();
+    const phtOffset = 8 * 60; // 8 hours in minutes
+    const phtTime = new Date(now.getTime() + (phtOffset * 60 * 1000));
+    return phtTime.toISOString().split('T')[0];
+  });
   const [filterStatus, setFilterStatus] = useState<string>('all');
   
   // Pagination states
@@ -139,6 +208,7 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
     fetchTeamMembers();
     fetchAssignments();
     fetchUnselectedWorkers();
+    fetchCurrentShift();
   }, [teamLeaderId]);
 
   // Reset pagination when filters change
@@ -157,54 +227,75 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
     }
   };
 
-  const getAvailableTeamMembers = () => {
-    // Filter out workers who already have assignments for the selected date (pending, completed, or overdue)
-    const assignedWorkerIds = assignments
-      .filter(assignment => 
-        assignment.assigned_date === assignedDate && 
-        ['pending', 'completed', 'overdue'].includes(assignment.status)
-      )
-      .map(assignment => assignment.worker_id);
+  // Helper function to check if a worker is unavailable
+  const isWorkerUnavailable = (member: any) => {
+    const now = new Date();
+    
+    // Check if worker has pending assignment that's not due (across ALL dates)
+    const pendingNotDue = assignments.some(assignment => {
+      if (assignment.worker_id !== member.id) return false;
+      if (assignment.status !== 'pending') return false;
+      
+      if (assignment.due_time) {
+        const dueDate = new Date(assignment.due_time);
+        return now < dueDate; // Only block if not yet due
+      }
+      return true; // No due time set, consider as not due
+    });
 
-    // Filter out workers who have unselected cases that are not closed for the selected date
-    const unselectedWorkerIds = unselectedWorkers
-      .filter(unselected => 
+    // Check if worker has completed assignment for selected date AND shift deadline hasn't passed
+    const completed = assignments.some(assignment => {
+      if (assignment.worker_id !== member.id) return false;
+      if (assignment.assigned_date !== assignedDate) return false;
+      if (assignment.status !== 'completed') return false;
+      
+      // Check if shift deadline has passed
+      if (assignment.due_time) {
+        const dueDate = new Date(assignment.due_time);
+        return now < dueDate; // Block if deadline hasn't passed
+      }
+      return true; // Block if no due time
+    });
+
+    // Check if worker has unselected case
+    const unselected = unselectedWorkers.some(unselected => 
+      unselected.worker_id === member.id &&
         unselected.assignment_date === assignedDate && 
         unselected.case_status !== 'closed'
-      )
-      .map(unselected => unselected.worker_id);
-
-    // Filter out workers who are already selected in the current dialog
-    const currentlySelectedIds = selectedWorkers;
-
-    // Debug logging to identify the issue
-    console.log('🔍 Debug Assignment Filtering:');
-    console.log('Selected Date:', assignedDate);
-    console.log('All Assignments:', assignments);
-    console.log('Assignments for selected date:', assignments.filter(a => a.assigned_date === assignedDate));
-    console.log('Assigned Worker IDs (including completed):', assignedWorkerIds);
-    console.log('Unselected Worker IDs:', unselectedWorkerIds);
-    console.log('Team Members:', teamMembers.map(m => ({ id: m.id, name: `${m.first_name} ${m.last_name}` })));
-
-    const availableMembers = teamMembers.filter(member => 
-      !assignedWorkerIds.includes(member.id) && 
-      !unselectedWorkerIds.includes(member.id) &&
-      !currentlySelectedIds.includes(member.id)
     );
 
-    console.log('Available Members:', availableMembers.map(m => `${m.first_name} ${m.last_name}`));
+    return pendingNotDue || completed || unselected;
+  };
+
+  const getAvailableTeamMembers = () => {
+    // Filter out unavailable workers and currently selected workers
+    const availableMembers = teamMembers.filter(member => 
+      !isWorkerUnavailable(member) &&
+      !selectedWorkers.includes(member.id)
+    );
+
+    console.log('🔍 Available Members:', availableMembers.map(m => `${m.first_name} ${m.last_name}`));
     return availableMembers;
   };
 
   const getFilteredAssignments = () => {
     let filtered = assignments;
     
+    console.log('🔍 getFilteredAssignments - Debug Info:');
+    console.log('Total assignments:', assignments.length);
+    console.log('Filter status:', filterStatus);
+    console.log('Filter date:', filterDate);
+    console.log('All assignment statuses:', assignments.map(a => ({ id: a.id, status: a.status, worker: a.worker?.first_name })));
+    
     if (filterDate) {
       filtered = filtered.filter(assignment => assignment.assigned_date === filterDate);
+      console.log('After date filter:', filtered.length);
     }
     
     if (filterStatus !== 'all') {
       filtered = filtered.filter(assignment => assignment.status === filterStatus);
+      console.log('After status filter:', filtered.length);
+      console.log('Filtered assignments:', filtered.map(a => ({ id: a.id, status: a.status, worker: a.worker?.first_name })));
     }
     
     return filtered;
@@ -539,8 +630,12 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
   const fetchAssignments = async () => {
     try {
       setLoading(true);
-      // Fetch all assignments, not filtered by date/status for dialog logic
+      // Fetch all assignments including cancelled ones
       const response = await BackendAssignmentAPI.getAssignments();
+      
+      console.log('🔍 fetchAssignments - Raw API Response:', response);
+      console.log('🔍 fetchAssignments - Assignments array:', response.assignments);
+      console.log('🔍 fetchAssignments - Assignment statuses:', response.assignments?.map((a: any) => ({ id: a.id, status: a.status, worker: a.worker?.first_name })));
       
       setAssignments(response.assignments || []);
       setError(null);
@@ -651,14 +746,14 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
       <body>
         <div class="header">
           <div class="title">Work Readiness Assignment</div>
-          <div class="date">${new Date(assignedDate).toLocaleDateString()} - Due: End of Day (11:59 PM)</div>
+          <div class="date">${new Date(assignedDate).toLocaleDateString()} - Due: ${currentShift ? `End of ${currentShift.shift_name} (${currentShift.end_time})` : 'Based on shift schedule'}</div>
         </div>
 
         <div class="section">
           <div class="section-title">📋 Assignment Details</div>
           <div class="details">
             <strong>Date:</strong> ${new Date(assignedDate).toLocaleDateString()}<br>
-            <strong>Due Time:</strong> End of Day (11:59 PM)<br>
+            <strong>Due Time:</strong> ${currentShift ? `End of ${currentShift.shift_name} (${currentShift.end_time})` : 'Based on shift schedule (calculated automatically)'}<br>
             <strong>Team:</strong> ${team}<br>
             <strong>Selected Workers:</strong> ${selectedWorkers.length} worker(s)<br>
             <strong>Unselected Workers:</strong> ${Object.keys(unselectedWorkerReasons).length} worker(s)
@@ -734,21 +829,20 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
           notes: data.notes
         }));
       
-      // Set due time to end of day (23:59) for the assigned date
-      const endOfDay = new Date(assignedDate);
-      endOfDay.setHours(23, 59, 59, 999);
-      
+      // Use shift-based deadline instead of hardcoded end of day
+      // The backend will calculate the deadline based on team leader's shift
       const response = await BackendAssignmentAPI.createAssignments(
         selectedWorkers,
         new Date(assignedDate),
         team,
         notes,
-        endOfDay.toISOString(),
+        undefined, // Let backend calculate shift-based deadline
         unselectedWorkersData
       );
       
-      // Show success dialog
-      const successMsg = response.message || `Successfully created assignments for ${selectedWorkers.length} worker(s) and recorded reasons for ${Object.keys(unselectedWorkerReasons).length} unselected worker(s)`;
+      // Show success dialog with deadline information
+      const deadlineMessage = response.deadlineMessage || 'Deadline calculated based on your shift schedule';
+      const successMsg = `${response.message || `Successfully created assignments for ${selectedWorkers.length} worker(s)`}\n\n${deadlineMessage}`;
       setSuccessMessage(successMsg);
       setShowSuccessDialog(true);
       
@@ -819,7 +913,11 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
   const resetForm = () => {
     setSelectedWorkers([]);
     setUnselectedWorkerReasons({});
-    setAssignedDate(new Date().toISOString().split('T')[0]);
+    // Reset to today's date in PHT
+    const now = new Date();
+    const phtOffset = 8 * 60; // 8 hours in minutes
+    const phtTime = new Date(now.getTime() + (phtOffset * 60 * 1000));
+    setAssignedDate(phtTime.toISOString().split('T')[0]);
     setNotes('');
   };
 
@@ -1442,7 +1540,25 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
                       <TableCell>
                         {new Date(assignment.assigned_date).toLocaleDateString()}
                       </TableCell>
-                      <TableCell>{assignment.due_time}</TableCell>
+                      <TableCell>
+                        {assignment.due_time ? (
+                          <Box>
+                            <Typography variant="body2" fontWeight={600}>
+                              {new Date(assignment.due_time).toLocaleDateString()}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              {new Date(assignment.due_time).toLocaleTimeString([], { 
+                                hour: '2-digit', 
+                                minute: '2-digit' 
+                              })}
+                            </Typography>
+                          </Box>
+                        ) : (
+                          <Typography variant="body2" color="text.secondary">
+                            -
+                          </Typography>
+                        )}
+                      </TableCell>
                       <TableCell>
                         <Chip
                           icon={getStatusIcon(assignment.status)}
@@ -1547,7 +1663,12 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
               </Grid>
             </Grid>
 
-            {/* Notes Section */}
+            {/* Shift-Based Deadline Information */}
+            <Alert severity="info" sx={{ mb: 3 }}>
+              <Typography variant="body2">
+                <strong>🕐 Deadline Information:</strong> The deadline for work readiness submissions will be automatically calculated based on your current shift schedule. Workers must complete their assessment before the end of your shift.
+              </Typography>
+            </Alert>
             <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 2, color: '#1976d2' }}>
               📝 Instructions (Optional)
             </Typography>
@@ -1711,12 +1832,229 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
               );
             })()}
 
-            {/* Unselected Workers Section */}
+            {/* Unavailable Workers Section */}
             {(() => {
+              // Get unavailable members using helper function
+              const unavailableMembers = teamMembers.filter(member => isWorkerUnavailable(member));
               const availableMembers = getAvailableTeamMembers();
               const unselectedMembers = availableMembers.filter(member => !selectedWorkers.includes(member.id));
               
-              return unselectedMembers.length > 0 && (
+              return (
+                <>
+                  {/* Show unavailable workers with reasons */}
+                  {unavailableMembers.length > 0 && (
+                    <>
+                      <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 1, mt: 3, color: '#ef4444' }}>
+                        ⚠️ Unavailable Workers
+                      </Typography>
+                      <Alert severity="warning" sx={{ mb: 2 }}>
+                        <Typography variant="body2">
+                          <strong>Note:</strong> These workers cannot be assigned because they have pending assignments that are not yet due, completed assignments (until shift deadline passes), or unclosed cases. Workers with overdue assignments can be reassigned (KPI penalties apply).
+                        </Typography>
+                      </Alert>
+
+                      <Box sx={{ 
+                        maxHeight: 200, 
+                        overflowY: 'auto',
+                        border: '1px solid #ef4444',
+                        borderRadius: 1,
+                        p: 1,
+                        bgcolor: '#fef2f2'
+                      }}>
+                        {unavailableMembers.map((member) => {
+                          const now = new Date();
+                          const pendingNotDue = assignments.some(assignment => {
+                            if (assignment.worker_id !== member.id) return false;
+                            if (assignment.status !== 'pending') return false;
+                            
+                            if (assignment.due_time) {
+                              const dueDate = new Date(assignment.due_time);
+                              return now < dueDate;
+                            }
+                            return true;
+                          });
+
+                          const completed = assignments.some(assignment => {
+                            if (assignment.worker_id !== member.id) return false;
+                            if (assignment.assigned_date !== assignedDate) return false;
+                            if (assignment.status !== 'completed') return false;
+                            
+                            // Check if shift deadline has passed
+                            if (assignment.due_time) {
+                              const dueDate = new Date(assignment.due_time);
+                              return now < dueDate; // Block if deadline hasn't passed
+                            }
+                            return true; // Block if no due time
+                          });
+
+                          const unselected = unselectedWorkers.some(unselected => 
+                            unselected.worker_id === member.id &&
+                            unselected.assignment_date === assignedDate &&
+                            unselected.case_status !== 'closed'
+                          );
+
+                          // Find the specific pending assignment for details
+                          const pendingAssignment = assignments.find(assignment => 
+                            assignment.worker_id === member.id &&
+                            assignment.status === 'pending' &&
+                            (assignment.due_time ? now < new Date(assignment.due_time) : true)
+                          );
+
+                          let reason = '';
+                          if (pendingNotDue) {
+                            reason = `Has pending assignment from ${pendingAssignment?.assigned_date} (not yet due)`;
+                          } else if (completed) {
+                            reason = 'Already completed assignment';
+                          } else if (unselected) {
+                            reason = 'Has unclosed unselected case';
+                          }
+
+                          return (
+                            <Box
+                              key={`unavailable-${member.id}`}
+                              sx={{
+                                p: 1.5,
+                                mb: 1,
+                                borderRadius: 1,
+                                bgcolor: 'white',
+                                border: '1px solid #ef4444',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 2
+                              }}
+                            >
+                              <Box
+                                sx={{
+                                  width: 32,
+                                  height: 32,
+                                  borderRadius: '50%',
+                                  bgcolor: '#ef4444',
+                                  color: 'white',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  fontWeight: 700,
+                                  fontSize: '0.75rem'
+                                }}
+                              >
+                                {member.first_name?.[0]}{member.last_name?.[0]}
+                              </Box>
+                              <Box sx={{ flex: 1 }}>
+                                <Typography variant="body2" fontWeight={600}>
+                                  {member.first_name} {member.last_name}
+                                </Typography>
+                                <Typography variant="caption" color="text.secondary">
+                                  {reason}
+                                </Typography>
+                              </Box>
+                            </Box>
+                          );
+                        })}
+                      </Box>
+                    </>
+                  )}
+
+                  {/* Overdue Workers Section - Show workers who can be reassigned */}
+                  {(() => {
+                    const now = new Date();
+                    const overdueMembers = teamMembers.filter(member => {
+                      // Check if worker has overdue assignments
+                      const overdue = assignments.some(assignment => {
+                        if (assignment.worker_id !== member.id) return false;
+                        if (assignment.status !== 'pending') return false;
+                        
+                        if (assignment.due_time) {
+                          const dueDate = new Date(assignment.due_time);
+                          return now >= dueDate; // Past due
+                        }
+                        return false; // No due time = not overdue
+                      });
+
+                      // Also check if they don't have completed assignments for today
+                      const completedToday = assignments.some(assignment => 
+                        assignment.worker_id === member.id &&
+                        assignment.assigned_date === assignedDate &&
+                        assignment.status === 'completed'
+                      );
+
+                      return overdue && !completedToday;
+                    });
+
+                    return overdueMembers.length > 0 && (
+                      <>
+                        <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 1, mt: 3, color: '#f59e0b' }}>
+                          ⚠️ Workers with Overdue Assignments (Can be Reassigned)
+                        </Typography>
+                        <Alert severity="info" sx={{ mb: 2 }}>
+                          <Typography variant="body2">
+                            <strong>Note:</strong> These workers have overdue assignments but can still receive new assignments. The KPI system will apply penalties for overdue assignments.
+                          </Typography>
+                        </Alert>
+
+                        <Box sx={{ 
+                          maxHeight: 200, 
+                          overflowY: 'auto',
+                          border: '1px solid #f59e0b',
+                          borderRadius: 1,
+                          p: 1,
+                          bgcolor: '#fffbeb'
+                        }}>
+                          {overdueMembers.map((member) => {
+                            const overdueAssignment = assignments.find(assignment => 
+                              assignment.worker_id === member.id &&
+                              assignment.status === 'pending' &&
+                              assignment.due_time &&
+                              now >= new Date(assignment.due_time)
+                            );
+
+                            return (
+                              <Box
+                                key={`overdue-${member.id}`}
+                                sx={{
+                                  p: 1.5,
+                                  mb: 1,
+                                  borderRadius: 1,
+                                  bgcolor: 'white',
+                                  border: '1px solid #f59e0b',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: 2
+                                }}
+                              >
+                                <Box
+                                  sx={{
+                                    width: 32,
+                                    height: 32,
+                                    borderRadius: '50%',
+                                    bgcolor: '#f59e0b',
+                                    color: 'white',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    fontWeight: 700,
+                                    fontSize: '0.75rem'
+                                  }}
+                                >
+                                  {member.first_name?.[0]}{member.last_name?.[0]}
+                                </Box>
+                                <Box sx={{ flex: 1 }}>
+                                  <Typography variant="body2" fontWeight={600}>
+                                    {member.first_name} {member.last_name}
+                                  </Typography>
+                                  <Typography variant="caption" color="text.secondary">
+                                    Overdue assignment from {overdueAssignment?.assigned_date} (Due: {overdueAssignment?.due_time?.split('T')[0]})
+                                  </Typography>
+                                </Box>
+                              </Box>
+                            );
+                          })}
+                        </Box>
+                      </>
+                    );
+                  })()}
+
+                  {/* Unselected Workers Section */}
+                  {unselectedMembers.length > 0 && (
                 <>
                   <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 1, mt: 3, color: '#f59e0b' }}>
                     🚫 Specify Reasons for Unselected Workers
@@ -1822,6 +2160,8 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
                       </Box>
                     ))}
                   </Box>
+                    </>
+                  )}
                 </>
               );
             })()}
@@ -1913,7 +2253,10 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
               <strong>Date:</strong> {new Date(assignedDate).toLocaleDateString()}
             </Typography>
             <Typography variant="body2" sx={{ mb: 0.5 }}>
-              <strong>Due Time:</strong> End of Day (11:59 PM)
+              <strong>Due Time:</strong> {currentShift 
+                ? `End of ${currentShift.shift_name} (${currentShift.end_time})`
+                : 'Based on your shift schedule (will be calculated automatically)'
+              }
             </Typography>
             <Typography variant="body2" sx={{ mb: 0.5 }}>
               <strong>Selected Workers:</strong> {selectedWorkers.length} worker(s)
@@ -1943,7 +2286,10 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
           <Alert severity="info" sx={{ mt: 2 }}>
             <Typography variant="body2">
               This action will create assignments for selected workers and record reasons for unselected workers. 
-              This cannot be undone.
+              {currentShift 
+                ? ` The deadline will be set to the end of your ${currentShift.shift_name} (${currentShift.end_time}).`
+                : ' The deadline will be automatically calculated based on your current shift schedule.'
+              } This cannot be undone.
             </Typography>
           </Alert>
         </DialogContent>

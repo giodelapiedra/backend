@@ -1,11 +1,15 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, memo, useReducer } from 'react';
 import { useAuth } from '../../contexts/AuthContext.supabase';
 import { SupabaseAPI } from '../../utils/supabaseApi';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import Toast from '../../components/Toast';
 import LayoutWithSidebar from '../../components/LayoutWithSidebar';
+import EmptyState from '../../components/EmptyState';
 import { Box, Card, CardContent, Typography, Button } from '@mui/material';
 import TrendChart from '../../components/TrendChart';
+import { useIsMobile } from '../../hooks/layout';
+import { useAnalytics } from '../../hooks/useAnalytics';
+import { dateFilterReducer, makeInitial } from '../../reducers/dateFilter';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -34,27 +38,17 @@ ChartJS.register(
   Filler
 );
 
-// Custom gradient plugin
-const gradientPlugin = {
-  id: 'gradient',
-  beforeDraw: (chart: any) => {
-    const { ctx, chartArea } = chart;
-    if (!chartArea) return;
+// Gradient helper function
+function makeAreaGradient(chart: any, color: string) {
+  const { ctx, chartArea } = chart;
+  if (!chartArea) return color;
+  const g = ctx.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
+  g.addColorStop(0, color.replace('1)', '0.25)'));
+  g.addColorStop(1, color.replace('1)', '0.05)'));
+  return g;
+}
 
-    const dataset = chart.data.datasets[0];
-    if (!dataset || !dataset.fill) return;
-
-    const gradient = ctx.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
-    gradient.addColorStop(0, 'rgba(147, 51, 234, 0.4)');
-    gradient.addColorStop(0.5, 'rgba(147, 51, 234, 0.2)');
-    gradient.addColorStop(1, 'rgba(147, 51, 234, 0.05)');
-    
-    dataset.backgroundColor = gradient;
-  }
-};
-
-// Register the plugin
-ChartJS.register(gradientPlugin);
+// No plugin registration needed - using scriptable backgroundColor
 
 // Type alias for trend data items
 type TrendDataItem = {
@@ -173,8 +167,9 @@ const COLORS = {
   }
 };
 
-const TeamAnalytics: React.FC = () => {
+const TeamAnalytics: React.FC = memo(() => {
   const { user } = useAuth();
+  const isMobile = useIsMobile();
   
   // Add CSS for animations
   React.useEffect(() => {
@@ -211,27 +206,20 @@ const TeamAnalytics: React.FC = () => {
       }
     };
   }, []);
-  const [analyticsData, setAnalyticsData] = useState<AnalyticsData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
-  const [readinessChartLoading, setReadinessChartLoading] = useState(false);
   const [readinessModalOpen, setReadinessModalOpen] = useState(false);
-  const [workReadinessChartLoading, setWorkReadinessChartLoading] = useState(false);
-  const [loginChartLoading, setLoginChartLoading] = useState(false);
-  // Separate date states for each chart
-  const [workReadinessDateRange, setWorkReadinessDateRange] = useState<'week' | 'month' | 'year' | 'custom'>('week');
-  const [workReadinessStartDate, setWorkReadinessStartDate] = useState<Date>(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
-  const [workReadinessEndDate, setWorkReadinessEndDate] = useState<Date>(new Date());
-  
-  const [loginDateRange, setLoginDateRange] = useState<'week' | 'month' | 'year' | 'custom'>('week');
-  const [loginStartDate, setLoginStartDate] = useState<Date>(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
-  const [loginEndDate, setLoginEndDate] = useState<Date>(new Date());
-  
-  // Readiness Activity chart date filtering states
-  const [readinessDateRange, setReadinessDateRange] = useState<'week' | 'month' | 'year' | 'custom'>('month');
-  const [readinessStartDate, setReadinessStartDate] = useState<Date>(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000));
-  const [readinessEndDate, setReadinessEndDate] = useState<Date>(new Date());
+
+  // Reducers for chart filters
+  const [workReadinessFilter, dispatchWorkReadiness] = useReducer(dateFilterReducer, makeInitial('week'));
+  const [loginFilter, dispatchLogin] = useReducer(dateFilterReducer, makeInitial('month'));
+  const [trendFilter, dispatchTrend] = useReducer(dateFilterReducer, makeInitial('month'));
+
+  // Use the unified analytics hook
+  const { data: analyticsData, error, loading, setData: setAnalyticsData } = useAnalytics(user?.id, {
+    work: { range: workReadinessFilter.range, start: workReadinessFilter.start, end: workReadinessFilter.end },
+    login: { range: loginFilter.range, start: loginFilter.start, end: loginFilter.end },
+    trend: { range: trendFilter.range, start: trendFilter.start, end: trendFilter.end }
+  });
   
   const [showChartModal, setShowChartModal] = useState(false);
   const [showLoginModal, setShowLoginModal] = useState(false);
@@ -398,17 +386,14 @@ const TeamAnalytics: React.FC = () => {
     }
   }, [readinessDateRange, readinessStartDate, readinessEndDate, user?.id]);
 
-  const fetchAnalyticsData = async (chartType?: 'workReadiness' | 'login' | 'readiness', forceRefresh = false) => {
+  const fetchAnalyticsData = useCallback(async (chartType?: 'workReadiness' | 'login' | 'readiness', forceRefresh = false) => {
     try {
-      console.log('fetchAnalyticsData called with chartType:', chartType, 'forceRefresh:', forceRefresh);
-      
       // Only set main loading for initial load, not for chart-specific updates
       if (!chartType) {
         setLoading(true);
       }
       
       if (!user?.id) {
-        console.log('No user ID available for analytics fetch');
         setAnalyticsData(null);
         return;
       }
@@ -574,11 +559,139 @@ const TeamAnalytics: React.FC = () => {
         setLoading(false);
       }
     }
-  };
+  }, [user?.id, workReadinessDateRange, workReadinessStartDate, workReadinessEndDate, loginDateRange, loginStartDate, loginEndDate, readinessDateRange, readinessStartDate, readinessEndDate]);
 
-  const handleCloseToast = () => {
+  const handleCloseToast = useCallback(() => {
     setToast(null);
-  };
+  }, []);
+
+  // Memoized chart data calculations with safe notStarted calc
+  const wrStats = analyticsData?.analytics?.workReadinessStats;
+  const workReadinessChartData = useMemo(() => {
+    if (!wrStats) return null;
+    
+    const completed = wrStats.completed ?? 0;
+    const pending = wrStats.pending ?? 0;
+    const total = wrStats.total ?? 0;
+    const notStarted = Math.max(0, total - (completed + pending));
+    
+    return {
+      labels: ['Completed', 'Pending', 'Not Started'],
+      datasets: [{
+        data: [completed, pending, notStarted],
+        backgroundColor: [
+          COLORS.success.main,
+          COLORS.warning.main,
+          COLORS.error.main
+        ],
+        borderColor: [
+          COLORS.success.main,
+          COLORS.warning.main,
+          COLORS.error.main
+        ],
+        borderWidth: 2
+      }]
+    };
+  }, [wrStats]);
+
+  const loginChartData = useMemo(() => {
+    if (!analyticsData?.analytics?.loginStats) return null;
+    
+    const { dailyBreakdown } = analyticsData.analytics.loginStats;
+    
+    return {
+      labels: dailyBreakdown && dailyBreakdown.length > 0 
+        ? dailyBreakdown.map(item => new Date(item.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }))
+        : ['No Data'],
+      datasets: [{
+        label: 'Daily Login Count',
+        data: dailyBreakdown && dailyBreakdown.length > 0
+          ? dailyBreakdown.map(item => item.count)
+          : [0],
+        borderColor: 'rgba(147, 51, 234, 1)',
+        backgroundColor: (ctx: any) => makeAreaGradient(ctx.chart, 'rgba(147, 51, 234, 1)'),
+        fill: true,
+        tension: 0.4,
+        pointBackgroundColor: 'rgba(147, 51, 234, 1)',
+        pointBorderColor: '#ffffff',
+        pointBorderWidth: 2,
+        pointRadius: 6,
+        pointHoverRadius: 8
+      }]
+    };
+  }, [analyticsData?.analytics?.loginStats]);
+
+  const teamPerformanceChartData = useMemo(() => {
+    if (!analyticsData?.analytics?.teamPerformance) return null;
+    
+    return {
+      labels: analyticsData.analytics.teamPerformance.map((member: any) => 
+        member.memberName || member.workerName || 'Unknown'
+      ).slice(0, 5),
+      datasets: [{
+        label: 'Activity Level',
+        data: analyticsData.analytics.teamPerformance.map((member: any) => 
+          member.activityLevel || 0
+        ).slice(0, 5),
+        backgroundColor: 'rgba(59, 130, 246, 0.8)',
+        borderColor: 'rgba(59, 130, 246, 1)',
+        borderWidth: 1
+      }]
+    };
+  }, [analyticsData?.analytics?.teamPerformance]);
+
+  const readinessTrendChartData = useMemo(() => {
+    if (!analyticsData?.analytics?.readinessTrendData || 
+        !Array.isArray(analyticsData.analytics.readinessTrendData) || 
+        analyticsData.analytics.readinessTrendData.length === 0) return null;
+    
+    return {
+      labels: analyticsData.analytics.readinessTrendData.map((item: TrendDataItem) => 
+        new Date(item.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+      ),
+      datasets: [
+        {
+          label: 'Not Fit for Work',
+          data: analyticsData.analytics.readinessTrendData.map((item: TrendDataItem) => item.notFitForWork),
+          borderColor: 'rgba(147, 51, 234, 1)',
+          backgroundColor: (ctx: any) => makeAreaGradient(ctx.chart, 'rgba(147, 51, 234, 1)'),
+          fill: true,
+          tension: 0.4,
+          pointBackgroundColor: '#9333ea',
+          pointBorderColor: '#ffffff',
+          pointBorderWidth: 2,
+          pointRadius: 6,
+          pointHoverRadius: 8
+        },
+        {
+          label: 'Minor Concerns Fit for Work',
+          data: analyticsData.analytics.readinessTrendData.map((item: TrendDataItem) => item.minorConcernsFitForWork),
+          borderColor: 'rgba(245, 158, 11, 1)',
+          backgroundColor: (ctx: any) => makeAreaGradient(ctx.chart, 'rgba(245, 158, 11, 1)'),
+          fill: true,
+          tension: 0.4,
+          pointBackgroundColor: '#f59e0b',
+          pointBorderColor: '#ffffff',
+          pointBorderWidth: 2,
+          pointRadius: 6,
+          pointHoverRadius: 8
+        },
+        {
+          label: 'Fit for Work',
+          data: analyticsData.analytics.readinessTrendData.map((item: TrendDataItem) => item.fitForWork),
+          borderColor: 'rgba(34, 197, 94, 1)',
+          backgroundColor: (ctx: any) => makeAreaGradient(ctx.chart, 'rgba(34, 197, 94, 1)'),
+          fill: true,
+          tension: 0.4,
+          pointBackgroundColor: '#22c55e',
+          pointBorderColor: '#ffffff',
+          pointBorderWidth: 2,
+          pointRadius: 6,
+          pointHoverRadius: 8
+        }
+      ]
+    };
+  }, [analyticsData?.analytics?.readinessTrendData]);
 
   if (loading) {
     return <LoadingSpinner />;
@@ -1024,15 +1137,15 @@ const TeamAnalytics: React.FC = () => {
                       key={range}
                       onClick={(e) => {
                         e.preventDefault();
-                        setWorkReadinessDateRange(range);
+                        dispatchWorkReadiness({ type: 'SET_RANGE', range });
                       }}
-                      variant={workReadinessDateRange === range ? 'contained' : 'outlined'}
+                      variant={workReadinessFilter.range === range ? 'contained' : 'outlined'}
                       sx={{
                         padding: '8px 20px',
                         borderRadius: '10px',
-                        border: workReadinessDateRange === range ? 'none' : `1.5px solid ${COLORS.neutral[300]}`,
-                        backgroundColor: workReadinessDateRange === range ? COLORS.primary.main : 'transparent',
-                        color: workReadinessDateRange === range ? COLORS.neutral.white : COLORS.neutral[600],
+                        border: workReadinessFilter.range === range ? 'none' : `1.5px solid ${COLORS.neutral[300]}`,
+                        backgroundColor: workReadinessFilter.range === range ? COLORS.primary.main : 'transparent',
+                        color: workReadinessFilter.range === range ? COLORS.neutral.white : COLORS.neutral[600],
                         fontSize: '0.8125rem',
                         fontWeight: '600',
                         textTransform: 'capitalize',
@@ -1050,7 +1163,7 @@ const TeamAnalytics: React.FC = () => {
                     </Button>
                   ))}
                 </Box>
-                {workReadinessDateRange === 'custom' && (
+                {workReadinessFilter.range === 'custom' && (
                   <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', flexWrap: 'wrap', mt: { xs: 1, md: 0 } }}>
                     <input
                       type="date"
@@ -1120,7 +1233,15 @@ const TeamAnalytics: React.FC = () => {
                     borderColor: COLORS.primary.light,
                   }
                 }}
-                onClick={() => setShowChartModal(true)}
+                onClick={async () => {
+                  setShowChartModal(true);
+                  // Refresh work readiness data when opening detailed view
+                  try {
+                    await fetchAnalyticsData('workReadiness');
+                  } catch (error) {
+                    console.error('Error refreshing work readiness data:', error);
+                  }
+                }}
               >
                 <Box sx={{
                   display: 'flex',
@@ -1137,9 +1258,15 @@ const TeamAnalytics: React.FC = () => {
                     Work Readiness Distribution
                   </Typography>
                   <Button
-                    onClick={(e) => {
+                    onClick={async (e) => {
                       e.stopPropagation();
                       setShowChartModal(true);
+                      // Refresh work readiness data when opening detailed view
+                      try {
+                        await fetchAnalyticsData('workReadiness');
+                      } catch (error) {
+                        console.error('Error refreshing work readiness data:', error);
+                      }
                     }}
                     sx={{
                       padding: '8px 14px',
@@ -1253,7 +1380,7 @@ const TeamAnalytics: React.FC = () => {
                       
                       return (
                         <Pie
-                          data={{
+                          data={workReadinessChartData || {
                             labels: ['Completed', 'Pending', 'Not Started'],
                             datasets: [{
                               data: [completed, pending, notStarted],
@@ -1315,16 +1442,24 @@ const TeamAnalytics: React.FC = () => {
                 style={{
                   backgroundColor: 'rgba(255, 255, 255, 0.9)',
                   backdropFilter: 'blur(10px)',
-                  borderRadius: window.innerWidth <= 768 ? '1rem' : '1rem',
-                  padding: window.innerWidth <= 768 ? '1.5rem' : '2rem',
+                  borderRadius: isMobile ? '1rem' : '1rem',
+                  padding: isMobile ? '1.5rem' : '2rem',
                   boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
                   border: '1px solid rgba(255, 255, 255, 0.2)',
                   cursor: 'pointer',
                   transition: 'transform 0.2s ease, box-shadow 0.2s ease',
-                  width: window.innerWidth <= 768 ? '100%' : 'auto',
-                  flex: window.innerWidth <= 768 ? 'none' : '1'
+                  width: isMobile ? '100%' : 'auto',
+                  flex: isMobile ? 'none' : '1'
                 }}
-                onClick={() => setShowLoginModal(true)}
+                onClick={async () => {
+                  setShowLoginModal(true);
+                  // Refresh login data when opening detailed view
+                  try {
+                    await fetchAnalyticsData('login');
+                  } catch (error) {
+                    console.error('Error refreshing login data:', error);
+                  }
+                }}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.transform = 'scale(1.02)';
                   e.currentTarget.style.boxShadow = '0 8px 12px -1px rgba(0, 0, 0, 0.15), 0 4px 6px -1px rgba(0, 0, 0, 0.1)';
@@ -1338,36 +1473,79 @@ const TeamAnalytics: React.FC = () => {
                   display: 'flex',
                   justifyContent: 'space-between',
                   alignItems: 'center',
-                  marginBottom: window.innerWidth <= 768 ? '0.75rem' : '1.5rem'
+                  marginBottom: isMobile ? '0.75rem' : '1.5rem'
                 }}>
                   <h3 style={{ 
-                    fontSize: window.innerWidth <= 768 ? '1rem' : '1.25rem', 
+                    fontSize: isMobile ? '1rem' : '1.25rem', 
                     fontWeight: '600', 
                     color: '#1f2937',
                     margin: 0
                   }}>
                     Login Activity Trends
                   </h3>
-                  <button
-                    type="button"
-                    onClick={() => setShowLoginModal(true)}
-                    style={{
-                      padding: '0.5rem 1rem',
-                      backgroundColor: '#f3f4f6',
-                      border: '1px solid #d1d5db',
-                      borderRadius: '0.375rem',
-                      color: '#6b7280',
-                      fontSize: '0.875rem',
-                      fontWeight: '500',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.5rem',
-                      transition: 'all 0.2s ease',
-                      boxShadow: '0 1px 2px rgba(0, 0, 0, 0.05)',
-                      position: 'relative',
-                      zIndex: 10
-                    }}
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        // Refresh login data
+                        try {
+                          await fetchAnalyticsData('login');
+                        } catch (error) {
+                          console.error('Error refreshing login data:', error);
+                        }
+                      }}
+                      style={{
+                        padding: '0.5rem',
+                        backgroundColor: '#f3f4f6',
+                        border: '1px solid #d1d5db',
+                        borderRadius: '0.375rem',
+                        color: '#6b7280',
+                        fontSize: '0.875rem',
+                        fontWeight: '500',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.25rem',
+                        transition: 'all 0.2s ease',
+                        boxShadow: '0 1px 2px rgba(0, 0, 0, 0.05)',
+                        position: 'relative',
+                        zIndex: 10
+                      }}
+                      title="Refresh Login Data"
+                    >
+                      <svg width="14" height="14" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+                      </svg>
+                      Refresh
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setShowLoginModal(true);
+                        // Refresh login data when opening detailed view
+                        try {
+                          await fetchAnalyticsData('login');
+                        } catch (error) {
+                          console.error('Error refreshing login data:', error);
+                        }
+                      }}
+                      style={{
+                        padding: '0.5rem 1rem',
+                        backgroundColor: '#f3f4f6',
+                        border: '1px solid #d1d5db',
+                        borderRadius: '0.375rem',
+                        color: '#6b7280',
+                        fontSize: '0.875rem',
+                        fontWeight: '500',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.5rem',
+                        transition: 'all 0.2s ease',
+                        boxShadow: '0 1px 2px rgba(0, 0, 0, 0.05)',
+                        position: 'relative',
+                        zIndex: 10
+                      }}
                     onMouseEnter={(e) => {
                       e.currentTarget.style.backgroundColor = '#e5e7eb';
                       e.currentTarget.style.borderColor = '#9ca3af';
@@ -1385,7 +1563,7 @@ const TeamAnalytics: React.FC = () => {
                     <span>Expand</span>
                   </button>
                 </div>
-                <div style={{ height: window.innerWidth <= 768 ? '200px' : '300px', position: 'relative' }}>
+                <div style={{ height: isMobile ? '200px' : '300px', position: 'relative' }}>
                   {(() => {
                     const todayLogins = analyticsData.analytics.loginStats.todayLogins || 0;
                     const weeklyLogins = analyticsData.analytics.loginStats.weeklyLogins || 0;
@@ -1394,38 +1572,24 @@ const TeamAnalytics: React.FC = () => {
                     
                     const total = todayLogins + weeklyLogins + monthlyLogins;
                     
+                    // Debug logging for chart data (production: remove console.log)
+                    if (process.env.NODE_ENV === 'development') {
+                      console.log('📊 Login Chart Debug:', {
+                        todayLogins,
+                        weeklyLogins,
+                        monthlyLogins,
+                        total,
+                        dailyBreakdown: dailyBreakdown.length
+                      });
+                    }
+                    
                     // If no data for selected date range, show empty state
                     if (total === 0) {
                       return (
-                        <div style={{
-                          height: '100%',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          color: '#6b7280'
-                        }}>
-                          <div style={{
-                            width: '150px',
-                            height: '150px',
-                            borderRadius: '50%',
-                            backgroundColor: 'rgba(107, 114, 128, 0.1)',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            marginBottom: '1rem'
-                          }}>
-                            <svg width="60" height="60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-                            </svg>
-                          </div>
-                          <h3 style={{ fontSize: '1.125rem', fontWeight: '600', marginBottom: '0.5rem' }}>
-                            No Login Data Available
-                          </h3>
-                          <p style={{ fontSize: '0.875rem', textAlign: 'center' }}>
-                            No login activity found for the selected date range.
-                          </p>
-                        </div>
+                        <EmptyState 
+                          title="No Login Data Available"
+                          subtitle="No login activity found for the selected date range."
+                        />
                       );
                     }
                     
@@ -1504,22 +1668,22 @@ const TeamAnalytics: React.FC = () => {
             <div style={{
               backgroundColor: 'rgba(255, 255, 255, 0.9)',
               backdropFilter: 'blur(10px)',
-              borderRadius: window.innerWidth <= 768 ? '0.5rem' : '1rem',
-              padding: window.innerWidth <= 768 ? '0.75rem' : '2rem',
+              borderRadius: isMobile ? '0.5rem' : '1rem',
+              padding: isMobile ? '0.75rem' : '2rem',
               boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
               border: '1px solid rgba(255, 255, 255, 0.2)',
-              marginBottom: window.innerWidth <= 768 ? '0.75rem' : '2rem'
+              marginBottom: isMobile ? '0.75rem' : '2rem'
             }}>
               <h3 style={{ 
-                fontSize: window.innerWidth <= 768 ? '1rem' : '1.25rem', 
+                fontSize: isMobile ? '1rem' : '1.25rem', 
                 fontWeight: '600', 
                 color: '#1f2937',
-                marginBottom: window.innerWidth <= 768 ? '0.75rem' : '1.5rem',
+                marginBottom: isMobile ? '0.75rem' : '1.5rem',
                 textAlign: 'center'
               }}>
                 Team Performance Overview
               </h3>
-              <div style={{ height: window.innerWidth <= 768 ? '200px' : '300px', position: 'relative' }}>
+              <div style={{ height: isMobile ? '200px' : '300px', position: 'relative' }}>
                 <Bar
                   data={{
                     labels: analyticsData.analytics.teamPerformance.map((member: any) => 
@@ -1561,21 +1725,21 @@ const TeamAnalytics: React.FC = () => {
             <div style={{
               backgroundColor: 'rgba(255, 255, 255, 0.9)',
               backdropFilter: 'blur(10px)',
-              borderRadius: window.innerWidth <= 768 ? '1rem' : '1rem',
+              borderRadius: isMobile ? '1rem' : '1rem',
               padding: '1.5rem',
               boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
               border: '1px solid rgba(255, 255, 255, 0.2)',
-              marginBottom: window.innerWidth <= 768 ? '2rem' : '2rem'
+              marginBottom: isMobile ? '2rem' : '2rem'
             }}>
          <div style={{ 
            display: 'flex', 
            justifyContent: 'space-between', 
            alignItems: 'center',
-                  marginBottom: window.innerWidth <= 768 ? '1.5rem' : '1.5rem'
+                  marginBottom: isMobile ? '1.5rem' : '1.5rem'
          }}>
            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
              <h3 style={{ 
-               fontSize: window.innerWidth <= 768 ? '1rem' : '1.25rem', 
+               fontSize: isMobile ? '1rem' : '1.25rem', 
                fontWeight: '600', 
                color: '#1f2937',
                margin: '0'
@@ -1619,20 +1783,20 @@ const TeamAnalytics: React.FC = () => {
                   display: 'flex', 
                   alignItems: 'center', 
                   gap: '1rem',
-                  flexDirection: window.innerWidth <= 768 ? 'column' : 'row',
-                  alignSelf: window.innerWidth <= 768 ? 'flex-start' : 'center',
+                  flexDirection: isMobile ? 'column' : 'row',
+                  alignSelf: isMobile ? 'flex-start' : 'center',
                   width: '100%'
                 }}>
                   {/* Legend */}
                   <div style={{ 
                     display: 'flex', 
                     alignItems: 'center', 
-                    gap: window.innerWidth <= 768 ? '1rem' : '0.5rem',
-                    flexWrap: window.innerWidth <= 768 ? 'wrap' : 'nowrap',
-                    width: window.innerWidth <= 768 ? '100%' : 'auto',
-                    justifyContent: window.innerWidth <= 768 ? 'space-between' : 'flex-start'
+                    gap: isMobile ? '1rem' : '0.5rem',
+                    flexWrap: isMobile ? 'wrap' : 'nowrap',
+                    width: isMobile ? '100%' : 'auto',
+                    justifyContent: isMobile ? 'space-between' : 'flex-start'
                   }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: window.innerWidth <= 768 ? '45%' : 'auto' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: isMobile ? '45%' : 'auto' }}>
                       <div style={{
                         width: '12px',
                         height: '12px',
@@ -1642,7 +1806,7 @@ const TeamAnalytics: React.FC = () => {
                       }}></div>
                       <span style={{ fontSize: '0.875rem', color: '#6b7280', whiteSpace: 'nowrap' }}>Not Fit for Work</span>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: window.innerWidth <= 768 ? '45%' : 'auto' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: isMobile ? '45%' : 'auto' }}>
                       <div style={{
                         width: '12px',
                         height: '12px',
@@ -1654,7 +1818,7 @@ const TeamAnalytics: React.FC = () => {
                     </div>
                   </div>
                   {/* Time Filter Dropdown */}
-                  <div style={{ marginTop: window.innerWidth <= 768 ? '1rem' : '0', width: window.innerWidth <= 768 ? '100%' : 'auto' }}>
+                  <div style={{ marginTop: isMobile ? '1rem' : '0', width: isMobile ? '100%' : 'auto' }}>
                     <select 
                     value={readinessDateRange}
                     onChange={(e) => {
@@ -1672,7 +1836,7 @@ const TeamAnalytics: React.FC = () => {
                       color: readinessChartLoading ? '#9ca3af' : '#374151',
                       cursor: readinessChartLoading ? 'not-allowed' : 'pointer',
                       opacity: readinessChartLoading ? 0.7 : 1,
-                      width: window.innerWidth <= 768 ? '100%' : 'auto'
+                      width: isMobile ? '100%' : 'auto'
                     }}
                   >
                     <option value="week">This Week</option>
@@ -1721,7 +1885,7 @@ const TeamAnalytics: React.FC = () => {
                 </div>
               </div>
               
-              <div style={{ height: window.innerWidth <= 768 ? '200px' : '300px', position: 'relative' }}>
+              <div style={{ height: isMobile ? '200px' : '300px', position: 'relative' }}>
                 {readinessChartLoading ? (
                   <div style={{
                     display: 'flex',
@@ -1908,18 +2072,18 @@ const TeamAnalytics: React.FC = () => {
             {/* Additional Analytics Cards */}
             <div style={{ 
               display: 'flex',
-              flexDirection: window.innerWidth <= 768 ? 'column' : 'row',
-              flexWrap: window.innerWidth <= 768 ? 'nowrap' : 'wrap',
-              gap: window.innerWidth <= 768 ? '2rem' : '1.5rem',
-              marginBottom: window.innerWidth <= 768 ? '2rem' : '2rem'
+              flexDirection: isMobile ? 'column' : 'row',
+              flexWrap: isMobile ? 'nowrap' : 'wrap',
+              gap: isMobile ? '2rem' : '1.5rem',
+              marginBottom: isMobile ? '2rem' : '2rem'
             }}>
               <div style={{
                 background: 'rgba(255, 255, 255, 0.25)',
                 backdropFilter: 'blur(20px)',
-                borderRadius: window.innerWidth <= 768 ? '1rem' : '1rem',
-                padding: window.innerWidth <= 768 ? '1.5rem' : '1.5rem',
-                width: window.innerWidth <= 768 ? '100%' : 'auto',
-                flex: window.innerWidth <= 768 ? 'none' : '1',
+                borderRadius: isMobile ? '1rem' : '1rem',
+                padding: isMobile ? '1.5rem' : '1.5rem',
+                width: isMobile ? '100%' : 'auto',
+                flex: isMobile ? 'none' : '1',
                 boxShadow: '0 8px 32px 0 rgba(31, 38, 135, 0.37)',
                 border: '1px solid rgba(255, 255, 255, 0.18)',
                 transition: 'all 0.3s ease',
@@ -1928,8 +2092,8 @@ const TeamAnalytics: React.FC = () => {
               }}>
                 <div style={{ display: 'flex', alignItems: 'center' }}>
                   <div style={{ 
-                    width: window.innerWidth <= 768 ? '2rem' : '3rem', 
-                    height: window.innerWidth <= 768 ? '2rem' : '3rem', 
+                    width: isMobile ? '2rem' : '3rem', 
+                    height: isMobile ? '2rem' : '3rem', 
                     backgroundColor: 'rgba(59, 130, 246, 0.15)', 
                     backdropFilter: 'blur(10px)',
                     border: '1px solid rgba(59, 130, 246, 0.2)',
@@ -1958,10 +2122,10 @@ const TeamAnalytics: React.FC = () => {
               <div style={{
                 background: 'rgba(255, 255, 255, 0.25)',
                 backdropFilter: 'blur(20px)',
-                borderRadius: window.innerWidth <= 768 ? '1rem' : '1rem',
-                padding: window.innerWidth <= 768 ? '1.5rem' : '1.5rem',
-                width: window.innerWidth <= 768 ? '100%' : 'auto',
-                flex: window.innerWidth <= 768 ? 'none' : '1',
+                borderRadius: isMobile ? '1rem' : '1rem',
+                padding: isMobile ? '1.5rem' : '1.5rem',
+                width: isMobile ? '100%' : 'auto',
+                flex: isMobile ? 'none' : '1',
                 boxShadow: '0 8px 32px 0 rgba(31, 38, 135, 0.37)',
                 border: '1px solid rgba(255, 255, 255, 0.18)',
                 transition: 'all 0.3s ease',
@@ -1970,8 +2134,8 @@ const TeamAnalytics: React.FC = () => {
               }}>
                 <div style={{ display: 'flex', alignItems: 'center' }}>
                   <div style={{ 
-                    width: window.innerWidth <= 768 ? '2rem' : '3rem', 
-                    height: window.innerWidth <= 768 ? '2rem' : '3rem', 
+                    width: isMobile ? '2rem' : '3rem', 
+                    height: isMobile ? '2rem' : '3rem', 
                     backgroundColor: 'rgba(34, 197, 94, 0.15)', 
                     backdropFilter: 'blur(10px)',
                     border: '1px solid rgba(34, 197, 94, 0.2)',
@@ -2000,10 +2164,10 @@ const TeamAnalytics: React.FC = () => {
               <div style={{
                 background: 'rgba(255, 255, 255, 0.25)',
                 backdropFilter: 'blur(20px)',
-                borderRadius: window.innerWidth <= 768 ? '1rem' : '1rem',
-                padding: window.innerWidth <= 768 ? '1.5rem' : '1.5rem',
-                width: window.innerWidth <= 768 ? '100%' : 'auto',
-                flex: window.innerWidth <= 768 ? 'none' : '1',
+                borderRadius: isMobile ? '1rem' : '1rem',
+                padding: isMobile ? '1.5rem' : '1.5rem',
+                width: isMobile ? '100%' : 'auto',
+                flex: isMobile ? 'none' : '1',
                 boxShadow: '0 8px 32px 0 rgba(31, 38, 135, 0.37)',
                 border: '1px solid rgba(255, 255, 255, 0.18)',
                 transition: 'all 0.3s ease',
@@ -2012,8 +2176,8 @@ const TeamAnalytics: React.FC = () => {
               }}>
                 <div style={{ display: 'flex', alignItems: 'center' }}>
                   <div style={{ 
-                    width: window.innerWidth <= 768 ? '2rem' : '3rem', 
-                    height: window.innerWidth <= 768 ? '2rem' : '3rem', 
+                    width: isMobile ? '2rem' : '3rem', 
+                    height: isMobile ? '2rem' : '3rem', 
                     backgroundColor: 'rgba(147, 51, 234, 0.15)', 
                     backdropFilter: 'blur(10px)',
                     border: '1px solid rgba(147, 51, 234, 0.2)',
@@ -2047,11 +2211,11 @@ const TeamAnalytics: React.FC = () => {
             <div style={{
               backgroundColor: 'rgba(255, 255, 255, 0.9)',
               backdropFilter: 'blur(10px)',
-              borderRadius: window.innerWidth <= 768 ? '1rem' : '1rem',
+              borderRadius: isMobile ? '1rem' : '1rem',
               padding: '1.5rem',
               boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
               border: '1px solid rgba(255, 255, 255, 0.2)',
-              marginBottom: window.innerWidth <= 768 ? '2rem' : '2rem'
+              marginBottom: isMobile ? '2rem' : '2rem'
             }}>
               <TrendChart
                 title={`Emissions Trend - Work Readiness Analytics ${analyticsData?.analytics?.readinessTrendData?.length > 0 ? `(${analyticsData.analytics.readinessTrendData.length} ${analyticsData.analytics.readinessTrendData.length === 1 ? 'date' : 'dates'} with data)` : '(No submissions yet)'}`}
@@ -2122,27 +2286,27 @@ const TeamAnalytics: React.FC = () => {
 
             {/* Charts Section - Full Width */}
             <div style={{ 
-              display: window.innerWidth <= 768 ? 'flex' : 'grid', 
-              flexDirection: window.innerWidth <= 768 ? 'column' : 'row',
+              display: isMobile ? 'flex' : 'grid', 
+              flexDirection: isMobile ? 'column' : 'row',
               gridTemplateColumns: '2fr 1fr', 
-              gap: window.innerWidth <= 768 ? '3rem' : '1.5rem',
-              marginBottom: window.innerWidth <= 768 ? '3rem' : '2rem'
+              gap: isMobile ? '3rem' : '1.5rem',
+              marginBottom: isMobile ? '3rem' : '2rem'
             }}>
               {/* Team Performance Table - Takes 2/3 of space */}
               <div style={{
                 backgroundColor: 'rgba(255, 255, 255, 0.9)',
                 backdropFilter: 'blur(10px)',
-                borderRadius: window.innerWidth <= 768 ? '1rem' : '1rem',
+                borderRadius: isMobile ? '1rem' : '1rem',
                 boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
                 border: '1px solid rgba(255, 255, 255, 0.2)',
                 overflow: 'hidden'
               }}>
                 <div style={{ 
-                  padding: window.innerWidth <= 768 ? '1.5rem' : '1.5rem', 
+                  padding: isMobile ? '1.5rem' : '1.5rem', 
                   borderBottom: '1px solid rgba(229, 231, 235, 0.5)' 
                 }}>
                   <h3 style={{ 
-                    fontSize: window.innerWidth <= 768 ? '1rem' : '1.25rem', 
+                    fontSize: isMobile ? '1rem' : '1.25rem', 
                     fontWeight: '600', 
                     color: '#1f2937',
                     margin: '0'
@@ -2309,14 +2473,14 @@ const TeamAnalytics: React.FC = () => {
               <div style={{
                 backgroundColor: 'rgba(255, 255, 255, 0.9)',
                 backdropFilter: 'blur(10px)',
-                borderRadius: window.innerWidth <= 768 ? '1rem' : '1rem',
-                padding: window.innerWidth <= 768 ? '1.5rem' : '1.5rem',
+                borderRadius: isMobile ? '1rem' : '1rem',
+                padding: isMobile ? '1.5rem' : '1.5rem',
                 boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
                 border: '1px solid rgba(255, 255, 255, 0.2)',
                 height: 'fit-content'
               }}>
                 <h3 style={{ 
-                  fontSize: window.innerWidth <= 768 ? '1rem' : '1.25rem', 
+                  fontSize: isMobile ? '1rem' : '1.25rem', 
                   fontWeight: '600', 
                   color: '#1f2937',
                   margin: '0 0 1.5rem 0'
@@ -2430,13 +2594,13 @@ const TeamAnalytics: React.FC = () => {
             <div style={{
               backgroundColor: 'rgba(255, 255, 255, 0.9)',
               backdropFilter: 'blur(10px)',
-              borderRadius: window.innerWidth <= 768 ? '1rem' : '1rem',
-              padding: window.innerWidth <= 768 ? '1.5rem' : '2rem',
+              borderRadius: isMobile ? '1rem' : '1rem',
+              padding: isMobile ? '1.5rem' : '2rem',
               boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
               border: '1px solid rgba(255, 255, 255, 0.2)'
             }}>
               <h3 style={{ 
-                fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem', 
+                fontSize: isMobile ? '1.25rem' : '1.5rem', 
                 fontWeight: '600', 
                 color: '#1f2937',
                 margin: '0 0 2rem 0'
@@ -2446,18 +2610,18 @@ const TeamAnalytics: React.FC = () => {
               
               <div style={{ 
                 display: 'flex',
-                flexDirection: window.innerWidth <= 768 ? 'column' : 'row',
-                flexWrap: window.innerWidth <= 768 ? 'nowrap' : 'wrap',
-                gap: window.innerWidth <= 768 ? '2rem' : '1.5rem'
+                flexDirection: isMobile ? 'column' : 'row',
+                flexWrap: isMobile ? 'nowrap' : 'wrap',
+                gap: isMobile ? '2rem' : '1.5rem'
               }}>
                 <div style={{
                   backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                  borderRadius: window.innerWidth <= 768 ? '1rem' : '1rem',
-                  padding: window.innerWidth <= 768 ? '1.5rem' : '2rem',
+                  borderRadius: isMobile ? '1rem' : '1rem',
+                  padding: isMobile ? '1.5rem' : '2rem',
                   textAlign: 'center',
                   border: '2px solid rgba(59, 130, 246, 0.2)',
-                  width: window.innerWidth <= 768 ? '100%' : 'auto',
-                  flex: window.innerWidth <= 768 ? 'none' : '1'
+                  width: isMobile ? '100%' : 'auto',
+                  flex: isMobile ? 'none' : '1'
                 }}>
                   <div style={{ fontSize: '3rem', fontWeight: '700', color: '#3b82f6', marginBottom: '1rem' }}>
                     {analyticsData.analytics.loginStats.todayLogins}
@@ -2469,12 +2633,12 @@ const TeamAnalytics: React.FC = () => {
 
                 <div style={{
                   backgroundColor: 'rgba(34, 197, 94, 0.1)',
-                  borderRadius: window.innerWidth <= 768 ? '1rem' : '1rem',
-                  padding: window.innerWidth <= 768 ? '1.5rem' : '2rem',
+                  borderRadius: isMobile ? '1rem' : '1rem',
+                  padding: isMobile ? '1.5rem' : '2rem',
                   textAlign: 'center',
                   border: '2px solid rgba(34, 197, 94, 0.2)',
-                  width: window.innerWidth <= 768 ? '100%' : 'auto',
-                  flex: window.innerWidth <= 768 ? 'none' : '1'
+                  width: isMobile ? '100%' : 'auto',
+                  flex: isMobile ? 'none' : '1'
                 }}>
                   <div style={{ fontSize: '3rem', fontWeight: '700', color: '#22c55e', marginBottom: '1rem' }}>
                     {analyticsData.analytics.loginStats.weeklyLogins}
@@ -2486,8 +2650,8 @@ const TeamAnalytics: React.FC = () => {
 
                 <div style={{
                   backgroundColor: 'rgba(147, 51, 234, 0.1)',
-                  borderRadius: window.innerWidth <= 768 ? '1rem' : '1rem',
-                  padding: window.innerWidth <= 768 ? '1.5rem' : '2rem',
+                  borderRadius: isMobile ? '1rem' : '1rem',
+                  padding: isMobile ? '1.5rem' : '2rem',
                   textAlign: 'center',
                   border: '2px solid rgba(147, 51, 234, 0.2)'
                 }}>
@@ -2525,18 +2689,18 @@ const TeamAnalytics: React.FC = () => {
             alignItems: 'center',
             justifyContent: 'center',
             zIndex: 99999,
-            padding: window.innerWidth <= 768 ? '0' : '2rem'
+            padding: isMobile ? '0' : '2rem'
           }}>
             <div style={{
               backgroundColor: 'white',
-              borderRadius: window.innerWidth <= 768 ? '0' : '1rem',
-              padding: window.innerWidth <= 768 ? '0.75rem' : '2rem',
+              borderRadius: isMobile ? '0' : '1rem',
+              padding: isMobile ? '0.75rem' : '2rem',
               maxWidth: '100vw',
               width: '100%',
               maxHeight: '100vh',
               overflow: 'auto',
               position: 'relative',
-              boxShadow: window.innerWidth <= 768 ? 'none' : '0 25px 50px -12px rgba(0, 0, 0, 0.25)'
+              boxShadow: isMobile ? 'none' : '0 25px 50px -12px rgba(0, 0, 0, 0.25)'
             }}>
               <button
                 onClick={() => setShowChartModal(false)}
@@ -2550,17 +2714,17 @@ const TeamAnalytics: React.FC = () => {
                   padding: '0.5rem',
                   borderRadius: '0.5rem',
                   color: '#6b7280',
-                  fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem'
+                  fontSize: isMobile ? '1.25rem' : '1.5rem'
                 }}
               >
                 ×
               </button>
               
               <h2 style={{
-                fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem',
+                fontSize: isMobile ? '1.25rem' : '1.5rem',
                 fontWeight: '600',
                 color: '#1f2937',
-                marginBottom: window.innerWidth <= 768 ? '0.75rem' : '1rem',
+                marginBottom: isMobile ? '0.75rem' : '1rem',
                 textAlign: 'center'
               }}>
                 Work Readiness Distribution - Detailed View
@@ -2570,8 +2734,8 @@ const TeamAnalytics: React.FC = () => {
               <div style={{
                 display: 'flex',
                 justifyContent: 'center',
-                gap: window.innerWidth <= 768 ? '0.125rem' : '0.5rem',
-                marginBottom: window.innerWidth <= 768 ? '0.75rem' : '1.5rem',
+                gap: isMobile ? '0.125rem' : '0.5rem',
+                marginBottom: isMobile ? '0.75rem' : '1.5rem',
                 flexWrap: 'wrap'
               }}>
                 {['week', 'month', 'year', 'custom'].map((range) => (
@@ -2579,13 +2743,13 @@ const TeamAnalytics: React.FC = () => {
                     key={range}
                     onClick={() => setWorkReadinessDateRange(range as any)}
                     style={{
-                      padding: window.innerWidth <= 768 ? '0.25rem 0.5rem' : '0.5rem 1rem',
+                      padding: isMobile ? '0.25rem 0.5rem' : '0.5rem 1rem',
                       borderRadius: '0.5rem',
                       border: '1px solid rgba(0, 0, 0, 0.1)',
                       backgroundColor: workReadinessDateRange === range ? 'rgba(59, 130, 246, 0.1)' : 'transparent',
                       color: workReadinessDateRange === range ? '#3b82f6' : '#6b7280',
                       fontWeight: workReadinessDateRange === range ? 600 : 500,
-                      fontSize: window.innerWidth <= 768 ? '0.625rem' : '0.875rem',
+                      fontSize: isMobile ? '0.625rem' : '0.875rem',
                       cursor: 'pointer',
                       transition: 'all 0.2s ease'
                     }}
@@ -2638,7 +2802,7 @@ const TeamAnalytics: React.FC = () => {
                   display: 'flex',
                   justifyContent: 'center',
                   gap: '1rem',
-                  marginBottom: window.innerWidth <= 768 ? '0.75rem' : '1.5rem',
+                  marginBottom: isMobile ? '0.75rem' : '1.5rem',
                   flexWrap: 'wrap'
                 }}>
                   <div>
@@ -2692,6 +2856,15 @@ const TeamAnalytics: React.FC = () => {
                       (analyticsData.analytics.workReadinessStats.pending || 0)));
                   
                   const total = completed + pending + notStarted;
+                  
+                  // Debug logging
+                  console.log('🔍 Detailed View Debug:', {
+                    completed,
+                    pending,
+                    notStarted,
+                    total,
+                    workReadinessStats: analyticsData.analytics.workReadinessStats
+                  });
                   
                   // If no data, show empty state
                   if (total === 0) {
@@ -2798,8 +2971,8 @@ const TeamAnalytics: React.FC = () => {
               <div style={{
                 marginTop: '2rem',
                 display: 'flex',
-                flexDirection: window.innerWidth <= 768 ? 'column' : 'row',
-                flexWrap: window.innerWidth <= 768 ? 'nowrap' : 'wrap',
+                flexDirection: isMobile ? 'column' : 'row',
+                flexWrap: isMobile ? 'nowrap' : 'wrap',
                 gap: '1rem'
               }}>
                 <div style={{
@@ -2809,7 +2982,7 @@ const TeamAnalytics: React.FC = () => {
                   border: '1px solid #bbf7d0'
                 }}>
                   <div style={{ fontSize: '0.875rem', color: '#166534', fontWeight: '600' }}>Completed</div>
-                  <div style={{ fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem', color: '#166534', fontWeight: '700' }}>
+                  <div style={{ fontSize: isMobile ? '1.25rem' : '1.5rem', color: '#166534', fontWeight: '700' }}>
                     {analyticsData.analytics.workReadinessStats.completed || 0}
                   </div>
                 </div>
@@ -2820,7 +2993,7 @@ const TeamAnalytics: React.FC = () => {
                   border: '1px solid #fed7aa'
                 }}>
                   <div style={{ fontSize: '0.875rem', color: '#92400e', fontWeight: '600' }}>Pending</div>
-                  <div style={{ fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem', color: '#92400e', fontWeight: '700' }}>
+                  <div style={{ fontSize: isMobile ? '1.25rem' : '1.5rem', color: '#92400e', fontWeight: '700' }}>
                     {analyticsData.analytics.workReadinessStats.pending || 0}
                   </div>
                   <div style={{ fontSize: '0.75rem', color: '#92400e', fontWeight: '500' }}>
@@ -2834,7 +3007,7 @@ const TeamAnalytics: React.FC = () => {
                   border: '1px solid #fecaca'
                 }}>
                   <div style={{ fontSize: '0.875rem', color: '#991b1b', fontWeight: '600' }}>Not Started</div>
-                  <div style={{ fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem', color: '#991b1b', fontWeight: '700' }}>
+                  <div style={{ fontSize: isMobile ? '1.25rem' : '1.5rem', color: '#991b1b', fontWeight: '700' }}>
                     {analyticsData.analytics.workReadinessStats.notStarted || 
                      ((analyticsData.analytics.workReadinessStats.total || 0) - 
                       ((analyticsData.analytics.workReadinessStats.completed || 0) + 
@@ -2854,11 +3027,101 @@ const TeamAnalytics: React.FC = () => {
           
           const total = todayLogins + weeklyLogins + monthlyLogins;
           
-          // If no data, close the modal and don't show it
+          // Debug logging
+          console.log('🔍 Login Modal Debug:', {
+            todayLogins,
+            weeklyLogins,
+            monthlyLogins,
+            total,
+            loginStats: analyticsData.analytics.loginStats
+          });
+          
+          // If no data, show empty state instead of closing modal
           if (total === 0) {
-            setShowLoginModal(false);
-            setToast({ message: 'No login data available for the selected period', type: 'error' });
-            return null;
+            console.log('❌ No login data available, showing empty state');
+            return (
+              <div style={{
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                backgroundColor: 'rgba(0, 0, 0, 0.5)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 1000
+              }}>
+                <div style={{
+                  backgroundColor: 'white',
+                  borderRadius: '1rem',
+                  padding: '2rem',
+                  maxWidth: '500px',
+                  width: '90%',
+                  maxHeight: '90vh',
+                  overflow: 'auto',
+                  position: 'relative'
+                }}>
+                  <button
+                    onClick={() => setShowLoginModal(false)}
+                    style={{
+                      position: 'absolute',
+                      top: '1rem',
+                      right: '1rem',
+                      backgroundColor: 'transparent',
+                      border: 'none',
+                      cursor: 'pointer',
+                      padding: '0.5rem',
+                      borderRadius: '0.5rem',
+                      color: '#6b7280',
+                      fontSize: '1.5rem'
+                    }}
+                  >
+                    ×
+                  </button>
+                  
+                  <h2 style={{
+                    fontSize: '1.5rem',
+                    fontWeight: '600',
+                    color: '#1f2937',
+                    marginBottom: '1rem',
+                    textAlign: 'center'
+                  }}>
+                    Login Activity Trends - Detailed View
+                  </h2>
+                  
+                  <div style={{
+                    height: '300px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#6b7280'
+                  }}>
+                    <div style={{
+                      width: '120px',
+                      height: '120px',
+                      borderRadius: '50%',
+                      backgroundColor: 'rgba(107, 114, 128, 0.1)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      marginBottom: '1rem'
+                    }}>
+                      <svg width="60" height="60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                      </svg>
+                    </div>
+                    <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '0.5rem' }}>
+                      No Login Data Available
+                    </h3>
+                    <p style={{ fontSize: '0.875rem', textAlign: 'center' }}>
+                      No login activity found for the selected date range.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            );
           }
           
           return (
@@ -2873,12 +3136,12 @@ const TeamAnalytics: React.FC = () => {
             alignItems: 'center',
             justifyContent: 'center',
             zIndex: 1000,
-            padding: window.innerWidth <= 768 ? '0.75rem' : '2rem'
+            padding: isMobile ? '0.75rem' : '2rem'
           }}>
             <div style={{
               backgroundColor: 'white',
-              borderRadius: window.innerWidth <= 768 ? '0.5rem' : '1rem',
-              padding: window.innerWidth <= 768 ? '0.75rem' : '2rem',
+              borderRadius: isMobile ? '0.5rem' : '1rem',
+              padding: isMobile ? '0.75rem' : '2rem',
               maxWidth: '900px',
               width: '100%',
               maxHeight: '90vh',
@@ -2897,7 +3160,7 @@ const TeamAnalytics: React.FC = () => {
                   padding: '0.5rem',
                   borderRadius: '0.5rem',
                   color: '#6b7280',
-                  fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem'
+                  fontSize: isMobile ? '1.25rem' : '1.5rem'
                 }}
               >
                 ×
@@ -2910,7 +3173,7 @@ const TeamAnalytics: React.FC = () => {
                 marginBottom: '1rem'
               }}>
                 <h2 style={{
-                  fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem',
+                  fontSize: isMobile ? '1.25rem' : '1.5rem',
                   fontWeight: '600',
                   color: '#1f2937',
                   margin: 0
@@ -2960,7 +3223,7 @@ const TeamAnalytics: React.FC = () => {
                 display: 'flex',
                 justifyContent: 'center',
                 gap: '0.5rem',
-                marginBottom: window.innerWidth <= 768 ? '0.75rem' : '1.5rem',
+                marginBottom: isMobile ? '0.75rem' : '1.5rem',
                 flexWrap: 'wrap'
               }}>
                 {['week', 'month', 'year', 'custom'].map((range) => (
@@ -3030,7 +3293,7 @@ const TeamAnalytics: React.FC = () => {
                   display: 'flex',
                   justifyContent: 'center',
                   gap: '1rem',
-                  marginBottom: window.innerWidth <= 768 ? '0.75rem' : '1.5rem',
+                  marginBottom: isMobile ? '0.75rem' : '1.5rem',
                   flexWrap: 'wrap'
                 }}>
                   <div>
@@ -3220,8 +3483,8 @@ const TeamAnalytics: React.FC = () => {
               <div style={{
                 marginTop: '2rem',
                 display: 'flex',
-                flexDirection: window.innerWidth <= 768 ? 'column' : 'row',
-                flexWrap: window.innerWidth <= 768 ? 'nowrap' : 'wrap',
+                flexDirection: isMobile ? 'column' : 'row',
+                flexWrap: isMobile ? 'nowrap' : 'wrap',
                 gap: '1rem'
               }}>
                 <div style={{
@@ -3231,7 +3494,7 @@ const TeamAnalytics: React.FC = () => {
                   border: '1px solid #bae6fd'
                 }}>
                   <div style={{ fontSize: '0.875rem', color: '#0369a1', fontWeight: '600' }}>Today's Logins</div>
-                  <div style={{ fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem', color: '#0369a1', fontWeight: '700' }}>
+                  <div style={{ fontSize: isMobile ? '1.25rem' : '1.5rem', color: '#0369a1', fontWeight: '700' }}>
                     {analyticsData.analytics.loginStats.todayLogins || 0}
                   </div>
                 </div>
@@ -3242,7 +3505,7 @@ const TeamAnalytics: React.FC = () => {
                   border: '1px solid #bbf7d0'
                 }}>
                   <div style={{ fontSize: '0.875rem', color: '#166534', fontWeight: '600' }}>Weekly Logins</div>
-                  <div style={{ fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem', color: '#166534', fontWeight: '700' }}>
+                  <div style={{ fontSize: isMobile ? '1.25rem' : '1.5rem', color: '#166534', fontWeight: '700' }}>
                     {analyticsData.analytics.loginStats.weeklyLogins || 0}
                   </div>
                 </div>
@@ -3253,7 +3516,7 @@ const TeamAnalytics: React.FC = () => {
                   border: '1px solid #fde68a'
                 }}>
                   <div style={{ fontSize: '0.875rem', color: '#92400e', fontWeight: '600' }}>Monthly Logins</div>
-                  <div style={{ fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem', color: '#92400e', fontWeight: '700' }}>
+                  <div style={{ fontSize: isMobile ? '1.25rem' : '1.5rem', color: '#92400e', fontWeight: '700' }}>
                     {analyticsData.analytics.loginStats.monthlyLogins || 0}
                   </div>
                 </div>
@@ -3276,12 +3539,12 @@ const TeamAnalytics: React.FC = () => {
             alignItems: 'center',
             justifyContent: 'center',
             zIndex: 1000,
-            padding: window.innerWidth <= 768 ? '0.75rem' : '2rem'
+            padding: isMobile ? '0.75rem' : '2rem'
           }}>
             <div style={{
               backgroundColor: 'white',
-              borderRadius: window.innerWidth <= 768 ? '0.5rem' : '1rem',
-              padding: window.innerWidth <= 768 ? '0.75rem' : '2rem',
+              borderRadius: isMobile ? '0.5rem' : '1rem',
+              padding: isMobile ? '0.75rem' : '2rem',
               maxWidth: '90vw',
               maxHeight: '90vh',
               width: '1000px',
@@ -3307,7 +3570,7 @@ const TeamAnalytics: React.FC = () => {
                   justifyContent: 'center',
                   width: '2rem',
                   height: '2rem',
-                  fontSize: window.innerWidth <= 768 ? '1rem' : '1.25rem',
+                  fontSize: isMobile ? '1rem' : '1.25rem',
                   transition: 'all 0.2s ease'
                 }}
                 onMouseEnter={(e) => {
@@ -3325,7 +3588,7 @@ const TeamAnalytics: React.FC = () => {
               {/* Modal Header */}
               <div style={{ marginBottom: '2rem' }}>
                 <h2 style={{
-                  fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem',
+                  fontSize: isMobile ? '1.25rem' : '1.5rem',
                   fontWeight: '600',
                   color: '#1f2937',
                   margin: '0 0 0.5rem 0'
@@ -3346,7 +3609,7 @@ const TeamAnalytics: React.FC = () => {
                 display: 'flex', 
                 justifyContent: 'space-between', 
                 alignItems: 'center',
-                marginBottom: window.innerWidth <= 768 ? '0.75rem' : '2rem',
+                marginBottom: isMobile ? '0.75rem' : '2rem',
                 padding: '1rem',
                 backgroundColor: '#f9fafb',
                 borderRadius: '0.75rem',
@@ -3625,12 +3888,12 @@ const TeamAnalytics: React.FC = () => {
             alignItems: 'center',
             justifyContent: 'center',
             zIndex: 99999,
-            padding: window.innerWidth <= 768 ? '0' : '0.5rem'
+            padding: isMobile ? '0' : '0.5rem'
           }}>
             <div style={{
               backgroundColor: 'white',
-              borderRadius: window.innerWidth <= 768 ? '0' : '0.75rem',
-              padding: window.innerWidth <= 768 ? '0.75rem' : '2rem',
+              borderRadius: isMobile ? '0' : '0.75rem',
+              padding: isMobile ? '0.75rem' : '2rem',
               maxWidth: '100vw',
               maxHeight: '100vh',
               width: '100%',
@@ -3638,14 +3901,14 @@ const TeamAnalytics: React.FC = () => {
               overflow: 'auto',
               position: 'relative',
               animation: 'modalSlideIn 0.3s ease-out',
-              boxShadow: window.innerWidth <= 768 ? 'none' : '0 25px 50px -12px rgba(0, 0, 0, 0.25)'
+              boxShadow: isMobile ? 'none' : '0 25px 50px -12px rgba(0, 0, 0, 0.25)'
             }}>
               {/* Modal Header */}
               <div style={{
                 display: 'flex',
                 justifyContent: 'space-between',
                 alignItems: 'center',
-                marginBottom: window.innerWidth <= 768 ? '0.75rem' : '2rem',
+                marginBottom: isMobile ? '0.75rem' : '2rem',
                 paddingBottom: '1rem',
                 borderBottom: '1px solid #e5e7eb'
               }}>
@@ -3664,7 +3927,7 @@ const TeamAnalytics: React.FC = () => {
                     </svg>
                   </div>
                   <h2 style={{
-                    fontSize: window.innerWidth <= 768 ? '1rem' : '1.5rem',
+                    fontSize: isMobile ? '1rem' : '1.5rem',
                     fontWeight: '600',
                     color: '#1f2937',
                     margin: 0
@@ -3707,8 +3970,8 @@ const TeamAnalytics: React.FC = () => {
                 display: 'flex',
                 justifyContent: 'center',
                 alignItems: 'center',
-                gap: window.innerWidth <= 768 ? '0.25rem' : '1rem',
-                marginBottom: window.innerWidth <= 768 ? '0.75rem' : '2rem',
+                gap: isMobile ? '0.25rem' : '1rem',
+                marginBottom: isMobile ? '0.75rem' : '2rem',
                 flexWrap: 'wrap'
               }}>
                 {/* Date Range Buttons */}
@@ -3769,7 +4032,7 @@ const TeamAnalytics: React.FC = () => {
                   display: 'flex',
                   justifyContent: 'center',
                   gap: '1rem',
-                  marginBottom: window.innerWidth <= 768 ? '0.75rem' : '2rem',
+                  marginBottom: isMobile ? '0.75rem' : '2rem',
                   flexWrap: 'wrap'
                 }}>
                   <div>
@@ -3814,7 +4077,7 @@ const TeamAnalytics: React.FC = () => {
               )}
 
               {/* Chart Container */}
-              <div style={{ height: window.innerWidth <= 768 ? '300px' : '600px', position: 'relative' }}>
+              <div style={{ height: isMobile ? '300px' : '600px', position: 'relative' }}>
                 {(() => {
                   if (!analyticsData) {
                     return (
@@ -3982,42 +4245,42 @@ const TeamAnalytics: React.FC = () => {
 
               {/* Summary Cards */}
               <div style={{
-                marginTop: window.innerWidth <= 768 ? '1rem' : '2rem',
+                marginTop: isMobile ? '1rem' : '2rem',
                 display: 'flex',
-                flexDirection: window.innerWidth <= 768 ? 'column' : 'row',
-                flexWrap: window.innerWidth <= 768 ? 'nowrap' : 'wrap',
-                gap: window.innerWidth <= 768 ? '0.25rem' : '1rem'
+                flexDirection: isMobile ? 'column' : 'row',
+                flexWrap: isMobile ? 'nowrap' : 'wrap',
+                gap: isMobile ? '0.25rem' : '1rem'
               }}>
                 <div style={{
                   backgroundColor: '#f0f9ff',
-                  padding: window.innerWidth <= 768 ? '0.5rem' : '1rem',
+                  padding: isMobile ? '0.5rem' : '1rem',
                   borderRadius: '0.5rem',
                   border: '1px solid #bae6fd'
                 }}>
-                  <div style={{ fontSize: window.innerWidth <= 768 ? '0.75rem' : '0.875rem', color: '#0369a1', fontWeight: '600' }}>Today's Logins</div>
-                  <div style={{ fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem', color: '#0369a1', fontWeight: '700' }}>
+                  <div style={{ fontSize: isMobile ? '0.75rem' : '0.875rem', color: '#0369a1', fontWeight: '600' }}>Today's Logins</div>
+                  <div style={{ fontSize: isMobile ? '1.25rem' : '1.5rem', color: '#0369a1', fontWeight: '700' }}>
                     {analyticsData?.analytics?.loginStats?.todayLogins || 0}
                   </div>
                 </div>
                 <div style={{
                   backgroundColor: '#f0fdf4',
-                  padding: window.innerWidth <= 768 ? '0.5rem' : '1rem',
+                  padding: isMobile ? '0.5rem' : '1rem',
                   borderRadius: '0.5rem',
                   border: '1px solid #bbf7d0'
                 }}>
-                  <div style={{ fontSize: window.innerWidth <= 768 ? '0.75rem' : '0.875rem', color: '#166534', fontWeight: '600' }}>Weekly Logins</div>
-                  <div style={{ fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem', color: '#166534', fontWeight: '700' }}>
+                  <div style={{ fontSize: isMobile ? '0.75rem' : '0.875rem', color: '#166534', fontWeight: '600' }}>Weekly Logins</div>
+                  <div style={{ fontSize: isMobile ? '1.25rem' : '1.5rem', color: '#166534', fontWeight: '700' }}>
                     {analyticsData?.analytics?.loginStats?.weeklyLogins || 0}
                   </div>
                 </div>
                 <div style={{
                   backgroundColor: '#fef3c7',
-                  padding: window.innerWidth <= 768 ? '0.5rem' : '1rem',
+                  padding: isMobile ? '0.5rem' : '1rem',
                   borderRadius: '0.5rem',
                   border: '1px solid #fde68a'
                 }}>
-                  <div style={{ fontSize: window.innerWidth <= 768 ? '0.75rem' : '0.875rem', color: '#92400e', fontWeight: '600' }}>Monthly Logins</div>
-                  <div style={{ fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem', color: '#92400e', fontWeight: '700' }}>
+                  <div style={{ fontSize: isMobile ? '0.75rem' : '0.875rem', color: '#92400e', fontWeight: '600' }}>Monthly Logins</div>
+                  <div style={{ fontSize: isMobile ? '1.25rem' : '1.5rem', color: '#92400e', fontWeight: '700' }}>
                     {analyticsData?.analytics?.loginStats?.monthlyLogins || 0}
                   </div>
                 </div>
@@ -4028,6 +4291,8 @@ const TeamAnalytics: React.FC = () => {
       </Box>
     </LayoutWithSidebar>
   );
-};
+});
+
+TeamAnalytics.displayName = 'TeamAnalytics';
 
 export default TeamAnalytics;

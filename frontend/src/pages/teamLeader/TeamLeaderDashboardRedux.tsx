@@ -36,8 +36,8 @@ import StatCard from '../../components/StatCard';
 import TrendChart from '../../components/TrendChart';
 import RecentActivityItem from '../../components/RecentActivityItem';
 import TeamKPIDashboard from '../../components/TeamKPIDashboard';
-import MonthlyPerformanceSection from '../../components/MonthlyPerformanceSection';
 import MonthlyAssignmentTracking from '../../components/MonthlyAssignmentTracking';
+import TeamLeaderShiftDisplay from '../../components/TeamLeaderShiftDisplay';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -368,6 +368,9 @@ const TeamLeaderDashboardRedux: React.FC = () => {
           </Typography>
         </Box>
 
+        {/* Current Shift Assignment */}
+        <TeamLeaderShiftDisplay />
+
         {/* Key Metrics */}
         <Grid container spacing={3} sx={{ mb: 4 }}>
           <Grid item xs={12} sm={6} md={3}>
@@ -480,7 +483,7 @@ const TeamLeaderDashboardRedux: React.FC = () => {
         {/* Tab 3: Weekly Goals & KPI */}
         {mainTab === 3 && (
           <Box sx={{ mb: 4, p: { xs: 1, md: 0 } }}>
-            <MonthlyPerformanceSection teamLeaderId={user?.id || ''} />
+            {/* Monthly Performance Section removed - using main dashboard monthly component instead */}
           </Box>
         )}
 

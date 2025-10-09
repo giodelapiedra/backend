@@ -465,12 +465,12 @@ const calculateAggregatedMetrics = (teamLeaders, workers, workReadiness, assignm
   // Calculate completion rate (Management Score)
   const completionRate = totalAssignments > 0 ? (completedAssignments / totalAssignments) * 100 : 0;
   
-  // Calculate on-time submissions (within 24 hours)
+  // Calculate on-time submissions (based on due_time)
   const onTimeSubmissions = assignments.filter(a => {
     if (a.status !== 'completed') return false;
-    const assignedDate = new Date(a.assigned_date);
     const completedDate = new Date(a.completed_at || a.updated_at);
-    return completedDate <= new Date(assignedDate.getTime() + 24 * 60 * 60 * 1000);
+    const dueTime = new Date(a.due_time);
+    return completedDate <= dueTime;
   }).length;
   
   // Calculate on-time rate (Efficiency Rating)

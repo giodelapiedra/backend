@@ -3,12 +3,13 @@
  */
 
 const validateAssignmentData = (req, res, next) => {
-  const { workerIds, assignedDate, dueTime } = req.body;
+  const { workerIds, assignedDate, dueTime, team } = req.body;
   
   console.log('🔍 Validation - Request body:', JSON.stringify(req.body, null, 2));
   console.log('🔍 Validation - workerIds:', workerIds, 'Type:', typeof workerIds, 'IsArray:', Array.isArray(workerIds));
   console.log('🔍 Validation - assignedDate:', assignedDate, 'Type:', typeof assignedDate);
   console.log('🔍 Validation - dueTime:', dueTime, 'Type:', typeof dueTime);
+  console.log('🔍 Validation - team:', team, 'Type:', typeof team);
   
   const errors = [];
   
@@ -40,6 +41,11 @@ const validateAssignmentData = (req, res, next) => {
     }
   }
   
+  // Validate team
+  if (!team || typeof team !== 'string' || team.trim() === '') {
+    errors.push('Team is required');
+  }
+  
   // Validate due time (optional) - accept time format like "09:00" or "09:00:00"
   if (dueTime && typeof dueTime === 'string') {
     const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$/;
@@ -64,7 +70,9 @@ const validateAssignmentData = (req, res, next) => {
 const validateWorkReadinessData = (req, res, next) => {
   const { workerId, assessmentData } = req.body;
   
-  // validation log intentionally omitted in production; use centralized logger if needed
+  console.log('🔍 Work Readiness Validation - Request body:', JSON.stringify(req.body, null, 2));
+  console.log('🔍 Work Readiness Validation - workerId:', workerId, 'Type:', typeof workerId);
+  console.log('🔍 Work Readiness Validation - assessmentData:', assessmentData, 'Type:', typeof assessmentData);
   
   const errors = [];
   
@@ -82,26 +90,38 @@ const validateWorkReadinessData = (req, res, next) => {
   if (!assessmentData) {
     errors.push('Assessment data is required');
   } else {
-    const { readinessLevel, fatigueLevel } = assessmentData;
+    // Support both camelCase and snake_case field names
+    const { 
+      readinessLevel, 
+      fatigueLevel, 
+      readiness_level, 
+      fatigue_level 
+    } = assessmentData;
+    
+    // Use snake_case if available, otherwise camelCase
+    const actualReadinessLevel = readiness_level || readinessLevel;
+    const actualFatigueLevel = fatigue_level || fatigueLevel;
     
     // Validate readiness level
     const validReadinessLevels = ['fit', 'minor', 'not_fit'];
-    if (!readinessLevel) {
+    if (!actualReadinessLevel) {
       errors.push('Readiness level is required');
-    } else if (!validReadinessLevels.includes(readinessLevel)) {
+    } else if (!validReadinessLevels.includes(actualReadinessLevel)) {
       errors.push(`Invalid readiness level. Must be one of: ${validReadinessLevels.join(', ')}`);
     }
     
     // Validate fatigue level
-    if (fatigueLevel === undefined || fatigueLevel === null) {
+    if (actualFatigueLevel === undefined || actualFatigueLevel === null) {
       errors.push('Fatigue level is required');
-    } else if (typeof fatigueLevel !== 'number' || fatigueLevel < 1 || fatigueLevel > 10) {
+    } else if (typeof actualFatigueLevel !== 'number' || actualFatigueLevel < 1 || actualFatigueLevel > 10) {
       errors.push('Fatigue level must be a number between 1 and 10');
     }
   }
   
   if (errors.length > 0) {
     // log validation errors via centralized logger if needed
+    console.log('❌ VALIDATION ERRORS:', errors);
+    console.log('❌ REQUEST BODY:', JSON.stringify(req.body, null, 2));
     return res.status(400).json({
       success: false,
       message: 'Validation failed',

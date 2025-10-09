@@ -153,11 +153,29 @@ const MultiTeamAnalytics: React.FC = () => {
     open: boolean;
     team: TeamPerformance | null;
   }>({ open: false, team: null });
-  // Date filter for Active Teams and DB queries
-  const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  // Date filter for Active Teams and DB queries (PHT)
+  const [selectedDate, setSelectedDate] = useState<string>(() => {
+    // Get today's date in PHT
+    const now = new Date();
+    const phtOffset = 8 * 60; // 8 hours in minutes
+    const phtTime = new Date(now.getTime() + (phtOffset * 60 * 1000));
+    return phtTime.toISOString().split('T')[0];
+  });
   const [dateRangeMode, setDateRangeMode] = useState<'single' | 'range'>('single');
-  const [startDate, setStartDate] = useState<string>(new Date().toISOString().split('T')[0]);
-  const [endDate, setEndDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [startDate, setStartDate] = useState<string>(() => {
+    // Get today's date in PHT
+    const now = new Date();
+    const phtOffset = 8 * 60; // 8 hours in minutes
+    const phtTime = new Date(now.getTime() + (phtOffset * 60 * 1000));
+    return phtTime.toISOString().split('T')[0];
+  });
+  const [endDate, setEndDate] = useState<string>(() => {
+    // Get today's date in PHT
+    const now = new Date();
+    const phtOffset = 8 * 60; // 8 hours in minutes
+    const phtTime = new Date(now.getTime() + (phtOffset * 60 * 1000));
+    return phtTime.toISOString().split('T')[0];
+  });
   // Simple in-memory cache by key (period|date)
   const cacheRef = React.useRef<Map<string, any>>(new Map());
   // Prevent race conditions on fast filter changes
@@ -323,6 +341,32 @@ const MultiTeamAnalytics: React.FC = () => {
       if (casesError) throw casesError;
       if (unselectedError) throw unselectedError;
 
+      // ✅ FETCH TEAM KPI DATA FROM BACKEND
+      console.log('🎯 Fetching team KPI data from backend...');
+      const teamKPIPromises = (teamLeaders || []).map(async (leader) => {
+        try {
+          const response = await fetch(`/api/goal-kpi/team-leader/assignment-summary?teamLeaderId=${leader.id}`);
+          const data = await response.json();
+          return {
+            teamLeaderId: leader.id,
+            kpiData: data.success ? data : null
+          };
+        } catch (error) {
+          console.warn(`⚠️ Failed to fetch KPI for team leader ${leader.id}:`, error);
+          return {
+            teamLeaderId: leader.id,
+            kpiData: null
+          };
+        }
+      });
+
+      const teamKPIData = await Promise.all(teamKPIPromises);
+      console.log('📊 Team KPI data fetched:', teamKPIData.map(t => ({
+        teamLeaderId: t.teamLeaderId,
+        hasKPI: !!t.kpiData,
+        score: t.kpiData?.teamKPI?.score || 'N/A'
+      })));
+
       console.log('📊 Raw data counts:', {
         teamLeaders: teamLeaders?.length || 0,
         workers: workers?.length || 0,
@@ -338,7 +382,8 @@ const MultiTeamAnalytics: React.FC = () => {
         workReadiness || [],
         assignments || [],
         cases || [],
-        unselectedWorkers || []
+        unselectedWorkers || [],
+        teamKPIData || []
       );
 
       console.log('🎯 Processed team performance:', processedTeamPerformance.map(t => ({
@@ -479,7 +524,8 @@ const MultiTeamAnalytics: React.FC = () => {
     workReadiness: any[],
     assignments: any[],
     cases: any[],
-    unselectedWorkers: any[]
+    unselectedWorkers: any[],
+    teamKPIData: any[] = []
   ): TeamPerformance[] => {
     return teamLeaders.map(leader => {
       const teamWorkers = workers.filter(w => w.team_leader_id === leader.id);
@@ -547,9 +593,22 @@ const MultiTeamAnalytics: React.FC = () => {
         const level = wr.readiness_level;
         return level === 'fit' ? 100 : level === 'minor' ? 75 : level === 'not_fit' ? 25 : 0;
       });
-      const healthScore = readinessScores.length > 0 
-        ? readinessScores.reduce((sum: number, score: number) => sum + score, 0) / readinessScores.length 
-        : 0;
+      
+      // ✅ USE BACKEND KPI DATA FOR HEALTH SCORE
+      const teamKPIRecord = teamKPIData.find(kpi => kpi.teamLeaderId === leader.id);
+      let healthScore = 0;
+      
+      if (teamKPIRecord?.kpiData?.teamKPI?.score !== undefined) {
+        // Use backend KPI score (includes pending bonus and overdue penalty)
+        healthScore = teamKPIRecord.kpiData.teamKPI.score;
+        console.log(`🎯 Team ${leader.team || 'Unassigned'} (${leader.first_name} ${leader.last_name}): Using backend KPI score: ${healthScore}`);
+      } else {
+        // Fallback to readiness-based calculation
+        healthScore = readinessScores.length > 0 
+          ? readinessScores.reduce((sum: number, score: number) => sum + score, 0) / readinessScores.length 
+          : 0;
+        console.log(`⚠️ Team ${leader.team || 'Unassigned'} (${leader.first_name} ${leader.last_name}): Using fallback readiness score: ${healthScore}`);
+      }
 
       // Check if team leader has started any activity for the selected day
       const hasStartedActivity = assignedTodayCount > 0 || readinessToday > 0;
@@ -922,11 +981,17 @@ const MultiTeamAnalytics: React.FC = () => {
               onChange={(e, newMode) => {
                 if (newMode !== null) {
                   setDateRangeMode(newMode);
-                  // Reset to today when switching modes
+                  // Reset to today when switching modes (PHT)
                   if (newMode === 'single') {
-                    setSelectedDate(new Date().toISOString().split('T')[0]);
+                    const now = new Date();
+                    const phtOffset = 8 * 60; // 8 hours in minutes
+                    const phtTime = new Date(now.getTime() + (phtOffset * 60 * 1000));
+                    setSelectedDate(phtTime.toISOString().split('T')[0]);
                   } else {
-                    const today = new Date().toISOString().split('T')[0];
+                    const now = new Date();
+                    const phtOffset = 8 * 60; // 8 hours in minutes
+                    const phtTime = new Date(now.getTime() + (phtOffset * 60 * 1000));
+                    const today = phtTime.toISOString().split('T')[0];
                     setStartDate(today);
                     setEndDate(today);
                   }
@@ -1038,7 +1103,11 @@ const MultiTeamAnalytics: React.FC = () => {
             variant="outlined" 
                 size="small"
                 onClick={() => {
-                  const today = new Date().toISOString().split('T')[0];
+                  // Get today's date in PHT
+                  const now = new Date();
+                  const phtOffset = 8 * 60; // 8 hours in minutes
+                  const phtTime = new Date(now.getTime() + (phtOffset * 60 * 1000));
+                  const today = phtTime.toISOString().split('T')[0];
                   if (dateRangeMode === 'single') {
                     setSelectedDate(today);
                   } else {
@@ -1492,7 +1561,13 @@ const MultiTeamAnalytics: React.FC = () => {
                   <Button 
                     variant="outlined" 
                     size="small"
-                    onClick={() => setSelectedDate(new Date().toISOString().split('T')[0])}
+                    onClick={() => {
+                      // Get today's date in PHT
+                      const now = new Date();
+                      const phtOffset = 8 * 60; // 8 hours in minutes
+                      const phtTime = new Date(now.getTime() + (phtOffset * 60 * 1000));
+                      setSelectedDate(phtTime.toISOString().split('T')[0]);
+                    }}
                     sx={{
                       textTransform: 'none',
                       borderColor: '#e5e7eb',
@@ -2388,7 +2463,13 @@ const MultiTeamAnalytics: React.FC = () => {
                     <Button 
                       variant="outlined" 
                       size="small"
-                      onClick={() => setSelectedDate(new Date().toISOString().split('T')[0])}
+                      onClick={() => {
+                      // Get today's date in PHT
+                      const now = new Date();
+                      const phtOffset = 8 * 60; // 8 hours in minutes
+                      const phtTime = new Date(now.getTime() + (phtOffset * 60 * 1000));
+                      setSelectedDate(phtTime.toISOString().split('T')[0]);
+                    }}
                       sx={{
                         minWidth: { xs: '100%', sm: 'auto' },
                         textTransform: 'none',

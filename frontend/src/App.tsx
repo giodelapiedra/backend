@@ -27,6 +27,7 @@ import Analytics from './pages/employer/Analytics';
 import CaseManagerDashboardRedux from './pages/caseManager/CaseManagerDashboardRedux';
 import SiteSupervisorDashboardRedux from './pages/siteSupervisor/SiteSupervisorDashboardRedux';
 import TeamLeaderMonitoring from './pages/siteSupervisor/TeamLeaderMonitoring';
+import ShiftManagement from './pages/siteSupervisor/ShiftManagement';
 import MultiTeamAnalytics from './components/MultiTeamAnalytics';
 import GPInsurerDashboard from './pages/gpInsurer/GPInsurerDashboard';
 import TeamLeaderDashboard from './pages/teamLeader/TeamLeaderDashboard';
@@ -331,6 +332,12 @@ function App() {
             <Route path="/site-supervisor/multi-team-analytics" element={
               <ProtectedRoute allowedRoles={['site_supervisor']}>
                 <MultiTeamAnalytics />
+              </ProtectedRoute>
+            } />
+            
+            <Route path="/site-supervisor/shift-management" element={
+              <ProtectedRoute allowedRoles={['site_supervisor']}>
+                <ShiftManagement />
               </ProtectedRoute>
             } />
             

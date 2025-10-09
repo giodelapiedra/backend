@@ -1,6 +1,125 @@
 import axios from 'axios';
 import { authClient } from '../lib/supabase';
 
+// API Response Types
+interface BaseAPIResponse {
+  success: boolean;
+  message?: string;
+}
+
+interface AssignmentKPIData {
+  rating: string;
+  color: string;
+  description: string;
+  score: number;
+  completionRate: number;
+  onTimeRate: number;
+  qualityScore: number;
+  completedAssignments: number;
+  totalAssignments: number;
+}
+
+interface AssignmentMetrics {
+  totalAssignments: number;
+  completedAssignments: number;
+  onTimeSubmissions: number;
+  qualityScore: number;
+  completionRate: number;
+  onTimeRate: number;
+}
+
+interface RecentAssignment {
+  id: string;
+  assignedDate: string;
+  status: string;
+  dueTime: string;
+  completedAt?: string;
+  isOnTime: boolean;
+}
+
+interface AssignmentKPIResponse extends BaseAPIResponse {
+  kpi: AssignmentKPIData;
+  metrics: AssignmentMetrics;
+  recentAssignments: RecentAssignment[];
+  period: {
+    start: string;
+    end: string;
+    month: string;
+  };
+}
+
+interface TeamAssignmentKPIData {
+  rating: string;
+  color: string;
+  description: string;
+  score: number;
+  completionRate: number;
+  onTimeRate: number;
+  qualityScore: number;
+  pendingBonus: number;
+  overduePenalty: number;
+  completedAssignments: number;
+  pendingAssignments: number;
+  overdueAssignments: number;
+  totalAssignments: number;
+}
+
+interface TeamAssignmentMetrics {
+  totalAssignments: number;
+  completedAssignments: number;
+  onTimeSubmissions: number;
+  pendingAssignments: number;
+  overdueAssignments: number;
+  qualityScore: number;
+  completionRate: number;
+  onTimeRate: number;
+  totalMembers: number;
+}
+
+interface IndividualAssignmentKPI {
+  workerId: string;
+  workerName: string;
+  workerEmail: string;
+  kpi: AssignmentKPIData;
+  assignments: {
+    total: number;
+    completed: number;
+    onTime: number;
+    pending: number;
+    overdue: number;
+  };
+}
+
+interface TeamAssignmentKPIResponse extends BaseAPIResponse {
+  teamKPI: AssignmentKPIData;
+  teamMetrics: TeamAssignmentMetrics;
+  individualKPIs: IndividualAssignmentKPI[];
+  period: {
+    start: string;
+    end: string;
+    month: string;
+  };
+}
+
+interface AssessmentSubmissionResponse extends BaseAPIResponse {
+  assessmentData: any;
+  cycleInfo?: any;
+  message: string; // Make message required since it's used in components
+}
+
+interface AssignmentResponse extends BaseAPIResponse {
+  assignments: any[];
+}
+
+interface UnselectedWorkersResponse extends BaseAPIResponse {
+  unselectedWorkers: any[];
+}
+
+interface CanSubmitResponse extends BaseAPIResponse {
+  canSubmit: boolean;
+  assignment?: any;
+}
+
 // Backend API base URL from environment variables
 const BACKEND_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001/api';
 
@@ -13,7 +132,7 @@ const backendApi = axios.create({
   },
 });
 
-// Request interceptor - add auth token
+// Request interceptor - add auth token with refresh
 backendApi.interceptors.request.use(
   async (config) => {
     try {
@@ -22,11 +141,14 @@ backendApi.interceptors.request.use(
       
       if (session?.access_token) {
         config.headers['Authorization'] = `Bearer ${session.access_token}`;
+        console.log('🔑 Token added to request:', session.access_token.substring(0, 20) + '...');
+      } else {
+        console.warn('⚠️ No access token found in session');
       }
       
       return config;
     } catch (error) {
-      console.error('Error getting auth token:', error);
+      console.error('❌ Error getting auth token:', error);
       return config;
     }
   },
@@ -35,14 +157,39 @@ backendApi.interceptors.request.use(
   }
 );
 
-// Response interceptor - handle errors
+// Response interceptor - handle errors with token refresh
 backendApi.interceptors.response.use(
   (response) => response,
-  (error) => {
-    if (error.response?.status === 401) {
-      console.log('Unauthorized - redirecting to login');
-      // Redirect to login if needed
-      window.location.href = '/login';
+  async (error) => {
+    const originalRequest = error.config;
+    
+    if (error.response?.status === 401 && !originalRequest._retry) {
+      console.log('🔐 401 Unauthorized - attempting token refresh...');
+      originalRequest._retry = true;
+      
+      try {
+        // Try to refresh the session
+        const { data: { session }, error: refreshError } = await authClient.auth.refreshSession();
+        
+        if (refreshError) {
+          console.error('❌ Token refresh failed:', refreshError);
+          // Redirect to login
+          window.location.href = '/login';
+          return Promise.reject(error);
+        }
+        
+        if (session?.access_token) {
+          console.log('✅ Token refreshed successfully');
+          // Update the original request with new token
+          originalRequest.headers['Authorization'] = `Bearer ${session.access_token}`;
+          // Retry the original request
+          return backendApi(originalRequest);
+        }
+      } catch (refreshError) {
+        console.error('❌ Error during token refresh:', refreshError);
+        window.location.href = '/login';
+        return Promise.reject(error);
+      }
     }
     
     // Log network errors for debugging
@@ -59,8 +206,8 @@ backendApi.interceptors.response.use(
   }
 );
 
-// Retry helper function
-const retryRequest = async (requestFn: () => Promise<any>, maxRetries = 3, delay = 1000) => {
+// Retry helper function with proper generic typing
+const retryRequest = async <T>(requestFn: () => Promise<T>, maxRetries = 3, delay = 1000): Promise<T> => {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       return await requestFn();
@@ -75,6 +222,9 @@ const retryRequest = async (requestFn: () => Promise<any>, maxRetries = 3, delay
       await new Promise(resolve => setTimeout(resolve, delay * attempt));
     }
   }
+  
+  // This should never be reached, but TypeScript requires it
+  throw new Error('Retry function exhausted all attempts');
 };
 
 // KPI API helper functions
@@ -86,14 +236,14 @@ export const kpiAPI = {
   },
 
   // Worker KPI endpoints
-  async getWorkerWeeklyProgress(workerId: string) {
+  async getWorkerWeeklyProgress(workerId: string): Promise<any> {
     return retryRequest(async () => {
       const response = await backendApi.get(`/goal-kpi/worker/weekly-progress?workerId=${workerId}`);
       return response.data;
     });
   },
 
-  async getWorkerAssignmentKPI(workerId: string) {
+  async getWorkerAssignmentKPI(workerId: string): Promise<AssignmentKPIResponse> {
     return retryRequest(async () => {
       const response = await backendApi.get(`/goal-kpi/worker/assignment-kpi?workerId=${workerId}`);
       return response.data;
@@ -101,28 +251,28 @@ export const kpiAPI = {
   },
 
   // Team Leader KPI endpoints
-  async getTeamWeeklySummary(teamLeaderId: string) {
+  async getTeamWeeklySummary(teamLeaderId: string): Promise<any> {
     return retryRequest(async () => {
       const response = await backendApi.get(`/goal-kpi/team-leader/weekly-summary?teamLeaderId=${teamLeaderId}`);
       return response.data;
     });
   },
 
-  async getTeamAssignmentSummary(teamLeaderId: string) {
+  async getTeamAssignmentSummary(teamLeaderId: string): Promise<TeamAssignmentKPIResponse> {
     return retryRequest(async () => {
       const response = await backendApi.get(`/goal-kpi/team-leader/assignment-summary?teamLeaderId=${teamLeaderId}`);
       return response.data;
     });
   },
 
-  async getTeamMonitoringDashboard(teamLeaderId: string) {
+  async getTeamMonitoringDashboard(teamLeaderId: string): Promise<any> {
     return retryRequest(async () => {
       const response = await backendApi.get(`/goal-kpi/team-leader/monitoring-dashboard?teamLeaderId=${teamLeaderId}`);
       return response.data;
     });
   },
 
-  async getMonthlyPerformanceTracking(teamLeaderId: string) {
+  async getMonthlyPerformanceTracking(teamLeaderId: string): Promise<any> {
     return retryRequest(async () => {
       const response = await backendApi.get(`/goal-kpi/team-leader/monthly-performance?teamLeaderId=${teamLeaderId}`);
       return response.data;
@@ -130,7 +280,7 @@ export const kpiAPI = {
   },
 
   // Assessment submission
-  async submitAssessment(assessmentData: any) {
+  async submitAssessment(assessmentData: any): Promise<AssessmentSubmissionResponse> {
     return retryRequest(async () => {
       const response = await backendApi.post('/goal-kpi/submit-assessment', assessmentData);
       return response.data;
@@ -138,7 +288,7 @@ export const kpiAPI = {
   },
 
   // Login cycle tracking
-  async trackLoginCycle(loginData: any) {
+  async trackLoginCycle(loginData: any): Promise<any> {
     return retryRequest(async () => {
       const response = await backendApi.post('/goal-kpi/login-cycle', loginData);
       return response.data;

@@ -1,16 +1,14 @@
-const { db, supabase } = require('../config/supabase');
+const { supabase } = require('../config/supabase');
 
-// Import services - no fallbacks, standardize on Supabase
-const WorkReadinessService = require('../services/WorkReadinessService');
-const cacheService = require('../services/CacheService');
+// Import utilities
 const logger = require('../utils/logger');
+const dateUtils = require('../utils/dateUtils');
+const kpiUtils = require('../utils/kpiUtils');
+const teamAnalyticsUtils = require('../utils/teamAnalyticsUtils');
 const errorHandler = require('../middleware/errorHandler');
-const performance = require('../middleware/performance');
 
 const asyncHandler = errorHandler.asyncHandler;
 const createError = errorHandler.createError;
-const monitorDatabaseQuery = performance.monitorDatabaseQuery;
-const monitorBusinessOperation = performance.monitorBusinessOperation;
 
 /**
  * Goal Tracking & KPI Controller
@@ -30,44 +28,7 @@ const monitorBusinessOperation = performance.monitorBusinessOperation;
  * @param {number} consecutiveDays - Number of consecutive days completed (0-7)
  * @returns {object} KPI score and rating
  */
-const calculateKPI = (consecutiveDays) => {
-  // Use service layer
-  return WorkReadinessService.calculateKPI(consecutiveDays);
-  
-  // Fallback KPI calculation
-  let rating, color, description, score;
-  
-  if (consecutiveDays >= 7) {
-    rating = 'Excellent';
-    color = '#10b981';
-    description = 'Outstanding! Complete 7-day cycle achieved.';
-    score = 100;
-  } else if (consecutiveDays >= 5) {
-    rating = 'Good';
-    color = '#22c55e';
-    description = 'Good progress! Keep going to complete the cycle.';
-    score = Math.round((consecutiveDays / 7) * 100);
-  } else if (consecutiveDays >= 3) {
-    rating = 'Average';
-    color = '#eab308';
-    description = 'Average progress. Focus on consistency.';
-    score = Math.round((consecutiveDays / 7) * 100);
-  } else {
-    rating = 'No KPI Points';
-    color = '#ef4444';
-    description = 'Need at least 3 consecutive days for KPI points.';
-    score = 0;
-  }
-
-  return {
-    rating,
-    color,
-    description,
-    score: score,
-    consecutiveDays: consecutiveDays,
-    maxDays: 7
-  };
-};
+const calculateKPI = kpiUtils.calculateKPI;
 
 /**
  * Calculate KPI score based on assignment completion rate
@@ -75,88 +36,11 @@ const calculateKPI = (consecutiveDays) => {
  * @param {number} totalAssignments - Total number of assignments given
  * @param {number} onTimeSubmissions - Number of on-time submissions
  * @param {number} qualityScore - Average quality score (0-100)
+ * @param {number} pendingAssignments - Number of pending assignments with future due dates (optional)
+ * @param {number} overdueAssignments - Number of overdue assignments (optional)
  * @returns {object} KPI score and rating
  */
-const calculateAssignmentKPI = (completedAssignments, totalAssignments, onTimeSubmissions = 0, qualityScore = 0) => {
-  // Input validation
-  if (typeof completedAssignments !== 'number' || typeof totalAssignments !== 'number') {
-    console.error('❌ Invalid input types for KPI calculation:', {
-      completedAssignments: typeof completedAssignments,
-      totalAssignments: typeof totalAssignments
-    });
-    return {
-      rating: 'Error',
-      color: '#ef4444',
-      description: 'Invalid data for KPI calculation',
-      score: 0,
-      completionRate: 0,
-      onTimeRate: 0,
-      qualityScore: 0,
-      completedAssignments: 0,
-      totalAssignments: 0
-    };
-  }
-  
-  // Handle edge cases
-  if (totalAssignments === 0) {
-    return {
-      rating: 'No Assignments',
-      color: '#6b7280',
-      description: 'No work readiness assignments given yet.',
-      score: 0,
-      completionRate: 0,
-      onTimeRate: 0,
-      qualityScore: 0,
-      completedAssignments: 0,
-      totalAssignments: 0
-    };
-  }
-  
-  // Ensure values are within valid ranges
-  const completionRate = Math.max(0, Math.min(100, (completedAssignments / totalAssignments) * 100));
-  const onTimeRate = Math.max(0, Math.min(100, (onTimeSubmissions / totalAssignments) * 100));
-  const validatedQualityScore = Math.max(0, Math.min(100, qualityScore));
-  
-  // Calculate weighted score
-  // 60% completion rate + 20% on-time rate + 20% quality score
-  const weightedScore = (completionRate * 0.6) + (onTimeRate * 0.2) + (validatedQualityScore * 0.2);
-  
-  // Determine rating based on weighted score
-  let rating, color, description;
-  if (weightedScore >= 90) {
-    rating = 'Excellent';
-    color = '#10b981';
-    description = 'Outstanding performance! Perfect assignment completion and quality.';
-  } else if (weightedScore >= 75) {
-    rating = 'Good';
-    color = '#22c55e';
-    description = 'Good performance! Keep up the consistency.';
-  } else if (weightedScore >= 60) {
-    rating = 'Average';
-    color = '#eab308';
-    description = 'Average performance. Focus on completing more assignments.';
-  } else if (weightedScore >= 40) {
-    rating = 'Below Average';
-    color = '#f97316';
-    description = 'Below average performance. Needs improvement.';
-  } else {
-    rating = 'Needs Improvement';
-    color = '#ef4444';
-    description = 'Poor performance. Immediate attention required.';
-  }
-
-  return {
-    rating,
-    color,
-    description,
-    score: Math.round(weightedScore),
-    completionRate: Math.round(completionRate),
-    onTimeRate: Math.round(onTimeRate),
-    qualityScore: Math.round(validatedQualityScore),
-    completedAssignments,
-    totalAssignments
-  };
-};
+const calculateAssignmentKPI = kpiUtils.calculateAssignmentKPI;
 
 /**
  * Calculate KPI score based on completion rate percentage (Legacy - for backward compatibility)
@@ -165,131 +49,26 @@ const calculateAssignmentKPI = (completedAssignments, totalAssignments, onTimeSu
  * @param {number} totalAssessments - Total number of assessments submitted (optional)
  * @returns {object} KPI score and rating
  */
-const calculateCompletionRateKPI = (completionRate, currentDay = null, totalAssessments = null) => {
-  let rating, color, description, score;
-  
-  // Check if user hasn't started KPI rating yet
-  if (completionRate === 0 && (totalAssessments === 0 || totalAssessments === null)) {
-    rating = 'Not Started';
-    color = '#6b7280'; // gray
-    description = 'KPI rating not yet started. Begin your work readiness assessments.';
-    score = 0;
-    return { rating, color, description, score, completionRate, maxRate: 100 };
-  }
-  
-  // Special handling for early cycle days
-  if (currentDay !== null && currentDay <= 2) {
-    // Days 1-2: Neutral rating, no penalty
-    rating = 'On Track';
-    color = '#3b82f6'; // blue
-    description = 'Just started the cycle. Keep going!';
-    score = 0; // No KPI points yet
-    return { rating, color, description, score, completionRate, maxRate: 100 };
-  }
-  
-  // KPI scoring based on completion rate for days 3+:
-  // 100%: Excellent
-  // 70-99%: Good  
-  // 50-69%: Average
-  // Below 50%: Needs Improvement
-  
-  if (completionRate >= 100) {
-    rating = 'Excellent';
-    color = '#10b981'; // green
-    description = 'Outstanding! Perfect completion rate achieved.';
-    score = 100;
-  } else if (completionRate >= 70) {
-    rating = 'Good';
-    color = '#22c55e'; // light green
-    description = 'Good progress! Keep up the consistency.';
-    score = Math.round(completionRate);
-  } else if (completionRate >= 50) {
-    rating = 'Average';
-    color = '#eab308'; // yellow/orange
-    description = 'Average progress. Focus on consistency.';
-    score = Math.round(completionRate);
-  } else {
-    rating = 'Needs Improvement';
-    color = '#ef4444'; // red
-    description = 'Below average performance. Needs attention.';
-    score = Math.round(completionRate);
-  }
-
-  return {
-    rating,
-    color,
-    description,
-    score: score,
-    completionRate: completionRate,
-    maxRate: 100
-  };
-};
+const calculateCompletionRateKPI = kpiUtils.calculateCompletionRateKPI;
 
 /**
  * Get start and end dates for a given week (Sunday to Saturday)
  * @param {Date} date - Any date in the week
  * @returns {object} Week start and end dates
  */
-const getWeekDateRange = (date = new Date()) => {
-  const d = new Date(date);
-  const day = d.getDay(); // 0 = Sunday, 1 = Monday, etc.
-  const diff = d.getDate() - day; // Go back to Sunday
-  
-  // Sunday
-  const startDate = new Date(d.setDate(diff));
-  startDate.setHours(0, 0, 0, 0);
-  
-  // Saturday
-  const endDate = new Date(startDate);
-  endDate.setDate(startDate.getDate() + 6);
-  endDate.setHours(23, 59, 59, 999);
-  
-  return {
-    startDate: startDate.toISOString(),
-    endDate: endDate.toISOString(),
-    startDateISO: startDate.toISOString().split('T')[0],
-    endDateISO: endDate.toISOString().split('T')[0],
-    weekLabel: `Week of ${startDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}`
-  };
-};
+const getWeekDateRange = dateUtils.getWeekDateRange;
 
 /**
  * Get current week and previous week data for comparison
  * @param {Date} date - Reference date (defaults to current date)
  * @returns {object} Current and previous week information
  */
-const getWeekComparison = (date = new Date()) => {
-  const currentWeek = getWeekDateRange(date);
-  
-  // Get previous week
-  const prevWeekStart = new Date(currentWeek.startDate);
-  prevWeekStart.setDate(prevWeekStart.getDate() - 7);
-  const previousWeek = getWeekDateRange(prevWeekStart);
-  
-  return {
-    currentWeek,
-    previousWeek
-  };
-};
+const getWeekComparison = dateUtils.getWeekComparison;
 
 /**
  * Calculate working days count between start and end date (Monday-Friday)
  */
-const getWorkingDaysCount = (startDate, endDate) => {
-  let workingDays = 0;
-  const start = new Date(startDate);
-  const end = new Date(endDate);
-  
-  while (start <= end) {
-    const day = start.getDay();
-    if (day !== 0 && day !== 6) { // Not Sunday (0) or Saturday (6)
-      workingDays++;
-    }
-    start.setDate(start.getDate() + 1);
-  }
-  
-  return workingDays;
-};
+const getWorkingDaysCount = dateUtils.getWorkingDaysCount;
 
 /**
  * Calculate working days elapsed since start of current week (Monday)
@@ -297,109 +76,12 @@ const getWorkingDaysCount = (startDate, endDate) => {
  * @param {Date} currentDate - Current date (defaults to today)
  * @returns {number} Number of working days elapsed (0-5)
  */
-const getWorkingDaysElapsed = (weekStartDate, currentDate = new Date()) => {
-  const startOfWeek = new Date(weekStartDate);
-  const today = new Date(currentDate);
-  
-  let workingDaysElapsed = 0;
-  const currentDateInWeek = new Date(startOfWeek);
-  
-  // Count working days from Monday up to today (or end of week)
-  while (currentDateInWeek <= today && currentDateInWeek.getDay() <= 5) {
-    if (currentDateInWeek.getDay() >= 1 && currentDateInWeek.getDay() <= 5) { // Monday = 1, Friday = 5
-      workingDaysElapsed++;
-    }
-    currentDateInWeek.setDate(currentDateInWeek.getDate() + 1);
-  }
-  
-  // Cap at 5 working days
-  return Math.min(workingDaysElapsed, 5);
-};
+const getWorkingDaysElapsed = dateUtils.getWorkingDaysElapsed;
 
 /**
  * Calculate submission streaks
  */
-const calculateStreaks = (assessments) => {
-  if (!assessments || assessments.length === 0) {
-    return { current: 0, longest: 0 };
-  }
-
-  // Sort assessments by date
-  const sortedAssessments = assessments
-    .map(a => a)
-    .sort((a, b) => new Date(a.submitted_at) - new Date(b.submitted_at));
-
-  let longestStreak = 0;
-  let tempStreak = 0;
-  let lastDate = null;
-
-  // Calculate working days streak (consecutive weekdays)
-  sortedAssessments.forEach(assessment => {
-    const assessmentDate = new Date(assessment.submitted_at);
-    
-    // Skip weekends
-    if (assessmentDate.getDay() === 0 || assessmentDate.getDay() === 6) {
-      return;
-    }
-    
-    if (!lastDate) {
-      tempStreak = 1;
-    } else {
-      const daysDiff = Math.floor((assessmentDate - lastDate) / (1000 * 60 * 60 * 24));
-      
-      if (daysDiff === 1) {
-        tempStreak++;
-      } else {
-        longestStreak = Math.max(longestStreak, tempStreak);
-        tempStreak = 1; // Start new streak
-      }
-    }
-    
-    lastDate = new Date(assessmentDate);
-  });
-
-  longestStreak = Math.max(longestStreak, tempStreak);
-  
-  // Calculate current streak from the end
-  let currentStreak = 0;
-  const today = new Date();
-  const sortedDates = [...new Set(sortedAssessments
-    .map(a => new Date(a.submitted_at))
-    .filter(d => d.getDay() !== 0 && d.getDay() !== 6) // Only weekdays
-    .sort((a, b) => b - a))]; // Sort descending (most recent first)
-
-  for (let i = 0; i < sortedDates.length; i++) {
-    if (i === 0) {
-      const lastSubmission = sortedDates[i];
-      const daysSinceLastSubmission = Math.floor((today - lastSubmission) / (1000 * 60 * 60 * 24));
-      
-      if (daysSinceLastSubmission <= 1) {
-        currentStreak = 1;
-        
-        // Continue checking previous days
-        let j = 1;
-        while (j < sortedDates.length) {
-          const currentDate = sortedDates[j - 1];
-          const previousDate = sortedDates[j];
-          const daysDiff = Math.floor((currentDate - previousDate) / (1000 * 60 * 60 * 24));
-          
-          if (daysDiff === 1) {
-            currentStreak++;
-            j++;
-          } else {
-            break;
-          }
-        }
-      }
-    }
-    break;
-  }
-
-  return {
-    current: currentStreak,
-    longest: longestStreak
-  };
-};
+const calculateStreaks = kpiUtils.calculateStreaks;
 
 /**
  * Get Weekly Work Readiness Goal Tracking for Worker Dashboard (Cycle-based)
@@ -565,7 +247,7 @@ const getWorkerWeeklyProgress = async (req, res) => {
  */
 const getMonthlyPerformanceTracking = async (req, res) => {
   try {
-    console.log('📅 getMonthlyPerformanceTracking called with:', req.query);
+    logger.logBusiness('Monthly Performance Tracking Request', { query: req.query });
     const teamLeaderId = req.query.teamLeaderId;
     const { 
       year = new Date().getFullYear(), 
@@ -601,9 +283,12 @@ const getMonthlyPerformanceTracking = async (req, res) => {
     const monthStart = new Date(targetDate.getFullYear(), targetDate.getMonth(), 1);
     const monthEnd = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0, 23, 59, 59);
     
-    console.log(`📅 Analyzing month: ${monthStart.toISOString().split('T')[0]} to ${monthEnd.toISOString().split('T')[0]}`);
-    console.log(`👥 Team members found: ${teamMembers?.length || 0}`);
-    console.log(`🆔 Team member IDs:`, teamMemberIds);
+    logger.logBusiness('Monthly Analysis', {
+      monthStart: dateUtils.getDateString(monthStart),
+      monthEnd: dateUtils.getDateString(monthEnd),
+      teamMembersCount: teamMembers?.length || 0,
+      teamMemberIds
+    });
     
     // 1. MONTHLY KPI CALCULATION FOR EACH WORKER
     const monthlyWorkerKPIs = await Promise.all(teamMembers.map(async (member) => {
@@ -629,7 +314,10 @@ const getMonthlyPerformanceTracking = async (req, res) => {
       const totalAssessments = monthlyAssessments?.length || 0;
       const completedCyclesCount = completedCycles?.length || 0;
       
-      console.log(`👤 Worker ${member.first_name} ${member.last_name}: ${totalAssessments} assessments found`);
+      logger.logBusiness('Worker Assessment Count', {
+        workerName: `${member.first_name} ${member.last_name}`,
+        totalAssessments
+      });
       
       // Calculate working days in the month (Monday-Friday)
       const workingDaysInMonth = getWorkingDaysInMonth(monthStart, monthEnd);
@@ -775,12 +463,12 @@ const getMonthlyPerformanceTracking = async (req, res) => {
     }
     
     // 4. PERFORMANCE INSIGHTS
-    console.log('🔍 Generating insights with data:', {
+    logger.logBusiness('Generating Performance Insights', {
       workerKPIsCount: monthlyWorkerKPIs.length,
       teamSummary: monthlyTeamSummary,
       trendsCount: monthlyTrends.length
     });
-    const performanceInsights = generateMonthlyInsights(monthlyWorkerKPIs, monthlyTeamSummary, monthlyTrends);
+    const performanceInsights = teamAnalyticsUtils.generateMonthlyInsights(monthlyWorkerKPIs, monthlyTeamSummary, monthlyTrends);
     
     res.json({
       success: true,
@@ -912,7 +600,7 @@ const generateMonthlyInsights = (monthlyWorkerKPIs, teamSummary, monthlyTrends) 
 };
 const getTeamMonitoringDashboard = async (req, res) => {
   try {
-    console.log('📊 getTeamMonitoringDashboard called with:', req.query);
+    logger.logBusiness('Team Monitoring Dashboard Request', { query: req.query });
     const teamLeaderId = req.query.teamLeaderId;
     const { timeRange = '30' } = req.query; // Last 30 days by default
     
@@ -1082,7 +770,7 @@ const getTeamMonitoringDashboard = async (req, res) => {
           completedCyclesHistory: completedCyclesHistory,
           teamPerformanceSummary: teamPerformanceSummary,
           performanceTrends: performanceTrends,
-          insights: generateMonitoringInsights(currentCycleStatus, completedCyclesHistory, teamPerformanceSummary)
+          insights: teamAnalyticsUtils.generateMonitoringInsights(currentCycleStatus, completedCyclesHistory, teamPerformanceSummary)
         }
       }
     });
@@ -1260,32 +948,30 @@ const calculateImprovedTeamGrade = (teamMetrics, baseTeamKPI) => {
 
 const getTeamWeeklyKPI = async (req, res) => {
   try {
-    console.log('🎯 getTeamWeeklyKPI called with:', req.query);
-    console.log('🎯 Request headers:', req.headers);
-    console.log('🎯 Request method:', req.method);
-    console.log('🎯 Request URL:', req.url);
+    logger.logBusiness('Team Weekly KPI Request', { 
+      query: req.query,
+      method: req.method,
+      url: req.url
+    });
     
     const teamLeaderId = req.query.teamLeaderId;
     const { weekOffset = 0, teamFilter } = req.query;
     
     if (!teamLeaderId) {
-      console.log('❌ No team leader ID provided');
+      logger.warn('Team Weekly KPI: No team leader ID provided');
       return res.status(400).json({
         success: false,
         message: 'Team Leader ID is required'
       });
     }
     
-    // Quick test response to see if API is working
-    console.log('✅ API is being called! Team Leader ID:', teamLeaderId);
-    
-    console.log('✅ Team Leader ID:', teamLeaderId);
+    logger.logBusiness('Team Weekly KPI: API Called', { teamLeaderId });
     
     // Calculate target week using automatic current date
     const weekInfo = getWeekComparison(new Date());
     
     // Get the team leader's managed teams first
-    console.log('🔍 Querying team leader info:', teamLeaderId);
+    logger.logBusiness('Querying Team Leader Info', { teamLeaderId });
     const { data: teamLeader, error: teamLeaderError } = await supabase
       .from('users')
       .select('managed_teams, team')
@@ -1294,13 +980,11 @@ const getTeamWeeklyKPI = async (req, res) => {
       .single();
     
     if (teamLeaderError) {
-      console.log('❌ Team leader query error:', teamLeaderError);
+      logger.error('Team leader query error', { error: teamLeaderError, teamLeaderId });
       throw teamLeaderError;
     }
     
-    console.log('✅ Team leader managed teams:', teamLeader?.managed_teams);
-    console.log('✅ Team leader team:', teamLeader?.team);
-    console.log('👤 Team Leader Details:', {
+    logger.logBusiness('Team Leader Details', {
       id: teamLeaderId,
       managed_teams: teamLeader?.managed_teams,
       team: teamLeader?.team
@@ -1311,10 +995,10 @@ const getTeamWeeklyKPI = async (req, res) => {
     if (teamLeader?.team) {
       // Use only the team leader's primary team (one-to-one relationship)
       teamsToQuery = [teamLeader.team];
-      console.log('✅ Using primary team for one-to-one relationship:', teamLeader.team);
+      logger.logBusiness('Using Primary Team', { team: teamLeader.team });
     } else {
       // If no team info at all, return empty result
-      console.log('⚠️ No team information found for team leader');
+      logger.warn('No team information found for team leader', { teamLeaderId });
       return res.json({
         success: true,
         data: {
@@ -1336,7 +1020,7 @@ const getTeamWeeklyKPI = async (req, res) => {
     }
     
     // Get team members whose teams are in the teams to query
-    console.log('🔍 Querying team members for teams:', teamsToQuery);
+    logger.logBusiness('Querying Team Members', { teamsToQuery });
     const { data: teamMembers, error: teamMembersError } = await supabase
       .from('users')
       .select('id, first_name, last_name, email, team')
@@ -1344,25 +1028,28 @@ const getTeamWeeklyKPI = async (req, res) => {
       .in('team', teamsToQuery);
     
     if (teamMembersError) {
-      console.log('❌ Team members query error:', teamMembersError);
+      logger.error('Team members query error', { error: teamMembersError, teamsToQuery });
       throw teamMembersError;
     }
     
-    console.log('✅ Found team members:', teamMembers?.length || 0);
-    console.log('🔍 Team Members Details:', teamMembers?.map(m => ({
-      id: m.id,
-      name: `${m.first_name} ${m.last_name}`,
-      email: m.email,
-      team: m.team
-    })));
+    logger.logBusiness('Team Members Found', {
+      count: teamMembers?.length || 0,
+      members: teamMembers?.map(m => ({
+        id: m.id,
+        name: `${m.first_name} ${m.last_name}`,
+        email: m.email,
+        team: m.team
+      }))
+    });
 
     // Check if samward@gmail.com is in the team
     const samwardMember = teamMembers?.find(m => m.email === 'samward@gmail.com');
     if (samwardMember) {
-      console.log('✅ Found samward@gmail.com in team:', samwardMember);
+      logger.logBusiness('Samward Member Found', { samwardMember });
     } else {
-      console.log('❌ samward@gmail.com NOT found in team members');
-      console.log('🔍 Available emails:', teamMembers?.map(m => m.email));
+      logger.logBusiness('Samward Member Not Found', { 
+        availableEmails: teamMembers?.map(m => m.email) 
+      });
     }
 
     const teamMemberIds = teamMembers?.map(member => member.id) || [];
@@ -1391,7 +1078,7 @@ const getTeamWeeklyKPI = async (req, res) => {
     }
 
     // Calculate expected working days in the week
-    const workingDaysCount = getWorkingDaysCount(weekInfo.currentWeek.startDate, weekInfo.currentWeek.endDate);
+    const workingDaysCount = dateUtils.getWorkingDaysCount(weekInfo.currentWeek.startDate, weekInfo.currentWeek.endDate);
     
     // Get weekly assessments for all team members
     const { data: assessments, error: assessmentsError } = await supabase
@@ -1411,8 +1098,11 @@ const getTeamWeeklyKPI = async (req, res) => {
     // ✅ FIXED: Calculate individual KPIs based on each worker's 7-day cycle
     const individualKPIs = await Promise.all(teamMembers.map(async (member) => {
       try {
-        console.log(`🔍 Processing worker: ${member.first_name} ${member.last_name} (${member.id})`);
-        console.log(`🔍 Worker team: ${member.team}`);
+        logger.logBusiness('Processing Worker', {
+          workerName: `${member.first_name} ${member.last_name}`,
+          workerId: member.id,
+          team: member.team
+        });
         
         // Get latest assessment to find individual cycle start
       const { data: latestAssessment, error: cycleError } = await supabase
@@ -1424,7 +1114,7 @@ const getTeamWeeklyKPI = async (req, res) => {
         .single();
 
       if (cycleError && cycleError.code !== 'PGRST116') {
-        console.log('⚠️ No cycle data for worker:', member.id);
+        logger.warn('No cycle data for worker', { workerId: member.id });
         return {
           workerId: member.id,
           workerName: `${member.first_name} ${member.last_name}`,
@@ -1445,7 +1135,7 @@ const getTeamWeeklyKPI = async (req, res) => {
       }
 
       if (!latestAssessment) {
-        console.log('⚠️ No assessments for worker:', member.id);
+        logger.warn('No assessments for worker', { workerId: member.id });
         return {
           workerId: member.id,
           workerName: `${member.first_name} ${member.last_name}`,
@@ -1471,9 +1161,10 @@ const getTeamWeeklyKPI = async (req, res) => {
                cycleEnd.setDate(cycleStart.getDate() + 6); // 7-day cycle
                cycleEnd.setHours(23, 59, 59, 999); // Include the full last day
 
-      console.log(`🔍 Worker ${member.first_name} cycle:`, {
-        cycleStart: cycleStart.toISOString().split('T')[0],
-        cycleEnd: cycleEnd.toISOString().split('T')[0],
+      logger.logBusiness('Worker Cycle Info', {
+        workerName: member.first_name,
+        cycleStart: dateUtils.getDateString(cycleStart),
+        cycleEnd: dateUtils.getDateString(cycleEnd),
         currentDay: latestAssessment.cycle_day,
         streakDays: latestAssessment.streak_days
       });
@@ -1488,7 +1179,10 @@ const getTeamWeeklyKPI = async (req, res) => {
         .order('submitted_at', { ascending: true });
 
       if (cycleAssessmentsError) {
-        console.error('Error fetching cycle assessments for worker:', member.id, cycleAssessmentsError);
+        logger.error('Error fetching cycle assessments for worker', { 
+          workerId: member.id, 
+          error: cycleAssessmentsError 
+        });
         throw cycleAssessmentsError;
       }
 
@@ -1500,7 +1194,8 @@ const getTeamWeeklyKPI = async (req, res) => {
       const completedCount = submittedDays.size;
       const completionRate = (completedCount / 7) * 100; // 7-day cycle, not working days
       
-      console.log(`📊 Worker ${member.first_name} cycle stats:`, {
+      logger.logBusiness('Worker Cycle Stats', {
+        workerName: member.first_name,
         completedDays: completedCount,
         totalCycleDays: 7,
         completionRate: Math.round(completionRate),
@@ -1557,7 +1252,10 @@ const getTeamWeeklyKPI = async (req, res) => {
         }
       };
       } catch (error) {
-        console.error(`❌ Error processing worker ${member.first_name} ${member.last_name}:`, error);
+        logger.error('Error processing worker', { 
+          workerName: `${member.first_name} ${member.last_name}`,
+          error: error.message 
+        });
         // Return default values for this worker
         return {
           workerId: member.id,
@@ -1584,42 +1282,34 @@ const getTeamWeeklyKPI = async (req, res) => {
     // Use automatic current date - no manual declaration needed
     
     // Calculate current week (Sunday to Saturday) - AUTOMATIC DATE
-    const currentWeekStart = new Date();
-    const dayOfWeek = currentWeekStart.getDay(); // 0 = Sunday, 1 = Monday, etc.
-    currentWeekStart.setDate(currentWeekStart.getDate() - dayOfWeek); // Go back to Sunday
-    currentWeekStart.setHours(0, 0, 0, 0);
-    
-    const currentWeekEnd = new Date(currentWeekStart);
-    currentWeekEnd.setDate(currentWeekStart.getDate() + 6); // Add 6 days to get Saturday
-    currentWeekEnd.setHours(23, 59, 59, 999);
+    const currentWeek = dateUtils.getWeekDateRange();
+    const currentWeekStart = new Date(currentWeek.startDate);
+    const currentWeekEnd = new Date(currentWeek.endDate);
     
     // Calculate TODAY's submissions using the same logic as TeamLeaderMonitoring
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    
-    const todayEnd = new Date();
-    todayEnd.setHours(23, 59, 59, 999);
+    const todayRange = dateUtils.getDayRange();
+    const todayStart = new Date(todayRange.start);
+    const todayEnd = new Date(todayRange.end);
     
     // Alternative approach: Use date string comparison for today
-    const todayDateString = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
+    const todayDateString = dateUtils.getTodayDateString();
     
-    console.log('📅 Current Week Range:', currentWeekStart.toISOString(), 'to', currentWeekEnd.toISOString());
-    console.log('📅 Current Week Start Local:', currentWeekStart.toLocaleDateString('en-CA'));
-    console.log('📅 Current Week End Local:', currentWeekEnd.toLocaleDateString('en-CA'));
-    console.log('📅 Today Range:', todayStart.toISOString(), 'to', todayEnd.toISOString());
-    console.log('📅 Current Date:', new Date().toISOString());
-    console.log('📅 Today Date String:', new Date().toISOString().split('T')[0]);
-    console.log('📅 Today Start:', todayStart.toISOString());
-    console.log('📅 Today End:', todayEnd.toISOString());
-    console.log('👥 Team Members Found:', teamMembers?.length || 0);
-    console.log('🔍 Team Members:', teamMembers?.map(m => `${m.first_name} ${m.last_name} (${m.id})`));
+    logger.logBusiness('Date Range Calculations', {
+      currentWeekStart: currentWeekStart.toISOString(),
+      currentWeekEnd: currentWeekEnd.toISOString(),
+      todayStart: todayStart.toISOString(),
+      todayEnd: todayEnd.toISOString(),
+      todayDateString,
+      teamMembersCount: teamMembers?.length || 0
+    });
     
     // Test: Check if samward@gmail.com is in team (using existing samwardMember from above)
     if (samwardMember) {
-      console.log('✅ Found samward@gmail.com in team:', samwardMember);
+      logger.logBusiness('Samward Member Confirmed', { samwardMember });
     } else {
-      console.log('❌ samward@gmail.com NOT found in team members');
-      console.log('🔍 Available emails:', teamMembers?.map(m => m.email));
+      logger.logBusiness('Samward Member Not Found', { 
+        availableEmails: teamMembers?.map(m => m.email) 
+      });
     }
     
     // Count members who submitted work readiness TODAY
@@ -1634,21 +1324,28 @@ const getTeamWeeklyKPI = async (req, res) => {
         .limit(1);
       
       if (todayError) {
-        console.log(`❌ Error checking today's submissions for ${member.first_name}:`, todayError);
+        logger.error('Error checking today\'s submissions', { 
+          workerName: member.first_name, 
+          error: todayError 
+        });
         return false;
       }
       
       if (todayAssessments && todayAssessments.length > 0) {
-        console.log(`✅ ${member.first_name} submitted today:`, todayAssessments[0].submitted_at);
+        logger.logBusiness('Today Submission Found', {
+          workerName: member.first_name,
+          submittedAt: todayAssessments[0].submitted_at
+        });
         return true;
       }
       
       // Special debugging for samward
       if (member.email === 'samward@gmail.com') {
-        console.log(`🔍 SAMWARD TODAY CHECK:`);
-        console.log(`📅 Today Start: ${todayStart.toISOString()}`);
-        console.log(`📅 Today End: ${todayEnd.toISOString()}`);
-        console.log(`📅 Results:`, todayAssessments);
+        logger.logBusiness('Samward Today Check', {
+          todayStart: todayStart.toISOString(),
+          todayEnd: todayEnd.toISOString(),
+          results: todayAssessments
+        });
       }
       
       return false;
@@ -1657,11 +1354,14 @@ const getTeamWeeklyKPI = async (req, res) => {
     const todaySubmissionCount = todaySubmissions.filter(submitted => submitted).length;
     const todaySubmissionRate = teamMembers.length > 0 ? (todaySubmissionCount / teamMembers.length) * 100 : 0;
     
-    console.log('📊 Today Submissions Check:', todaySubmissions.map((submitted, index) => ({
-      member: `${teamMembers[index].first_name} ${teamMembers[index].last_name}`,
-      submitted: submitted
-    })));
-    console.log('✅ Today Submissions:', todaySubmissionCount, `(${Math.round(todaySubmissionRate)}%)`);
+    logger.logBusiness('Today Submissions Check', {
+      submissions: todaySubmissions.map((submitted, index) => ({
+        member: `${teamMembers[index].first_name} ${teamMembers[index].last_name}`,
+        submitted: submitted
+      })),
+      submissionCount: todaySubmissionCount,
+      submissionRate: Math.round(todaySubmissionRate)
+    });
     
     // Debug: Check recent work readiness submissions
     const { data: recentSubmissions, error: recentError } = await supabase
@@ -1671,9 +1371,9 @@ const getTeamWeeklyKPI = async (req, res) => {
       .limit(5);
     
     if (recentError) {
-      console.log('❌ Error fetching recent submissions:', recentError);
+      logger.error('Error fetching recent submissions', { error: recentError });
     } else {
-      console.log('📋 Recent Work Readiness Submissions:', recentSubmissions);
+      logger.logBusiness('Recent Work Readiness Submissions', { recentSubmissions });
     }
     
     // Debug: Check samward@gmail.com submissions specifically
@@ -1686,9 +1386,9 @@ const getTeamWeeklyKPI = async (req, res) => {
         .limit(5);
       
       if (samwardError) {
-        console.log('❌ Error fetching samward submissions:', samwardError);
+        logger.error('Error fetching samward submissions', { error: samwardError });
       } else {
-        console.log('📋 Samward Submissions:', samwardSubmissions);
+        logger.logBusiness('Samward Submissions', { samwardSubmissions });
         
         // Check if any submissions are from this week
         const thisWeekSubmissions = samwardSubmissions?.filter(sub => {
@@ -1696,18 +1396,19 @@ const getTeamWeeklyKPI = async (req, res) => {
           return submissionDate >= currentWeekStart && submissionDate <= currentWeekEnd;
         });
         
-        console.log('📅 Samward This Week Submissions:', thisWeekSubmissions);
-        
         // Check if any submissions are from today
         const todaySubmissions = samwardSubmissions?.filter(sub => {
           const submissionDate = new Date(sub.submitted_at);
-          const submissionDateString = submissionDate.toISOString().split('T')[0];
+          const submissionDateString = dateUtils.getDateString(submissionDate);
           return submissionDateString === todayDateString;
         });
         
-        console.log('📅 Samward Today Submissions:', todaySubmissions);
-        console.log('📅 Today Date String:', todayDateString);
-        console.log('📅 Samward Submission Dates:', samwardSubmissions?.map(s => s.submitted_at.split('T')[0]));
+        logger.logBusiness('Samward Submission Analysis', {
+          thisWeekSubmissions,
+          todaySubmissions,
+          todayDateString,
+          submissionDates: samwardSubmissions?.map(s => dateUtils.getDateString(s.submitted_at))
+        });
       }
     }
     
@@ -1727,37 +1428,40 @@ const getTeamWeeklyKPI = async (req, res) => {
     
     const weeklySubmissionCount = weeklySubmissions.filter(submitted => submitted).length;
     
-    console.log('📊 Weekly Submissions Check:', weeklySubmissions.map((submitted, index) => ({
-      member: `${teamMembers[index].first_name} ${teamMembers[index].last_name}`,
-      submitted: submitted
-    })));
-    console.log('✅ Total Weekly Submissions:', weeklySubmissionCount);
+    logger.logBusiness('Weekly Submissions Check', {
+      submissions: weeklySubmissions.map((submitted, index) => ({
+        member: `${teamMembers[index].first_name} ${teamMembers[index].last_name}`,
+        submitted: submitted
+      })),
+      totalWeeklySubmissions: weeklySubmissionCount
+    });
     
     // Calculate weekly submission rate
     const weeklySubmissionRate = teamMembers.length > 0 ? (weeklySubmissionCount / teamMembers.length) * 100 : 0;
     
     // Calculate team KPI based on weekly submissions (simple percentage)
-    const teamKPI = calculateWeeklyTeamKPI(weeklySubmissionRate, weeklySubmissionCount, teamMembers.length);
+    const teamKPI = kpiUtils.calculateWeeklyTeamKPI(weeklySubmissionRate, weeklySubmissionCount, teamMembers.length);
     
     // Additional team metrics for comprehensive view
     const teamMetrics = {
       weeklySubmissions: weeklySubmissionCount,
       totalMembers: teamMembers.length,
       weeklySubmissionRate: Math.round(weeklySubmissionRate),
-      weekStart: currentWeekStart.toLocaleDateString('en-CA'), // Use local date format
-      weekEnd: currentWeekEnd.toLocaleDateString('en-CA'), // Use local date format
+      weekStart: dateUtils.getDateString(currentWeekStart), // Use local date format
+      weekEnd: dateUtils.getDateString(currentWeekEnd), // Use local date format
       todaySubmissions: todaySubmissionCount,
       todaySubmissionRate: Math.round(todaySubmissionRate),
-      todayDate: new Date().toLocaleDateString('en-CA') // Use local date format
+      todayDate: dateUtils.getTodayDateString() // Use local date format
     };
     
     // Debug logging to understand team performance
-    console.log('🔍 WEEKLY TEAM PERFORMANCE DEBUG:');
-    console.log('📊 Team Metrics:', teamMetrics);
-    console.log('🏆 Weekly Team KPI:', teamKPI);
-    console.log('📈 Weekly Submission Rate:', weeklySubmissionRate);
-    console.log('📈 Weekly Submission Count:', weeklySubmissionCount);
-    console.log('👥 Total Team Members:', teamMembers.length);
+    logger.logBusiness('Weekly Team Performance Debug', {
+      teamMetrics,
+      weeklyTeamKPI: teamKPI,
+      weeklySubmissionRate,
+      weeklySubmissionCount,
+      totalTeamMembers: teamMembers.length
+    });
     
     // Team goals summary - based on individual 7-day cycles
     const teamGoalsSummary = [
@@ -1773,7 +1477,7 @@ const getTeamWeeklyKPI = async (req, res) => {
     ];
 
     // Performance insights
-    const performanceInsights = generatePerformanceInsights(individualKPIs, teamKPI);
+    const performanceInsights = teamAnalyticsUtils.generatePerformanceInsights(individualKPIs, teamKPI);
 
     // Final response debugging
     const responseData = {
@@ -1794,11 +1498,11 @@ const getTeamWeeklyKPI = async (req, res) => {
           individualKPIs: individualKPIs,
           teamGoalsSummary: teamGoalsSummary,
           performanceInsights: performanceInsights,
-          weeklyComparison: await getTeamWeeklyComparison(teamLeaderId, weekInfo)
+          weeklyComparison: await teamAnalyticsUtils.getTeamWeeklyComparison(teamLeaderId, weekInfo, supabase)
         }
     };
     
-    console.log('📤 FINAL RESPONSE DATA:', JSON.stringify(responseData, null, 2));
+    logger.logBusiness('Final Response Data', { responseData });
     
     res.json({
       success: true,
@@ -1806,9 +1510,11 @@ const getTeamWeeklyKPI = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Error fetching team weekly KPI:', error);
-    console.error('❌ Error stack:', error.stack);
-    console.error('❌ Request query:', req.query);
+    logger.error('Error fetching team weekly KPI', { 
+      error: error.message, 
+      stack: error.stack, 
+      query: req.query 
+    });
 
     res.status(500).json({
       success: false,
@@ -2024,7 +1730,7 @@ const generatePerformanceInsights = (individualKPIs, teamKPI) => {
  */
 const handleLogin = async (req, res) => {
   try {
-    console.log('🚀 HANDLE LOGIN CALLED - NEW VERSION!');
+    logger.logBusiness('Handle Login Called', { workerId });
     const { workerId } = req.body;
     
     if (!workerId) {
@@ -2034,7 +1740,7 @@ const handleLogin = async (req, res) => {
       });
     }
     
-    console.log('🔍 About to query users table for workerId:', workerId);
+    logger.logBusiness('Querying Users Table', { workerId });
     
     // Check if user is WORKER role
     const { data: user, error: userError } = await supabase
@@ -2043,10 +1749,10 @@ const handleLogin = async (req, res) => {
       .eq('id', workerId)
       .single();
     
-    console.log('🔍 User query result:', { user, userError });
+    logger.logBusiness('User Query Result', { user, userError });
     
     if (userError) {
-      console.log('❌ User query error:', userError);
+      logger.error('User query error', { error: userError, workerId });
       throw userError;
     }
     
@@ -2059,7 +1765,8 @@ const handleLogin = async (req, res) => {
       });
     }
     
-    const today = new Date().toISOString().split('T')[0];
+    // Get today's date in Philippines Time (UTC+8)
+    const today = dateUtils.getTodayDateString();
     
     // Get the last login from authentication_logs (simplified)
     const { data: lastLoginRecord, error: loginError } = await supabase
@@ -2072,13 +1779,11 @@ const handleLogin = async (req, res) => {
       .limit(1)
       .single();
     
-    console.log('🔍 Backend Debug - lastLoginRecord:', lastLoginRecord);
-    console.log('🔍 Backend Debug - loginError:', loginError);
+    logger.logBusiness('Backend Debug - Login Record', { lastLoginRecord, loginError });
     
     // If no login record found, treat as first time login
     const lastLogin = lastLoginRecord?.created_at?.split('T')[0] || null;
-    console.log('🔍 Backend Debug - lastLogin date:', lastLogin);
-    console.log('🔍 Backend Debug - today:', today);
+    logger.logBusiness('Backend Debug - Date Comparison', { lastLogin, today });
     
     // Check if there's an active cycle in work_readiness
     const { data: latestAssessment, error: assessmentError } = await supabase
@@ -2089,8 +1794,7 @@ const handleLogin = async (req, res) => {
       .limit(1)
       .single();
     
-    console.log('🔍 Backend Debug - latestAssessment:', latestAssessment);
-    console.log('🔍 Backend Debug - assessmentError:', assessmentError);
+    logger.logBusiness('Backend Debug - Latest Assessment', { latestAssessment, assessmentError });
     
     if (assessmentError && assessmentError.code !== 'PGRST116') {
       throw assessmentError;
@@ -2098,9 +1802,7 @@ const handleLogin = async (req, res) => {
     
     // FIRST: Check if no assessments exist (FIRST TIME LOGIN)
     if (!latestAssessment) {
-      console.log('🎉 FIRST TIME LOGIN - No assessments found!');
-      console.log('🎉 Last login record:', lastLoginRecord);
-      console.log('🎉 Last login date:', lastLogin);
+      logger.logBusiness('First Time Login - No Assessments', { lastLoginRecord, lastLogin });
       // No assessments at all - first time login
         
       return res.json({
@@ -2119,8 +1821,7 @@ const handleLogin = async (req, res) => {
     
     // SPECIAL CASE: Check if this is the very first login (no login records)
     if (!lastLoginRecord || loginError?.code === 'PGRST116') {
-      console.log('🎉 VERY FIRST LOGIN - No login records found!');
-      console.log('🎉 Login error:', loginError);
+      logger.logBusiness('Very First Login - No Login Records', { loginError });
       // This is the very first login ever
         
       return res.json({
@@ -2159,8 +1860,7 @@ const handleLogin = async (req, res) => {
     
     // THIRD: Check if missed a day (cycle broken) - using login data
     if (latestAssessment?.cycle_start && lastLogin !== today) {
-      console.log('🔄 MISSED DAY - Cycle broken, starting new one');
-      console.log('🔄 Last login:', lastLogin, 'Today:', today);
+      logger.logBusiness('Missed Day - Cycle Broken', { lastLogin, today });
       // Missed day - reset cycle
         
       return res.json({
@@ -2179,8 +1879,7 @@ const handleLogin = async (req, res) => {
     
     // FOURTH: Check if cycle was completed and needs new login to start
     if (latestAssessment?.cycle_completed && lastLogin !== today) {
-      console.log('🎉 NEW CYCLE AFTER COMPLETION');
-      console.log('🎉 Last login:', lastLogin, 'Today:', today);
+      logger.logBusiness('New Cycle After Completion', { lastLogin, today });
       // Previous cycle completed, now starting new one (NEW CYCLE AFTER COMPLETION)
         
       return res.json({
@@ -2199,7 +1898,7 @@ const handleLogin = async (req, res) => {
     
     // FIFTH: Check if no cycle start (shouldn't happen if latestAssessment exists)
     if (!latestAssessment?.cycle_start) {
-      console.log('🎉 NO CYCLE START - Starting new one');
+      logger.logBusiness('No Cycle Start - Starting New One');
       // No existing cycle - start new one (FIRST TIME LOGIN)
       // Note: We don't update last_login since the column doesn't exist
         
@@ -2219,8 +1918,7 @@ const handleLogin = async (req, res) => {
     
     // Continue existing cycle
     const currentDay = latestAssessment.cycle_day || 1;
-    console.log('📝 CONTINUING EXISTING CYCLE - Day', currentDay);
-    console.log('📝 Last login:', lastLogin, 'Today:', today);
+    logger.logBusiness('Continuing Existing Cycle', { currentDay, lastLogin, today });
     // Note: We don't update last_login since the column doesn't exist
     
     return res.json({
@@ -2236,9 +1934,10 @@ const handleLogin = async (req, res) => {
     });
     
   } catch (error) {
-    console.error('❌ Error handling login cycle:', error);
-    console.error('❌ Error stack:', error.stack);
-    console.error('❌ Error message:', error.message);
+    logger.error('Error handling login cycle', { 
+      error: error.message, 
+      stack: error.stack 
+    });
     res.status(500).json({
       success: false,
       message: 'Failed to start cycle',
@@ -2260,7 +1959,7 @@ const getTeamLeaderAssignmentKPI = async (req, res) => {
   try {
     const { teamLeaderId } = req.query;
     
-    console.log('🎯 getTeamLeaderAssignmentKPI called with teamLeaderId:', teamLeaderId);
+    logger.logBusiness('Team Leader Assignment KPI Request', { teamLeaderId });
     
     if (!teamLeaderId) {
       return res.status(400).json({
@@ -2315,23 +2014,69 @@ const getTeamLeaderAssignmentKPI = async (req, res) => {
       a.completed_at && 
       new Date(a.completed_at) <= new Date(a.due_time)
     ).length || 0;
+    
+    // ✅ PENDING ASSIGNMENTS WITH FUTURE DUE DATES (TEAM LEVEL)
+    const currentTime = new Date();
+    const pendingAssignments = assignments?.filter(a => {
+      if (a.status !== 'pending' || !a.due_time) return false;
+      const dueTime = new Date(a.due_time);
+      return dueTime > currentTime; // Only count pending assignments with future due dates
+    }).length || 0;
+    
+    // ✅ OVERDUE ASSIGNMENTS CALCULATION (TEAM LEVEL)
+    const overdueAssignments = assignments?.filter(a => {
+      if (a.status !== 'overdue') return false;
+      return true; // All overdue assignments count as penalty
+    }).length || 0;
 
-    console.log('📊 Team Metrics:', {
+    logger.logBusiness('Team Metrics', {
       totalAssignments,
       completedAssignments,
       onTimeSubmissions,
+      pendingAssignments,
+      overdueAssignments,
       teamMembersCount: teamMembers?.length || 0
     });
 
     // Calculate individual worker KPIs
+    logger.logBusiness('Calculating Individual KPIs', { 
+      teamMembersCount: teamMembers?.length || 0 
+    });
+    
     const individualKPIs = await Promise.all(teamMembers.map(async (member) => {
       const memberAssignments = assignments?.filter(a => a.worker_id === member.id) || [];
       const memberCompleted = memberAssignments.filter(a => a.status === 'completed').length;
-      const memberOnTime = memberAssignments.filter(a => 
-        a.status === 'completed' && 
-        a.completed_at && 
-        new Date(a.completed_at) <= new Date(a.due_time)
-      ).length;
+      
+      // ✅ SHIFT-BASED ON-TIME CALCULATION
+      const memberOnTime = memberAssignments.filter(a => {
+        if (a.status !== 'completed' || !a.completed_at || !a.due_time) return false;
+        const completedDate = new Date(a.completed_at);
+        const dueTime = new Date(a.due_time); // Shift-based deadline from DB
+        return completedDate <= dueTime;
+      }).length;
+      
+      // ✅ PENDING ASSIGNMENTS WITH FUTURE DUE DATES
+      const currentTime = new Date();
+      const memberPending = memberAssignments.filter(a => {
+        if (a.status !== 'pending' || !a.due_time) return false;
+        const dueTime = new Date(a.due_time);
+        return dueTime > currentTime; // Only count pending assignments with future due dates
+      }).length;
+      
+      // ✅ OVERDUE ASSIGNMENTS FOR INDIVIDUAL WORKER
+      const memberOverdue = memberAssignments.filter(a => {
+        if (a.status !== 'overdue') return false;
+        return true; // All overdue assignments count as penalty
+      }).length;
+      
+      // Validate shift-based deadline data
+      const assignmentsWithDueTime = memberAssignments.filter(a => a.due_time).length;
+      if (assignmentsWithDueTime < memberAssignments.length) {
+        logger.warn('Worker assignments missing due_time', {
+          workerName: `${member.first_name} ${member.last_name}`,
+          missingDueTime: memberAssignments.length - assignmentsWithDueTime
+        });
+      }
 
       // Get work readiness data for quality scoring
       const { data: workReadiness } = await supabase
@@ -2355,7 +2100,7 @@ const getTeamLeaderAssignmentKPI = async (req, res) => {
         qualityScore = qualityScores.reduce((sum, score) => sum + score, 0) / qualityScores.length;
       }
 
-      const kpi = calculateAssignmentKPI(memberCompleted, memberAssignments.length, memberOnTime, qualityScore);
+      const kpi = calculateAssignmentKPI(memberCompleted, memberAssignments.length, memberOnTime, qualityScore, memberPending, memberOverdue);
 
       return {
         workerId: member.id,
@@ -2379,9 +2124,22 @@ const getTeamLeaderAssignmentKPI = async (req, res) => {
       ? individualKPIs.reduce((sum, kpi) => sum + kpi.kpi.qualityScore, 0) / individualKPIs.length 
       : 0;
 
-    const teamKPI = calculateAssignmentKPI(completedAssignments, totalAssignments, onTimeSubmissions, avgQualityScore);
+    const teamKPI = calculateAssignmentKPI(completedAssignments, totalAssignments, onTimeSubmissions, avgQualityScore, pendingAssignments, overdueAssignments);
 
-    console.log('🎯 Final Team KPI:', teamKPI);
+    logger.logBusiness('Team KPI Calculation with Penalties', {
+      totalAssignments,
+      completedAssignments,
+      completionRate: teamCompletionRate.toFixed(1),
+      pendingAssignments,
+      onTimeSubmissions,
+      onTimeRate: teamOnTimeRate.toFixed(1),
+      avgQualityScore: avgQualityScore.toFixed(1),
+      pendingBonus: teamKPI.pendingBonus.toFixed(2),
+      overduePenalty: teamKPI.overduePenalty.toFixed(2),
+      teamKPIRating: teamKPI.rating,
+      teamKPIScore: teamKPI.score.toFixed(2),
+      finalFormula: `(${teamCompletionRate.toFixed(1)}% * 0.7) + (${teamOnTimeRate.toFixed(1)}% * 0.2) + (${avgQualityScore.toFixed(1)} * 0.1) + ${teamKPI.pendingBonus.toFixed(2)}% bonus - ${teamKPI.overduePenalty.toFixed(2)}% penalty = ${teamKPI.score.toFixed(2)}`
+    });
 
     res.json({
       success: true,
@@ -2390,6 +2148,8 @@ const getTeamLeaderAssignmentKPI = async (req, res) => {
         totalAssignments,
         completedAssignments,
         onTimeSubmissions,
+        pendingAssignments,
+        overdueAssignments,
         teamCompletionRate: Math.round(teamCompletionRate),
         teamOnTimeRate: Math.round(teamOnTimeRate),
         avgQualityScore: Math.round(avgQualityScore),
@@ -2479,6 +2239,20 @@ const getWorkerAssignmentKPI = async (req, res) => {
       a.completed_at && 
       new Date(a.completed_at) <= new Date(a.due_time)
     ).length || 0;
+    
+    // ✅ PENDING ASSIGNMENTS WITH FUTURE DUE DATES (WORKER LEVEL)
+    const currentTime = new Date();
+    const pendingAssignments = assignments?.filter(a => {
+      if (a.status !== 'pending' || !a.due_time) return false;
+      const dueTime = new Date(a.due_time);
+      return dueTime > currentTime; // Only count pending assignments with future due dates
+    }).length || 0;
+    
+    // ✅ OVERDUE ASSIGNMENTS FOR WORKER
+    const overdueAssignments = assignments?.filter(a => {
+      if (a.status !== 'overdue') return false;
+      return true; // All overdue assignments count as penalty
+    }).length || 0;
 
     // Calculate quality score based on readiness levels
     let qualityScore = 0;
@@ -2494,8 +2268,8 @@ const getWorkerAssignmentKPI = async (req, res) => {
       qualityScore = qualityScores.reduce((sum, score) => sum + score, 0) / qualityScores.length;
     }
 
-    // Calculate KPI using new assignment-based system
-    const kpi = calculateAssignmentKPI(completedAssignments, totalAssignments, onTimeSubmissions, qualityScore);
+    // Calculate KPI using enhanced assignment-based system with pending assignments and overdue penalty
+    const kpi = calculateAssignmentKPI(completedAssignments, totalAssignments, onTimeSubmissions, qualityScore, pendingAssignments, overdueAssignments);
 
     // Get recent assignments for context
     const recentAssignments = assignments?.slice(0, 5).map(assignment => ({
@@ -2547,7 +2321,11 @@ const handleAssessmentSubmission = async (req, res) => {
   try {
     const { workerId, assessmentData } = req.body;
     
-    console.log('🎯 Handling assessment submission:', { workerId, assessmentData });
+    console.log('🔍 CONTROLLER - Request body:', JSON.stringify(req.body, null, 2));
+    console.log('🔍 CONTROLLER - Worker ID:', workerId);
+    console.log('🔍 CONTROLLER - Assessment data:', assessmentData);
+    
+    logger.logBusiness('Handling Assessment Submission', { workerId, assessmentData });
     
     if (!workerId) {
       return res.status(400).json({
@@ -2564,7 +2342,17 @@ const handleAssessmentSubmission = async (req, res) => {
       });
     }
 
-    const { readinessLevel, fatigueLevel } = assessmentData;
+    // Support both camelCase and snake_case field names
+    const { 
+      readinessLevel, 
+      fatigueLevel, 
+      readiness_level, 
+      fatigue_level 
+    } = assessmentData;
+    
+    // Use snake_case if available, otherwise camelCase
+    const actualReadinessLevel = readiness_level || readinessLevel;
+    const actualFatigueLevel = fatigue_level || fatigueLevel;
     
     // Validation is handled by middleware - no need to duplicate here
     
@@ -2583,7 +2371,8 @@ const handleAssessmentSubmission = async (req, res) => {
       });
     }
     
-    const today = new Date().toISOString().split('T')[0];
+    // Get today's date in Philippines Time (UTC+8)
+    const today = dateUtils.getTodayDateString();
     
     // Check if worker has active assignment for today
     const { data: assignment, error: assignmentError } = await supabase
@@ -2595,7 +2384,7 @@ const handleAssessmentSubmission = async (req, res) => {
       .single();
 
     if (assignmentError && assignmentError.code !== 'PGRST116') {
-      console.error('Error checking assignment:', assignmentError);
+      logger.error('Error checking assignment', { error: assignmentError, workerId });
       return res.status(500).json({
         success: false,
         message: 'Failed to check assignment status'
@@ -2610,9 +2399,9 @@ const handleAssessmentSubmission = async (req, res) => {
     }
 
     // Check if assignment is overdue - BLOCK submission if overdue
-    const now = new Date();
+    const currentTime = new Date();
     const dueTime = new Date(assignment.due_time);
-    if (now > dueTime) {
+    if (currentTime > dueTime) {
       return res.status(400).json({
         success: false,
         message: 'Assignment is overdue - no catch-up allowed. This is a permanent record.',
@@ -2657,15 +2446,15 @@ const handleAssessmentSubmission = async (req, res) => {
       const todayDate = new Date(today);
       const daysDiff = Math.floor((todayDate - lastSubmissionDate) / (1000 * 60 * 60 * 24));
       
-      console.log('🔍 Date validation:', {
-        lastSubmission: lastSubmissionDate.toISOString().split('T')[0],
+      logger.logBusiness('Date Validation', {
+        lastSubmission: dateUtils.getDateString(lastSubmissionDate),
         today: today,
         daysDiff: daysDiff
       });
       
       if (daysDiff > 1) {
         // Missed day(s) - reset cycle
-        console.log('🔄 MISSED DAYS - Resetting cycle due to gap of', daysDiff, 'days');
+        logger.logBusiness('Missed Days - Resetting Cycle', { daysDiff });
         cycleStart = today;
         cycleDay = 1;
         streakDays = 0;  // Fixed: Should be 0, not 1
@@ -2677,7 +2466,7 @@ const handleAssessmentSubmission = async (req, res) => {
         streakDays = (latestAssessment.streak_days || 0) + 1;
         cycleCompleted = streakDays >= 7;
         
-        console.log('✅ CONSECUTIVE DAY - Continuing cycle:', {
+        logger.logBusiness('Consecutive Day - Continuing Cycle', {
           cycleDay: cycleDay,
           streakDays: streakDays,
           cycleCompleted: cycleCompleted
@@ -2688,10 +2477,10 @@ const handleAssessmentSubmission = async (req, res) => {
     // Transform assessment data to match database schema (camelCase to snake_case)
     const transformedAssessmentData = {
       worker_id: workerId,
-      readiness_level: assessmentData.readinessLevel,
-      fatigue_level: assessmentData.fatigueLevel,
+      readiness_level: actualReadinessLevel,
+      fatigue_level: actualFatigueLevel,
       mood: assessmentData.mood,
-      pain_discomfort: assessmentData.painDiscomfort,
+      pain_discomfort: assessmentData.pain_discomfort,
       notes: assessmentData.notes || null,
       // Legacy cycle columns - kept for migration but not used in new assignment-based system
       cycle_start: cycleStart,
@@ -2706,7 +2495,7 @@ const handleAssessmentSubmission = async (req, res) => {
     
     if (existingAssessment) {
       // Update existing assessment with cycle data
-      console.log('🔄 Updating existing assessment:', existingAssessment.id);
+      logger.logBusiness('Updating Existing Assessment', { assessmentId: existingAssessment.id });
       
       const updateData = {
         ...existingAssessment,
@@ -2722,16 +2511,16 @@ const handleAssessmentSubmission = async (req, res) => {
         .single();
       
       if (updateError) {
-        console.error('❌ Failed to update assessment with cycle data:', updateError);
+        logger.error('Failed to update assessment with cycle data', { error: updateError, assessmentId: existingAssessment.id });
         throw updateError;
       }
       
       savedAssessment = updatedAssessment;
-      console.log('✅ Assessment updated with cycle data:', savedAssessment.id);
+      logger.logBusiness('Assessment Updated with Cycle Data', { assessmentId: savedAssessment.id });
       
     } else {
       // Create new assessment with cycle data
-      console.log('🆕 Creating new assessment with cycle data');
+      logger.logBusiness('Creating New Assessment with Cycle Data');
       
       const { data: newAssessment, error: saveError } = await supabase
         .from('work_readiness')
@@ -2740,12 +2529,12 @@ const handleAssessmentSubmission = async (req, res) => {
         .single();
       
       if (saveError) {
-        console.error('❌ Failed to save assessment with cycle data:', saveError);
+        logger.error('Failed to save assessment with cycle data', { error: saveError });
         throw saveError;
       }
       
       savedAssessment = newAssessment;
-      console.log('✅ New assessment saved with cycle data:', savedAssessment.id);
+      logger.logBusiness('New Assessment Saved with Cycle Data', { assessmentId: savedAssessment.id });
     }
     
     // Update assignment status to completed
@@ -2769,15 +2558,15 @@ const handleAssessmentSubmission = async (req, res) => {
           .eq('id', assignment.id);
 
         if (updateAssignmentError) {
-          console.error('❌ Failed to update assignment status:', updateAssignmentError);
+          logger.error('Failed to update assignment status', { error: updateAssignmentError, assignmentId: assignment.id });
         } else {
-          console.log('✅ Assignment status updated to completed:', assignment.id);
+          logger.logBusiness('Assignment Status Updated to Completed', { assignmentId: assignment.id });
         }
       } else {
-        console.log('ℹ️ No active assignment found for worker:', workerId);
+        logger.logBusiness('No Active Assignment Found', { workerId });
       }
     } catch (assignmentUpdateError) {
-      console.error('❌ Error updating assignment status:', assignmentUpdateError);
+      logger.error('Error updating assignment status', { error: assignmentUpdateError, workerId });
       // Don't fail the whole request if assignment update fails
     }
     
@@ -2813,7 +2602,7 @@ const handleAssessmentSubmission = async (req, res) => {
     });
     
   } catch (error) {
-    console.error('Error handling assessment submission:', error);
+    logger.error('Error handling assessment submission', { error: error.message, workerId });
     res.status(500).json({
       success: false,
       message: 'Failed to update cycle',
@@ -2829,8 +2618,6 @@ module.exports = {
   getTeamWeeklyKPI,
   getTeamMonitoringDashboard,
   getMonthlyPerformanceTracking,
-  generateMonthlyInsights,
-  getWorkingDaysInMonth,
   handleLogin,
   handleAssessmentSubmission,
   calculateKPI,
@@ -2839,8 +2626,10 @@ module.exports = {
   getWeekDateRange,
   getWorkingDaysCount,
   calculateStreaks,
-  getPerformanceTrend,
-  getTeamWeeklyComparison,
-  generatePerformanceInsights,
-  generateMonitoringInsights
+  getPerformanceTrend: teamAnalyticsUtils.getPerformanceTrend,
+  getTeamWeeklyComparison: teamAnalyticsUtils.getTeamWeeklyComparison,
+  generatePerformanceInsights: teamAnalyticsUtils.generatePerformanceInsights,
+  generateMonitoringInsights: teamAnalyticsUtils.generateMonitoringInsights,
+  generateMonthlyInsights: teamAnalyticsUtils.generateMonthlyInsights,
+  getWorkingDaysInMonth: dateUtils.getWorkingDaysInMonth
 };

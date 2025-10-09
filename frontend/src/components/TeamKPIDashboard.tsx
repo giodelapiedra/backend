@@ -87,7 +87,11 @@ interface AssignmentKPIData {
   completionRate: number;
   onTimeRate: number;
   qualityScore: number;
+  pendingBonus: number;
+  overduePenalty: number;
   completedAssignments: number;
+  pendingAssignments: number;
+  overdueAssignments: number;
   totalAssignments: number;
 }
 
@@ -95,6 +99,8 @@ interface AssignmentMetrics {
   totalAssignments: number;
   completedAssignments: number;
   onTimeSubmissions: number;
+  pendingAssignments: number;
+  overdueAssignments: number;
   qualityScore: number;
   completionRate: number;
   onTimeRate: number;
@@ -161,6 +167,35 @@ const TeamKPIDashboard: React.FC<TeamKPIDashboardProps> = ({
       const result = await kpiAPI.getTeamAssignmentSummary(teamLeaderId);
       
       if (result.success) {
+        // ✅ DATA INTEGRITY VALIDATION
+        console.log('📊 ===== TEAM KPI DATA VALIDATION =====');
+        console.log('📋 Team KPI:', result.teamKPI);
+        console.log('📈 Team Metrics:', result.teamMetrics);
+        console.log('👥 Individual KPIs Count:', result.individualKPIs?.length);
+        
+        // Validate individual KPI data
+        if (result.individualKPIs && result.individualKPIs.length > 0) {
+          const validKPIs = result.individualKPIs.filter((kpi: IndividualAssignmentKPI) => {
+            const hasValidData = kpi.workerId && kpi.workerName && kpi.kpi;
+            if (!hasValidData) {
+              console.warn('⚠️ Invalid KPI data:', kpi);
+            }
+            return hasValidData;
+          });
+          
+          console.log(`✅ Valid Individual KPIs: ${validKPIs.length}/${result.individualKPIs.length}`);
+          
+          // Check if shift-based deadlines are being used
+          const assignmentsWithDueTime = result.individualKPIs.filter((kpi: IndividualAssignmentKPI) => 
+            kpi.assignments && kpi.assignments.total > 0
+          ).length;
+          
+          console.log(`✅ Members with assignments: ${assignmentsWithDueTime}`);
+          console.log('==========================================');
+          
+          result.individualKPIs = validKPIs;
+        }
+        
         setData(result);
         setError(null);
       } else {
@@ -701,10 +736,37 @@ const TeamKPIDashboard: React.FC<TeamKPIDashboardProps> = ({
   const teamKPI = data.teamKPI;
   const teamMetrics = data.teamMetrics;
   
-  // Debug logging
-  console.log('🔍 Frontend Team Assignment KPI Data:', data);
-  console.log('🔍 Team Metrics:', teamMetrics);
-  console.log('🔍 Team KPI:', teamKPI);
+  // ✅ COMPREHENSIVE DEBUGGING
+  console.log('📊 ===== TEAM KPI DASHBOARD RENDER =====');
+  console.log('🎯 Team KPI Rating:', teamKPI.rating, '| Score:', teamKPI.score);
+  console.log('📈 Completion Rate:', teamMetrics.completionRate, '%');
+  console.log('⏰ On-Time Rate:', teamMetrics.onTimeRate, '%');
+  console.log('👥 Total Members:', teamMetrics.totalMembers);
+  console.log('📋 Assignments:', `${teamMetrics.completedAssignments}/${teamMetrics.totalAssignments}`);
+  console.log('⏳ Pending Assignments:', teamMetrics.pendingAssignments);
+  console.log('❌ Overdue Assignments:', teamMetrics.overdueAssignments);
+  console.log('✅ On-Time Submissions:', teamMetrics.onTimeSubmissions);
+  console.log('🏆 Quality Score:', teamMetrics.qualityScore);
+  console.log('🎁 Pending Bonus:', teamKPI.pendingBonus, '%');
+  console.log('⚠️ Overdue Penalty:', teamKPI.overduePenalty, '%');
+  
+  // ✅ UPDATED: Verify KPI calculation formula (matches backend with penalties)
+  const pendingBonus = teamKPI.pendingBonus || 0;
+  const overduePenalty = teamKPI.overduePenalty || 0;
+  const expectedWeightedScore = (teamMetrics.completionRate * 0.7) + 
+                                 (teamMetrics.onTimeRate * 0.2) + 
+                                 ((teamMetrics.qualityScore || 0) * 0.1) + 
+                                 pendingBonus - overduePenalty;
+  console.log('🧮 Expected Weighted Score (WITH PENALTIES):', expectedWeightedScore.toFixed(2));
+  console.log('🧮 Actual KPI Score:', teamKPI.score);
+  console.log('🎁 Pending Bonus:', pendingBonus.toFixed(2));
+  console.log('⚠️ Overdue Penalty:', overduePenalty.toFixed(2));
+  
+  if (Math.abs(expectedWeightedScore - teamKPI.score) > 1) {
+    console.warn('⚠️ KPI score mismatch detected!');
+  }
+  
+  console.log('==========================================');
 
   return (
     <Box sx={{ width: '100%' }}>

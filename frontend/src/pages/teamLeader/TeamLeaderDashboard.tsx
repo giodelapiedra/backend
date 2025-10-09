@@ -22,8 +22,8 @@ import StatCard from '../../components/StatCard';
 import TrendChart from '../../components/TrendChart';
 import RecentActivityItem from '../../components/RecentActivityItem';
 import TeamKPIDashboard from '../../components/TeamKPIDashboard';
-import MonthlyPerformanceSection from '../../components/MonthlyPerformanceSection';
 import MonthlyAssignmentTracking from '../../components/MonthlyAssignmentTracking';
+import TeamLeaderShiftDisplay from '../../components/TeamLeaderShiftDisplay';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -806,8 +806,9 @@ const TeamLeaderDashboard: React.FC = () => {
         return;
       }
       
-      // Get today's work readiness submissions that are "not_fit"
-      const today = new Date().toISOString().split('T')[0];
+      // Get today's work readiness submissions that are "not_fit" (PHT)
+      const { getPHTDate } = await import('../../utils/timezone');
+      const today = getPHTDate();
       
       const { data: workReadinessData, error: workReadinessError } = await dataClient
         .from('work_readiness')
@@ -1588,6 +1589,9 @@ const TeamLeaderDashboard: React.FC = () => {
           </Button>
         </Box>
 
+        {/* Current Shift Assignment */}
+        <TeamLeaderShiftDisplay />
+
       {/* Team Management Section */}
       <Box sx={{ 
         backgroundColor: 'white', 
@@ -1782,7 +1786,7 @@ const TeamLeaderDashboard: React.FC = () => {
       {/* Tab 3: Weekly Goals & KPI */}
       {mainTab === 3 && (
         <Box sx={{ mb: 4, p: { xs: 1, md: 0 } }}>
-          <MonthlyPerformanceSection teamLeaderId={user?.id} />
+          {/* Monthly Performance Section removed - using main dashboard monthly component instead */}
         </Box>
       )}
 

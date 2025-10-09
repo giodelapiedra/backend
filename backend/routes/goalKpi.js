@@ -46,7 +46,7 @@ router.get('/team-leader/monthly-performance', validatePagination, getMonthlyPer
 // Login cycle handler - now with authentication
 router.post('/login-cycle', handleLogin);
 
-// Assessment submission handler - with validation
-router.post('/submit-assessment', validateWorkReadinessData, handleAssessmentSubmission);
+// Assessment submission handler - with authentication and validation
+router.post('/submit-assessment', authenticateToken, validateWorkReadinessData, handleAssessmentSubmission);
 
 module.exports = router;

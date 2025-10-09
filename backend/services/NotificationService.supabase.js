@@ -60,7 +60,7 @@ class NotificationService {
           sender_id: teamLeaderId,
           type: 'work_readiness_submitted',
           title: 'New Work Readiness Assignment',
-          message: `You have been assigned to complete a work readiness assessment. Due within 24 hours (${new Date(dueTime).toLocaleString()}).${notes ? ` Note: ${notes}` : ''}`,
+          message: `You have been assigned to complete a work readiness assessment. Due by ${new Date(dueTime).toLocaleString()}.${notes ? ` Note: ${notes}` : ''}`,
           priority: 'high',
           metadata: {
             assignment_id: assignmentId,

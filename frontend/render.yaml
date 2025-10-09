@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: sociosystem-frontend
+    env: static
+    buildCommand: npm run build
+    staticPublishPath: ./build
+    envVars:
+      - key: NODE_VERSION
+        value: 18.18.0
+      - key: REACT_APP_API_URL
+        value: https://sociosystem.onrender.com/api
+      - key: REACT_APP_SUPABASE_URL
+        value: https://owntqluhgjqavobupayt.supabase.co
+      - key: REACT_APP_SUPABASE_ANON_KEY
+        value: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im93bnRxbHVoZ2pxYXZvYnVwYXl0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTkzMzMyNjMsImV4cCI6MjA3NDkwOTI2M30.9KlyQgD4670PXKvQPCqJxOSlhU4n32JusSm3Qk17ZXU
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    plan: starter

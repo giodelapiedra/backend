@@ -21,6 +21,11 @@ export const authClient = createClient(supabaseUrl, supabaseAnonKey, {
     detectSessionInUrl: true,
     storage: cookieStorage,
     storageKey: 'supabase.auth.token'
+  },
+  realtime: {
+    params: {
+      eventsPerSecond: 10
+    }
   }
 });
 
@@ -33,6 +38,11 @@ export const dataClient = createClient(supabaseUrl, supabaseAnonKey, {
     detectSessionInUrl: true,
     storage: cookieStorage,
     storageKey: 'supabase.auth.token'
+  },
+  realtime: {
+    params: {
+      eventsPerSecond: 10
+    }
   }
 });
 
@@ -585,6 +595,7 @@ export const supabaseHelpers = {
 export const realtime = {
   // Subscribe to notifications for a user
   subscribeToNotifications(userId: string, callback: (payload: any) => void) {
+    console.log('🔌 Setting up notifications subscription for user:', userId);
     return supabase
       .channel('notifications')
       .on(
@@ -597,11 +608,23 @@ export const realtime = {
         },
         callback
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log('📡 Notifications subscription status:', status);
+        if (status === 'SUBSCRIBED') {
+          console.log('✅ Successfully subscribed to notifications');
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error('❌ Channel error in notifications subscription');
+        } else if (status === 'TIMED_OUT') {
+          console.error('⏰ Notifications subscription timed out');
+        } else if (status === 'CLOSED') {
+          console.log('🔌 Notifications subscription closed');
+        }
+      });
   },
 
   // Subscribe to case updates
   subscribeToCaseUpdates(caseId: string, callback: (payload: any) => void) {
+    console.log('🔌 Setting up case updates subscription for case:', caseId);
     return supabase
       .channel('case_updates')
       .on(
@@ -614,11 +637,23 @@ export const realtime = {
         },
         callback
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log('📡 Case updates subscription status:', status);
+        if (status === 'SUBSCRIBED') {
+          console.log('✅ Successfully subscribed to case updates');
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error('❌ Channel error in case updates subscription');
+        } else if (status === 'TIMED_OUT') {
+          console.error('⏰ Case updates subscription timed out');
+        } else if (status === 'CLOSED') {
+          console.log('🔌 Case updates subscription closed');
+        }
+      });
   },
 
   // Subscribe to work readiness updates
   subscribeToWorkReadiness(teamLeaderId: string, callback: (payload: any) => void) {
+    console.log('🔌 Setting up work readiness subscription for team leader:', teamLeaderId);
     return supabase
       .channel('work_readiness')
       .on(
@@ -631,7 +666,18 @@ export const realtime = {
         },
         callback
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log('📡 Work readiness subscription status:', status);
+        if (status === 'SUBSCRIBED') {
+          console.log('✅ Successfully subscribed to work readiness updates');
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error('❌ Channel error in work readiness subscription');
+        } else if (status === 'TIMED_OUT') {
+          console.error('⏰ Work readiness subscription timed out');
+        } else if (status === 'CLOSED') {
+          console.log('🔌 Work readiness subscription closed');
+        }
+      });
   }
 };
 

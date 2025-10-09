@@ -30,6 +30,7 @@ import {
   CreditCard,
   AssignmentTurnedIn,
   Analytics,
+  Schedule,
 } from '@mui/icons-material';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext.supabase';
@@ -201,6 +202,7 @@ const ModernSidebar: React.FC = () => {
               { text: 'Dashboard', icon: <Dashboard />, path: '/site-supervisor' },
               { text: 'Team Monitoring', icon: <Group />, path: '/site-supervisor/team-monitoring' },
               { text: 'Multi-Team Analytics', icon: <Analytics />, path: '/site-supervisor/multi-team-analytics' },
+              { text: 'Shift Management', icon: <Schedule />, path: '/site-supervisor/shift-management' },
             ]
           }
         ];
@@ -229,27 +231,28 @@ const ModernSidebar: React.FC = () => {
     const isActive = item.path === location.pathname;
     
     return (
-      <ListItem key={index} disablePadding sx={{ mb: 0.5 }}>
+      <ListItem key={index} disablePadding sx={{ mb: 0.25 }}>
         <ListItemButton
           onClick={() => handleItemClick(item)}
           sx={{
-            borderRadius: 2,
-            mx: 1,
-            px: collapsed ? 1.5 : 2,
+            borderRadius: 1.5,
+            mx: 0.5,
+            px: collapsed ? 1.5 : 1.5,
             py: 1,
             minHeight: 40,
-            background: isActive ? '#F8FAFC' : 'transparent',
-            transition: 'all 0.15s ease',
+            background: isActive ? '#EEF2FF' : 'transparent',
+            transition: 'all 0.2s ease',
             '&:hover': {
-              background: isActive ? '#F1F5F9' : '#FAFAFA'
+              background: isActive ? '#E0E7FF' : '#F9FAFB'
             }
           }}
         >
           <ListItemIcon
             sx={{
-              color: isActive ? '#4F46E5' : '#64748B',
-              minWidth: collapsed ? 0 : 40,
-              transition: 'color 0.15s ease'
+              color: isActive ? '#4F46E5' : '#6B7280',
+              minWidth: collapsed ? 0 : 36,
+              transition: 'color 0.2s ease',
+              fontSize: 20
             }}
           >
             {item.badge ? (
@@ -280,7 +283,7 @@ const ModernSidebar: React.FC = () => {
                 '& .MuiListItemText-primary': {
                   fontSize: '0.875rem',
                   fontWeight: isActive ? 600 : 500,
-                  color: isActive ? '#0F172A' : '#475569'
+                  color: isActive ? '#111827' : '#4B5563'
                 }
               }}
             />
@@ -292,26 +295,26 @@ const ModernSidebar: React.FC = () => {
 
   const renderSection = (section: SidebarSection, sectionKey: string) => {
     return (
-      <Box key={sectionKey} sx={{ mb: 3 }}>
+      <Box key={sectionKey} sx={{ mb: 2 }}>
         {!collapsed && (
           <Typography
             variant="caption"
             sx={{
-              color: '#94A3B8',
+              color: '#9CA3AF',
               fontWeight: 600,
               fontSize: '0.6875rem',
               letterSpacing: '0.05em',
               textTransform: 'uppercase',
               display: 'block',
-              px: 2,
-              py: 1,
+              px: 1.5,
+              py: 0.75,
               mb: 0.5
             }}
           >
             {section.title}
           </Typography>
         )}
-        {collapsed && <Divider sx={{ my: 1, mx: 1 }} />}
+        {collapsed && <Divider sx={{ my: 1, mx: 0.5 }} />}
         
         <List disablePadding>
           {section.items.map((item, index) => renderSidebarItem(item, index))}
@@ -323,11 +326,11 @@ const ModernSidebar: React.FC = () => {
   return (
     <Box
       sx={{
-        width: { xs: collapsed ? 0 : '100vw', sm: collapsed ? 72 : 260 },
+        width: { xs: collapsed ? 0 : '100vw', sm: collapsed ? 64 : 240 },
         height: '100vh',
         background: '#FFFFFF',
-        borderRight: '1px solid #E2E8F0',
-        transition: 'width 0.2s ease',
+        borderRight: '1px solid #E5E7EB',
+        transition: 'width 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
         position: 'fixed',
         left: 0,
         top: 0,
@@ -337,16 +340,16 @@ const ModernSidebar: React.FC = () => {
         display: 'flex',
         flexDirection: 'column',
         '&::-webkit-scrollbar': {
-          width: '4px'
+          width: '6px'
         },
         '&::-webkit-scrollbar-track': {
-          background: 'transparent'
+          background: '#F9FAFB'
         },
         '&::-webkit-scrollbar-thumb': {
-          background: '#E2E8F0',
-          borderRadius: '2px',
+          background: '#D1D5DB',
+          borderRadius: '3px',
           '&:hover': {
-            background: '#CBD5E1'
+            background: '#9CA3AF'
           }
         }
       }}
@@ -354,43 +357,59 @@ const ModernSidebar: React.FC = () => {
       {/* Header */}
       <Box
         sx={{
-          p: 2.5,
-          borderBottom: '1px solid #E2E8F0',
+          p: 2,
+          borderBottom: '1px solid #E5E7EB',
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'space-between',
+          justifyContent: collapsed ? 'center' : 'space-between',
           flexShrink: 0,
-          minHeight: 64
+          minHeight: 60
         }}
       >
         {!collapsed && (
-          <Typography
-            variant="h6"
-            sx={{
-              fontWeight: 700,
-              color: '#0F172A',
-              fontSize: '1.125rem',
-              letterSpacing: '-0.01em'
-            }}
-          >
-            PhysioWard
-          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Box
+              sx={{
+                width: 32,
+                height: 32,
+                borderRadius: '8px',
+                background: 'linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'white',
+                fontWeight: 700,
+                fontSize: '1rem'
+              }}
+            >
+              P
+            </Box>
+            <Typography
+              variant="h6"
+              sx={{
+                fontWeight: 700,
+                color: '#111827',
+                fontSize: '1rem'
+              }}
+            >
+              PhysioWard
+            </Typography>
+          </Box>
         )}
         <IconButton
           onClick={toggleCollapsed}
           size="small"
           sx={{
-            color: '#64748B',
-            width: 32,
-            height: 32,
-            transition: 'all 0.15s ease',
+            color: '#6B7280',
+            width: 28,
+            height: 28,
             '&:hover': {
-              background: '#F8FAFC',
+              background: '#F3F4F6',
               color: '#4F46E5'
             }
           }}
         >
-          {collapsed ? <ChevronRight /> : <ChevronLeft />}
+          {collapsed ? <ChevronRight fontSize="small" /> : <ChevronLeft fontSize="small" />}
         </IconButton>
       </Box>
 
@@ -402,8 +421,8 @@ const ModernSidebar: React.FC = () => {
       </Box>
 
       {/* Settings */}
-      <Box sx={{ mt: 'auto', p: 2, pt: 0, flexShrink: 0, borderTop: '1px solid #E2E8F0' }}>
-        <ListItem disablePadding sx={{ mt: 2 }}>
+      <Box sx={{ mt: 'auto', p: 1.5, flexShrink: 0, borderTop: '1px solid #E5E7EB' }}>
+        <ListItem disablePadding>
           <ListItemButton
             onClick={() => handleItemClick({
               text: 'Settings',
@@ -411,23 +430,23 @@ const ModernSidebar: React.FC = () => {
               path: '/profile'
             })}
             sx={{
-              borderRadius: 2,
-              mx: 1,
-              px: collapsed ? 1.5 : 2,
+              borderRadius: 1.5,
+              mx: 0.5,
+              px: collapsed ? 1.5 : 1.5,
               py: 1,
               minHeight: 40,
-              background: location.pathname === '/profile' ? '#F8FAFC' : 'transparent',
-              transition: 'all 0.15s ease',
+              background: location.pathname === '/profile' ? '#EEF2FF' : 'transparent',
+              transition: 'all 0.2s ease',
               '&:hover': {
-                background: location.pathname === '/profile' ? '#F1F5F9' : '#FAFAFA'
+                background: location.pathname === '/profile' ? '#E0E7FF' : '#F9FAFB'
               }
             }}
           >
             <ListItemIcon
               sx={{
-                color: location.pathname === '/profile' ? '#4F46E5' : '#64748B',
-                minWidth: collapsed ? 0 : 40,
-                transition: 'color 0.15s ease'
+                color: location.pathname === '/profile' ? '#4F46E5' : '#6B7280',
+                minWidth: collapsed ? 0 : 36,
+                transition: 'color 0.2s ease'
               }}
             >
               <Settings />
@@ -439,7 +458,7 @@ const ModernSidebar: React.FC = () => {
                   '& .MuiListItemText-primary': {
                     fontSize: '0.875rem',
                     fontWeight: location.pathname === '/profile' ? 600 : 500,
-                    color: location.pathname === '/profile' ? '#0F172A' : '#475569'
+                    color: location.pathname === '/profile' ? '#111827' : '#4B5563'
                   }
                 }}
               />
@@ -447,24 +466,6 @@ const ModernSidebar: React.FC = () => {
           </ListItemButton>
         </ListItem>
       </Box>
-
-      {/* Footer */}
-      {!collapsed && (
-        <Box sx={{ p: 2, pt: 1, flexShrink: 0 }}>
-          <Typography
-            variant="caption"
-            sx={{
-              color: '#94A3B8',
-              fontSize: '0.625rem',
-              textAlign: 'center',
-              display: 'block',
-              fontWeight: 500
-            }}
-          >
-            PhysioWard © 2025
-          </Typography>
-        </Box>
-      )}
     </Box>
   );
 };

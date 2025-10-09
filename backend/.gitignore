@@ -1,13 +1,19 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
 # Environment variables
 .env
 .env.local
-.env.development
-.env.test
-.env.production
+.env.development.local
+.env.test.local
+.env.production.local
 env.supabase
 
 # Logs
-logs
+logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
@@ -21,22 +27,22 @@ pids
 *.pid.lock
 
 # Coverage directory used by tools like istanbul
-coverage
+coverage/
 *.lcov
 
 # nyc test coverage
 .nyc_output
 
-# Grunt intermediate storage
+# Grunt intermediate storage (https://gruntjs.com/creating-plugins#storing-task-files)
 .grunt
 
-# Bower dependency directory
+# Bower dependency directory (https://bower.io/)
 bower_components
 
 # node-waf configuration
 .lock-wscript
 
-# Compiled binary addons
+# Compiled binary addons (https://nodejs.org/api/addons.html)
 build/Release
 
 # Dependency directories
@@ -71,9 +77,10 @@ typings/
 .yarn-integrity
 
 # dotenv environment variables file
+.env
 .env.test
 
-# parcel-bundler cache
+# parcel-bundler cache (https://parceljs.org/)
 .cache
 .parcel-cache
 
@@ -86,22 +93,55 @@ dist
 
 # Gatsby files
 .cache/
-public
+# Comment in the public line in if your project uses Gatsby and *not* Next.js
+# https://nextjs.org/blog/next-9-1#public-directory-support
+# public
 
-# Storybook build outputs
-.out
-.storybook-out
+# vuepress build output
+.vuepress/dist
 
-# Temporary folders
-tmp/
-temp/
+# Serverless directories
+.serverless/
 
-# Editor directories and files
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
+# FuseBox cache
+.fusebox/
+
+# DynamoDB Local files
+.dynamodb/
+
+# TernJS port file
+.tern-port
+
+# Stores VSCode versions used for testing VSCode extensions
+.vscode-test
+
+# yarn v2
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.yarn/install-state.gz
+.pnp.*
+
+# Uploads directory
+uploads/
+
+# Test files
+test-*.js
+debug-*.js
+check-*.js
+clear-*.js
+optimize-*.js
+reset-*.js
+security-*.js
+simple-*.js
+verify-*.js
+
+# SQL files
+*.sql
+
+# Temporary files
+*.tmp
+*.temp
 
 # OS generated files
 .DS_Store
@@ -112,30 +152,13 @@ temp/
 ehthumbs.db
 Thumbs.db
 
-# Test files
-test-results/
-coverage/
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 
-# Build outputs
+# Build artifacts
 build/
 dist/
-
-# Database files
-*.db
-*.sqlite
-*.sqlite3
-
-# Upload directories
-uploads/
-public/uploads/
-
-# SSL certificates
-*.pem
-*.key
-*.crt
-*.csr
-
-# Backup files
-*.bak
-*.backup
-*.old

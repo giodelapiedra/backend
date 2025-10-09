@@ -39,7 +39,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   const { collapsed, toggleCollapsed } = useSidebar();
   
   // Calculate sidebar width based on collapsed state and screen size
-  const sidebarWidth = collapsed ? 80 : 280;
+  const sidebarWidth = collapsed ? 64 : 240;
 
   const handleProfileMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
     setAnchorEl(event.currentTarget);
@@ -101,101 +101,60 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
       <CssBaseline />
       
-      {/* Enhanced Professional AppBar */}
+      {/* Clean Modern AppBar */}
       <AppBar
         position="fixed"
         sx={{
           left: { xs: 0, sm: `${sidebarWidth}px` },
           width: { xs: '100%', sm: `calc(100% - ${sidebarWidth}px)` },
-          backgroundColor: 'rgba(255, 255, 255, 0.95)',
-          backdropFilter: 'blur(10px)',
-          color: '#1a202c',
-          borderBottom: '1px solid rgba(229, 231, 235, 0.6)',
-          boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06)',
+          backgroundColor: '#FFFFFF',
+          backdropFilter: 'blur(8px)',
+          color: '#111827',
+          borderBottom: '1px solid #E5E7EB',
+          boxShadow: '0 1px 2px rgba(0, 0, 0, 0.05)',
           zIndex: 1200,
-          transition: 'left 0.3s cubic-bezier(0.4, 0, 0.2, 1), width 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-          '&::before': {
-            content: '""',
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: 'linear-gradient(180deg, rgba(123, 104, 238, 0.02) 0%, rgba(32, 178, 170, 0.02) 100%)',
-            pointerEvents: 'none',
-            zIndex: -1
-          }
+          transition: 'left 0.2s cubic-bezier(0.4, 0, 0.2, 1), width 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
         }}
       >
         <Toolbar sx={{ 
           justifyContent: 'space-between', 
           px: { xs: 2, sm: 3 },
-          py: { xs: 1, sm: 1 },
-          minHeight: { xs: '56px', sm: '64px' }
+          py: 1,
+          minHeight: { xs: '56px', sm: '60px' }
         }}>
-          {/* Enhanced Mobile Menu Button */}
+          {/* Mobile Menu Button */}
           <Box sx={{ display: { xs: 'block', sm: 'none' } }}>
             <IconButton
               onClick={toggleCollapsed}
               sx={{
-                color: '#7B68EE',
-                background: 'rgba(123, 104, 238, 0.08)',
-                border: '1px solid rgba(123, 104, 238, 0.15)',
-                borderRadius: '12px',
-                transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                color: '#6B7280',
                 '&:hover': {
-                  backgroundColor: 'rgba(123, 104, 238, 0.12)',
-                  borderColor: 'rgba(123, 104, 238, 0.25)',
-                  transform: 'scale(1.05)',
-                  boxShadow: '0 2px 6px rgba(123, 104, 238, 0.2)'
-                },
-                '&:active': {
-                  transform: 'scale(0.95)'
+                  backgroundColor: '#F3F4F6',
+                  color: '#4F46E5'
                 }
               }}
             >
-              <MenuIcon sx={{ fontSize: 20 }} />
+              <MenuIcon />
             </IconButton>
           </Box>
 
-
-          {/* Enhanced Right Side Actions */}
+          {/* Right Side Actions */}
           <Box sx={{ 
             flexGrow: 1, 
             display: 'flex', 
             alignItems: 'center', 
-            gap: { xs: 1, sm: 2 }, 
-            justifyContent: 'flex-end',
-            position: 'relative',
-            '&::before': {
-              content: '""',
-              position: 'absolute',
-              left: 0,
-              top: '50%',
-              transform: 'translateY(-50%)',
-              height: '24px',
-              width: '1px',
-              background: 'linear-gradient(180deg, transparent 0%, rgba(123, 104, 238, 0.2) 20%, rgba(123, 104, 238, 0.3) 50%, rgba(123, 104, 238, 0.2) 80%, transparent 100%)',
-              opacity: 0.6
-            }
+            gap: 1, 
+            justifyContent: 'flex-end'
           }}>
-            {/* Enhanced Notifications */}
+            {/* Notifications */}
             <Tooltip title="Notifications" arrow>
               <IconButton
-                color="inherit"
                 onClick={() => navigate('/notifications')}
                 sx={{
                   color: '#6B7280',
-                  borderRadius: '12px',
-                  transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
                   '&:hover': {
-                    backgroundColor: 'rgba(123, 104, 238, 0.08)',
-                    color: '#7B68EE',
-                    transform: 'scale(1.05)',
-                    boxShadow: '0 2px 6px rgba(123, 104, 238, 0.15)'
-                  },
-                  '&:active': {
-                    transform: 'scale(0.95)'
+                    backgroundColor: '#F3F4F6',
+                    color: '#4F46E5'
                   }
                 }}
               >
@@ -203,89 +162,46 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
                   badgeContent={unreadNotificationCount} 
                   sx={{ 
                     '& .MuiBadge-badge': {
-                      backgroundColor: '#FF6B6B',
+                      backgroundColor: '#EF4444',
                       color: 'white',
-                      fontSize: '0.75rem',
+                      fontSize: '0.625rem',
                       fontWeight: 600,
-                      minWidth: '18px',
-                      height: '18px',
-                      borderRadius: '9px',
-                      boxShadow: '0 2px 4px rgba(255, 107, 107, 0.3)',
-                      '&.MuiBadge-anchorOriginTopRightCircle': {
-                        transform: 'scale(1) translate(50%, -50%)'
-                      }
+                      minWidth: '16px',
+                      height: '16px'
                     }
                   }}
                 >
-                  <Notifications sx={{ fontSize: 20 }} />
+                  <Notifications />
                 </Badge>
               </IconButton>
             </Tooltip>
 
-            {/* Enhanced Profile Menu */}
-            <Tooltip title="Account settings" arrow>
+            {/* Profile Menu */}
+            <Tooltip title="Account" arrow>
               <IconButton
                 onClick={handleProfileMenuOpen}
                 sx={{
                   p: 0.5,
-                  borderRadius: '12px',
-                  transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
                   '&:hover': {
-                    backgroundColor: 'rgba(123, 104, 238, 0.08)',
-                    transform: 'scale(1.05)',
-                    boxShadow: '0 2px 6px rgba(123, 104, 238, 0.15)'
-                  },
-                  '&:active': {
-                    transform: 'scale(0.95)'
+                    backgroundColor: '#F3F4F6'
                   }
                 }}
               >
-                <Box sx={{ position: 'relative' }}>
-                  <Avatar
-                    sx={{
-                      width: 36,
-                      height: 36,
-                      background: user?.profileImage 
-                        ? undefined 
-                        : 'linear-gradient(135deg, #7B68EE 0%, #5A4FCF 100%)',
-                      fontSize: '0.875rem',
-                      fontWeight: 600,
-                      border: '2px solid rgba(123, 104, 238, 0.2)',
-                      boxShadow: '0 2px 4px rgba(123, 104, 238, 0.15)',
-                      transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
-                    }}
-                    src={user?.profileImage}
-                    alt={user?.firstName || 'User'}
-                  >
-                    {!user?.profileImage && user?.firstName?.charAt(0)?.toUpperCase()}
-                  </Avatar>
-                  
-                  {/* Online Status Indicator */}
-                  <Box
-                    sx={{
-                      position: 'absolute',
-                      bottom: -1,
-                      right: -1,
-                      width: '12px',
-                      height: '12px',
-                      borderRadius: '50%',
-                      background: 'linear-gradient(135deg, #10B981 0%, #059669 100%)',
-                      border: '2px solid rgba(255, 255, 255, 0.9)',
-                      boxShadow: '0 2px 4px rgba(16, 185, 129, 0.3)',
-                      animation: 'pulse-green 2s infinite',
-                      '@keyframes pulse-green': {
-                        '0%, 100%': {
-                          transform: 'Scale(1)',
-                          opacity: 1
-                        },
-                        '50%': {
-                          transform: 'Scale(1.05)',
-                          opacity: 0.8
-                        }
-                      }
-                    }}
-                  />
-                </Box>
+                <Avatar
+                  sx={{
+                    width: 32,
+                    height: 32,
+                    background: user?.profileImage 
+                      ? undefined 
+                      : 'linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)',
+                    fontSize: '0.875rem',
+                    fontWeight: 600
+                  }}
+                  src={user?.profileImage}
+                  alt={user?.firstName || 'User'}
+                >
+                  {!user?.profileImage && user?.firstName?.charAt(0)?.toUpperCase()}
+                </Avatar>
               </IconButton>
             </Tooltip>
 
@@ -295,39 +211,24 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
               onClose={handleProfileMenuClose}
               PaperProps={{
                 sx: {
-                  mt: 1,
-                  minWidth: 200,
-                  borderRadius: '16px',
-                  background: 'rgba(255, 255, 255, 0.95)',
-                  backdropFilter: 'blur(20px)',
-                  border: '1px solid rgba(123, 104, 238, 0.2)',
-                  boxShadow: '0 8px 25px rgba(123, 104, 238, 0.15), 0 4px 12px rgba(0, 0, 0, 0.08)',
-                  '&::before': {
-                    content: '""',
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    background: 'linear-gradient(135deg, rgba(123, 104, 238, 0.02) 0%, rgba(32, 178, 170, 0.01) 100%)',
-                    borderRadius: 'inherit',
-                    pointerEvents: 'none',
-                    zIndex: -1
-                  }
+                  mt: 1.5,
+                  minWidth: 220,
+                  borderRadius: '12px',
+                  boxShadow: '0 4px 20px rgba(0, 0, 0, 0.08)',
+                  border: '1px solid #E5E7EB'
                 },
               }}
             >
               <Box sx={{ 
-                px: 3, 
+                px: 2.5, 
                 py: 2,
-                background: 'rgba(123, 104, 238, 0.04)',
-                borderBottom: '1px solid rgba(123, 104, 238, 0.1)'
+                borderBottom: '1px solid #E5E7EB'
               }}>
                 <Typography 
                   variant="subtitle2" 
                   sx={{ 
-                    fontWeight: 700,
-                    color: '#1a202c',
+                    fontWeight: 600,
+                    color: '#111827',
                     fontSize: '0.875rem',
                     mb: 0.5
                   }}
@@ -337,91 +238,59 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
                 <Typography 
                   variant="caption" 
                   sx={{
-                    color: '#6b7280',
-                    fontSize: '0.75rem',
-                    fontWeight: 400
+                    color: '#6B7280',
+                    fontSize: '0.75rem'
                   }}
                 >
                   {user?.email}
                 </Typography>
               </Box>
               
-              <Divider sx={{ backgroundColor: 'rgba(123, 104, 238, 0.1)' }} />
-              
               <Box sx={{ p: 1 }}>
                 <MenuItem 
-                  onClick={handleProfileMenuClose}
+                  onClick={() => {
+                    navigate('/profile');
+                    handleProfileMenuClose();
+                  }}
                   sx={{
-                    borderRadius: '12px',
-                    transition: 'all 0.2s ease',
-                    mx: 0.5,
+                    borderRadius: '8px',
+                    px: 2,
+                    py: 1.5,
                     mb: 0.5,
                     '&:hover': {
-                      background: 'rgba(123, 104, 238, 0.08)',
-                      transform: 'translateX(4px)',
-                      boxShadow: '0 2px 8px rgba(123, 104, 238, 0.15)'
-                    },
-                    '&:active': {
-                      transform: 'translateX(2px) scale(0.98)'
+                      backgroundColor: '#F3F4F6'
                     }
                   }}
                 >
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                    <Box sx={{
-                      width: 32,
-                      height: 32,
-                      borderRadius: '8px',
-                      background: 'linear-gradient(135deg, rgba(123, 104, 238, 0.1) 0%, rgba(32, 178, 170, 0.1) 100%)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center'
-                    }}>
-                      <AccountCircle sx={{ fontSize: 18, color: '#7B68EE' }} />
-                    </Box>
-                    <Typography sx={{ 
-                      fontSize: '0.875rem',
-                      fontWeight: 500,
-                      color: '#374151'
-                    }}>
-                      View Profile
-                    </Typography>
-                  </Box>
+                  <AccountCircle sx={{ fontSize: 20, color: '#6B7280', mr: 1.5 }} />
+                  <Typography sx={{ 
+                    fontSize: '0.875rem',
+                    fontWeight: 500,
+                    color: '#374151'
+                  }}>
+                    View Profile
+                  </Typography>
                 </MenuItem>
                 
                 <MenuItem 
                   onClick={handleLogout}
                   sx={{
-                    borderRadius: '12px',
-                    transition: 'all 0.2s ease',
-                    mx: 0.5,
+                    borderRadius: '8px',
+                    px: 2,
+                    py: 1.5,
                     '&:hover': {
-                      background: 'rgba(231, 76, 60, 0.08)',
-                      transform: 'translateX(4px)',
-                      boxShadow: '0 2px 8px rgba(231, 76, 60, 0.15)'
-                    },
-                    '&:active': {
-                      transform: 'translateX(2px) scale(0.98)'
+                      backgroundColor: '#FEE2E2'
                     }
                   }}
                 >
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                    <Box sx={{
-                      width: 32,
-                      height: 32,
-                      borderRadius: '8px',
-                      background: 'linear-gradient(135deg, rgba(231, 76, 60, 0.1) 0%, rgba(207, 82, 61, 0.1) 100%)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center'
-                    }}>
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <path d="M16 17L21 12L16 7M21 12H9M9 21H7C5.89543 21 5 20.1046 5 19V5C5 3.89543 5.89543 3 7 3H9" stroke="#E74C3C" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
-                    </Box>
+                  <Box sx={{ display: 'flex', alignItems: 'center', width: '100%' }}>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ marginRight: '12px' }}>
+                      <path d="M16 17L21 12L16 7M21 12H9M9 21H7C5.89543 21 5 20.1046 5 19V5C5 3.89543 5.89543 3 7 3H9" stroke="#DC2626" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
                     <Typography sx={{ 
                       fontSize: '0.875rem',
                       fontWeight: 500,
-                      color: '#374151'
+                      color: '#DC2626'
                     }}>
                       Sign Out
                     </Typography>
@@ -467,23 +336,23 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
         sx={{
           flexGrow: 1,
           ml: { 
-            xs: 0, // No margin on mobile
-            sm: collapsed ? '80px' : '280px' // Dynamic sidebar width on desktop
+            xs: 0,
+            sm: collapsed ? '64px' : '240px'
           },
-          transition: 'margin-left 0.3s ease',
+          transition: 'margin-left 0.2s ease',
           minHeight: '100vh',
-          backgroundColor: '#ffffff',
-          overflowX: 'hidden', // Prevent horizontal overflow
-          width: { xs: '100%', sm: `calc(100vw - ${collapsed ? '80px' : '280px'})` }, // Use viewport width for max size
-          maxWidth: { xs: '100%', sm: `calc(100vw - ${collapsed ? '80px' : '280px'})` }, // Maximum width
+          backgroundColor: '#FAFAFA',
+          overflowX: 'hidden',
+          width: { xs: '100%', sm: `calc(100vw - ${collapsed ? '64px' : '240px'})` },
+          maxWidth: { xs: '100%', sm: `calc(100vw - ${collapsed ? '64px' : '240px'})` }
         }}
       >
         {/* Page Content */}
         <Box
           sx={{
-            mt: '64px', // Account for AppBar height
-            minHeight: 'calc(100vh - 64px)',
-            paddingBottom: { xs: '80px', sm: 0 }, // Account for mobile bottom nav
+            mt: '60px',
+            minHeight: 'calc(100vh - 60px)',
+            paddingBottom: { xs: '80px', sm: 0 }
           }}
         >
           {children}

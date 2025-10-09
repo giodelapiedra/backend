@@ -98,6 +98,23 @@ const WorkerDashboard: React.FC = memo(() => {
   const [timeUntilNextSubmission, setTimeUntilNextSubmission] = useState<string>('');
   const [showCycleWelcome, setShowCycleWelcome] = useState(false);
   const [cycleWelcomeMessage, setCycleWelcomeMessage] = useState('');
+  const [currentAssignment, setCurrentAssignment] = useState<any>(null);
+
+  // Helper function to get PH time date string (UTC+8)
+  const getPHToday = () => {
+    const now = new Date();
+    const phtOffset = 8 * 60; // 8 hours in minutes
+    const phtTime = new Date(now.getTime() + (phtOffset * 60 * 1000));
+    return phtTime.toISOString().split('T')[0];
+  };
+
+  // Helper function to get AU time date string (UTC+10)
+  const getAUToday = () => {
+    const now = new Date();
+    const auOffset = 10 * 60; // 10 hours in minutes
+    const auTime = new Date(now.getTime() + (auOffset * 60 * 1000));
+    return auTime.toISOString().split('T')[0];
+  };
 
   const fetchWorkerData = useCallback(async () => {
     try {
@@ -226,13 +243,19 @@ const WorkerDashboard: React.FC = memo(() => {
       
       if (result.success) {
         if (result.canSubmit) {
+          // Store assignment data for deadline display
+          setCurrentAssignment(result.assignment);
+          
           // Worker has assignment - check if already submitted
+          // Use PH time (UTC+8) to match backend logic
+          const today = getPHToday();
+          
           const { data, error } = await dataClient
             .from('work_readiness')
             .select('*')
             .eq('worker_id', user.id)
-            .gte('submitted_at', new Date().toISOString().split('T')[0] + 'T00:00:00.000Z')
-            .lte('submitted_at', new Date().toISOString().split('T')[0] + 'T23:59:59.999Z')
+            .gte('submitted_at', today + 'T00:00:00.000Z')
+            .lte('submitted_at', today + 'T23:59:59.999Z')
             .order('submitted_at', { ascending: false })
             .limit(1);
 
@@ -256,12 +279,14 @@ const WorkerDashboard: React.FC = memo(() => {
           }
         } else {
           // No assignment for today
+          setCurrentAssignment(null);
           setHasSubmittedToday(true); // Disable the button
           setTodaySubmission(null);
           console.log('❌ Work readiness disabled - no assignment for today');
         }
       } else {
         console.error('❌ Error checking assignment:', result.message);
+        setCurrentAssignment(null);
         setHasSubmittedToday(false);
         setTodaySubmission(null);
       }
@@ -633,12 +658,12 @@ const WorkerDashboard: React.FC = memo(() => {
       try {
         const { kpiAPI } = await import('../../utils/backendApi');
         
-        // Prepare assessment data in the format expected by the backend
+        // Prepare assessment data in the format expected by the backend (snake_case)
         const assessmentData = {
-          readinessLevel: workReadinessData.readiness_level,
-          fatigueLevel: workReadinessData.fatigue_level,
+          readiness_level: workReadinessData.readiness_level,
+          fatigue_level: workReadinessData.fatigue_level,
           mood: workReadinessData.mood,
-          painDiscomfort: workReadinessData.pain_discomfort,
+          pain_discomfort: workReadinessData.pain_discomfort,
           notes: workReadinessData.notes
         };
         
@@ -821,7 +846,8 @@ const WorkerDashboard: React.FC = memo(() => {
       setWorkReadinessLoading(true);
       
       // 🚨 DUPLICATE PREVENTION: Check for existing submission in database
-      const today = new Date().toISOString().split('T')[0];
+      // Use PH time (UTC+8) to match backend logic
+      const today = getPHToday();
       const existingSubmission = await SupabaseAPI.getWorkReadinessByWorker(user.id, today);
       
       if (existingSubmission && existingSubmission.length > 0) {
@@ -872,19 +898,21 @@ const WorkerDashboard: React.FC = memo(() => {
       // Submit work readiness data with cycle tracking
       const { kpiAPI } = await import('../../utils/backendApi');
       
-      // Prepare assessment data in the format expected by the backend
+      // Prepare assessment data in the format expected by the backend (snake_case)
       const assessmentData = {
-        readinessLevel: workReadinessData.readiness_level,
-        fatigueLevel: workReadinessData.fatigue_level,
+        readiness_level: workReadinessData.readiness_level,
+        fatigue_level: workReadinessData.fatigue_level,
         mood: workReadinessData.mood,
-        painDiscomfort: workReadinessData.pain_discomfort,
+        pain_discomfort: workReadinessData.pain_discomfort,
         notes: workReadinessData.notes
       };
       
-      const cycleResult = await kpiAPI.submitAssessment({ 
+      const requestPayload = { 
         workerId: user.id,
         assessmentData: assessmentData
-      });
+      };
+      
+      const cycleResult = await kpiAPI.submitAssessment(requestPayload);
       
       if (cycleResult.success) {
         console.log('✅ Work readiness submitted with cycle data:', cycleResult.message);
@@ -1378,10 +1406,17 @@ const WorkerDashboard: React.FC = memo(() => {
                       }}
                     >
                       <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                        ⏰ Complete by end of day (11:59 PM)
+                        ⏰ Complete by {currentAssignment?.due_time 
+                          ? new Date(currentAssignment.due_time).toLocaleTimeString([], { 
+                              hour: '2-digit', 
+                              minute: '2-digit',
+                              hour12: true 
+                            })
+                          : 'end of day (11:59 PM)'
+                        }
                       </Typography>
                       <Typography variant="caption" sx={{ display: 'block', mt: 0.5, mb: 2 }}>
-                        You have been assigned work readiness assessment for today. Please complete it before the end of the day.
+                        You have been assigned work readiness assessment for today. Please complete it before the deadline.
                       </Typography>
                       <Button
                         variant="contained"

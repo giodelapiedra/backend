@@ -1,260 +1,183 @@
 import axios from 'axios';
 import { authClient } from '../lib/supabase';
 
+// API Response Types
+interface BaseAPIResponse {
+  success: boolean;
+  message?: string;
+}
+
+interface AssignmentResponse extends BaseAPIResponse {
+  assignments: any[];
+}
+
+interface UnselectedWorkersResponse extends BaseAPIResponse {
+  unselectedWorkers: any[];
+}
+
+interface CanSubmitResponse extends BaseAPIResponse {
+  canSubmit: boolean;
+  assignment?: any;
+}
+
+interface AssignmentCreationResponse extends BaseAPIResponse {
+  deadlineMessage?: string;
+}
+
+interface AssignmentCancellationResponse extends BaseAPIResponse {
+  message: string;
+}
+
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001/api';
 
-// Create axios instance with auth header
 const apiClient = axios.create({
   baseURL: API_URL,
-  timeout: 30000, // 30 seconds timeout
+  timeout: 30000,
   headers: {
-    'Content-Type': 'application/json'
-  }
+    'Content-Type': 'application/json',
+  },
 });
 
-// Add auth token to all requests
+// 🔐 Auth Token Interceptor
 apiClient.interceptors.request.use(
   async (config) => {
     try {
-      // Get Supabase session token
       const { data: { session } } = await authClient.auth.getSession();
-      
       if (session?.access_token) {
         config.headers.Authorization = `Bearer ${session.access_token}`;
       }
-      
-      return config;
     } catch (error) {
       console.error('Error getting auth token:', error);
-      return config;
     }
+    return config;
   },
-  (error) => {
-    return Promise.reject(error);
-  }
+  (error) => Promise.reject(error)
 );
 
-// Response interceptor for error handling
+// ❌ 401 Interceptor — consider external handling
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      // Token expired or invalid
       localStorage.removeItem('token');
+      // 👇 Move this to external logic if possible
       window.location.href = '/login';
     }
     return Promise.reject(error);
   }
 );
 
+// 🔁 Unified request wrapper for cleaner API methods
+const request = async <T>(fn: () => Promise<any>, fallbackErrorMsg: string): Promise<T> => {
+  try {
+    const response = await fn();
+    return response.data;
+  } catch (error: any) {
+    const message = error?.response?.data?.error || fallbackErrorMsg;
+    console.error(message, error);
+    throw new Error(message);
+  }
+};
+
+// 🕒 Time conversion utility (UTC to PHT)
+const toPHT = (isoTime: string): string => {
+  const date = new Date(`1970-01-01T${isoTime}Z`);
+  date.setHours(date.getHours() + 8); // Convert UTC to UTC+8
+  return date.toISOString().substring(11, 16); // "HH:MM"
+};
+
 export class BackendAssignmentAPI {
-  /**
-   * Create work readiness assignments
-   */
   static async createAssignments(
     workerIds: string[],
     assignedDate: Date,
     team: string,
     notes?: string,
     dueTime?: string,
-    unselectedWorkers?: Array<{workerId: string, reason: string, notes?: string}>
-  ) {
-    try {
-      // Ensure dueTime is in correct format (HH:MM)
-      let formattedDueTime = '09:00'; // default
-      if (dueTime) {
-        // Convert to string and extract time if needed
-        const timeStr = String(dueTime);
-        if (timeStr.includes('T')) {
-          // If it's an ISO string, extract time part
-          const timePart = timeStr.split('T')[1]?.split('.')[0]?.substring(0, 5);
-          formattedDueTime = timePart || '09:00';
-        } else if (timeStr.match(/^\d{1,2}:\d{2}$/)) {
-          // If it's already in HH:MM format
-          formattedDueTime = timeStr;
-        }
-      }
+    unselectedWorkers?: Array<{ workerId: string; reason: string; notes?: string }>
+  ): Promise<AssignmentCreationResponse> {
+    const formattedDate = assignedDate.toISOString().split('T')[0];
+    let formattedTime = '09:00';
 
-      const response = await apiClient.post('/work-readiness-assignments', {
+    if (dueTime) {
+      const match = dueTime.match(/\d{2}:\d{2}/);
+      formattedTime = match ? toPHT(`${match[0]}:00`) : '09:00';
+    }
+
+    return request(() =>
+      apiClient.post('/work-readiness-assignments', {
         workerIds,
-        assignedDate: assignedDate.toISOString().split('T')[0],
+        assignedDate: formattedDate,
         team,
         notes,
-        dueTime: formattedDueTime,
-        unselectedWorkers
-      });
-      return response.data;
-    } catch (error: any) {
-      console.error('Error creating assignments:', error);
-      throw new Error(error.response?.data?.error || 'Failed to create assignments');
-    }
+        dueTime: dueTime ? formattedTime : undefined,
+        unselectedWorkers,
+      }), 'Failed to create assignments'
+    );
   }
 
-  /**
-   * Get assignments for team leader
-   */
-  static async getAssignments(date?: Date, status?: string) {
-    try {
-      const params: any = {};
-      if (date) {
-        params.date = date.toISOString().split('T')[0];
-      }
-      if (status) {
-        params.status = status;
-      }
+  static async getAssignments(date?: Date, status?: string): Promise<AssignmentResponse> {
+    const params: any = {};
+    if (date) params.date = date.toISOString().split('T')[0];
+    if (status) params.status = status;
 
-      const response = await apiClient.get('/work-readiness-assignments', { params });
-      return response.data;
-    } catch (error: any) {
-      console.error('Error fetching assignments:', error);
-      throw new Error(error.response?.data?.error || 'Failed to fetch assignments');
-    }
+    return request(() => apiClient.get('/work-readiness-assignments', { params }), 'Failed to fetch assignments');
   }
 
-  /**
-   * Get assignments for worker
-   */
-  static async getWorkerAssignments(date?: Date, status?: string) {
-    try {
-      const params: any = {};
-      if (date) {
-        params.date = date.toISOString().split('T')[0];
-      }
-      if (status) {
-        params.status = status;
-      }
+  static async getWorkerAssignments(date?: Date, status?: string): Promise<AssignmentResponse> {
+    const params: any = {};
+    if (date) params.date = date.toISOString().split('T')[0];
+    if (status) params.status = status;
 
-      const response = await apiClient.get('/work-readiness-assignments/worker', { params });
-      return response.data;
-    } catch (error: any) {
-      console.error('Error fetching worker assignments:', error);
-      throw new Error(error.response?.data?.error || 'Failed to fetch assignments');
-    }
+    return request(() => apiClient.get('/work-readiness-assignments/worker', { params }), 'Failed to fetch worker assignments');
   }
 
-  /**
-   * Get today's assignment for worker
-   */
-  static async getTodayAssignment() {
-    try {
-      const response = await apiClient.get('/work-readiness-assignments/today');
-      return response.data;
-    } catch (error: any) {
-      console.error('Error fetching today assignment:', error);
-      throw new Error(error.response?.data?.error || 'Failed to fetch assignment');
-    }
+  static async getTodayAssignment(): Promise<CanSubmitResponse> {
+    return request(() => apiClient.get('/work-readiness-assignments/today'), 'Failed to fetch today\'s assignment');
   }
 
-  /**
-   * Update assignment status
-   */
   static async updateAssignmentStatus(
     assignmentId: string,
     status: string,
     notes?: string,
     workReadinessId?: string
-  ) {
-    try {
-      const response = await apiClient.patch(`/work-readiness-assignments/${assignmentId}`, {
+  ): Promise<BaseAPIResponse> {
+    return request(() =>
+      apiClient.patch(`/work-readiness-assignments/${assignmentId}`, {
         status,
         notes,
-        workReadinessId
-      });
-      return response.data;
-    } catch (error: any) {
-      console.error('Error updating assignment:', error);
-      throw new Error(error.response?.data?.error || 'Failed to update assignment');
-    }
+        workReadinessId,
+      }), 'Failed to update assignment'
+    );
   }
 
-  /**
-   * Cancel assignment
-   */
-  static async cancelAssignment(assignmentId: string) {
-    try {
-      const response = await apiClient.delete(`/work-readiness-assignments/${assignmentId}`);
-      return response.data;
-    } catch (error: any) {
-      console.error('Error cancelling assignment:', error);
-      throw new Error(error.response?.data?.error || 'Failed to cancel assignment');
-    }
+  static async cancelAssignment(assignmentId: string): Promise<AssignmentCancellationResponse> {
+    return request(() => apiClient.delete(`/work-readiness-assignments/${assignmentId}`), 'Failed to cancel assignment');
   }
 
-  /**
-   * Get assignment statistics
-   */
-  static async getAssignmentStats(startDate?: Date, endDate?: Date) {
-    try {
-      const params: any = {};
-      if (startDate) {
-        params.startDate = startDate.toISOString().split('T')[0];
-      }
-      if (endDate) {
-        params.endDate = endDate.toISOString().split('T')[0];
-      }
+  static async getAssignmentStats(startDate?: Date, endDate?: Date): Promise<any> {
+    const params: any = {};
+    if (startDate) params.startDate = startDate.toISOString().split('T')[0];
+    if (endDate) params.endDate = endDate.toISOString().split('T')[0];
 
-      const response = await apiClient.get('/work-readiness-assignments/stats', { params });
-      return response.data;
-    } catch (error: any) {
-      console.error('Error fetching assignment stats:', error);
-      throw new Error(error.response?.data?.error || 'Failed to fetch statistics');
-    }
+    return request(() => apiClient.get('/work-readiness-assignments/stats', { params }), 'Failed to fetch stats');
   }
 
-  /**
-   * Mark overdue assignments (Admin only)
-   */
-  static async markOverdueAssignments() {
-    try {
-      const response = await apiClient.post('/work-readiness-assignments/mark-overdue');
-      return response.data;
-    } catch (error: any) {
-      console.error('Error marking overdue assignments:', error);
-      throw new Error(error.response?.data?.error || 'Failed to mark overdue assignments');
-    }
+  static async markOverdueAssignments(): Promise<BaseAPIResponse> {
+    return request(() => apiClient.post('/work-readiness-assignments/mark-overdue'), 'Failed to mark overdue');
   }
 
-  /**
-   * Check if worker can submit work readiness (has active assignment)
-   */
-  static async canSubmitWorkReadiness() {
-    try {
-      const response = await apiClient.get('/work-readiness-assignments/can-submit');
-      return response.data;
-    } catch (error: any) {
-      console.error('Error checking if can submit work readiness:', error);
-      throw new Error(error.response?.data?.error || 'Failed to check assignment status');
-    }
+  static async canSubmitWorkReadiness(): Promise<CanSubmitResponse> {
+    return request(() => apiClient.get('/work-readiness-assignments/can-submit'), 'Failed to check submission eligibility');
   }
 
-  /**
-   * Get unselected workers with reasons
-   */
-  static async getUnselectedWorkers(date?: Date) {
-    try {
-      const params: any = {};
-      if (date) {
-        params.date = date.toISOString().split('T')[0];
-      }
+  static async getUnselectedWorkers(date?: Date): Promise<UnselectedWorkersResponse> {
+    const params: any = {};
+    if (date) params.date = date.toISOString().split('T')[0];
 
-      const response = await apiClient.get('/work-readiness-assignments/unselected', { params });
-      return response.data;
-    } catch (error: any) {
-      console.error('Error fetching unselected workers:', error);
-      throw new Error(error.response?.data?.error || 'Failed to fetch unselected workers');
-    }
+    return request(() => apiClient.get('/work-readiness-assignments/unselected', { params }), 'Failed to fetch unselected workers');
   }
 
-  /**
-   * Close unselected worker case
-   */
-  static async closeUnselectedWorkerCase(unselectedWorkerId: string) {
-    try {
-      const response = await apiClient.patch(`/work-readiness-assignments/unselected/${unselectedWorkerId}/close`);
-      return response.data;
-    } catch (error: any) {
-      console.error('Error closing unselected worker case:', error);
-      throw new Error(error.response?.data?.error || 'Failed to close case');
-    }
+  static async closeUnselectedWorkerCase(unselectedWorkerId: string): Promise<BaseAPIResponse> {
+    return request(() => apiClient.patch(`/work-readiness-assignments/unselected/${unselectedWorkerId}/close`), 'Failed to close case');
   }
 }
