@@ -1,5 +1,18 @@
 const jwt = require('jsonwebtoken');
-const User = require('../models/User');
+
+// Skip MongoDB imports in production or if mongoose is not available
+let User;
+try {
+  if (process.env.NODE_ENV !== 'production' && process.env.USE_SUPABASE !== 'true') {
+    User = require('../models/User');
+  } else {
+    console.log('⏭️ Skipping MongoDB imports in auth middleware - using Supabase only');
+    User = {};
+  }
+} catch (error) {
+  console.log('⏭️ Mongoose not available in auth middleware - using Supabase only');
+  User = {};
+}
 
 const generateToken = (userId) => {
   return jwt.sign({ userId }, process.env.JWT_SECRET, {

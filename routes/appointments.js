@@ -1,8 +1,26 @@
 const express = require('express');
 const { body, query } = require('express-validator');
-const Appointment = require('../models/Appointment');
-const Case = require('../models/Case');
-const User = require('../models/User');
+
+// Skip MongoDB imports in production or if mongoose is not available
+let Appointment, Case, User;
+try {
+  if (process.env.NODE_ENV !== 'production' && process.env.USE_SUPABASE !== 'true') {
+    Appointment = require('../models/Appointment');
+    Case = require('../models/Case');
+    User = require('../models/User');
+  } else {
+    console.log('⏭️ Skipping MongoDB imports in appointments routes - using Supabase only');
+    Appointment = {};
+    Case = {};
+    User = {};
+  }
+} catch (error) {
+  console.log('⏭️ Mongoose not available in appointments routes - using Supabase only');
+  Appointment = {};
+  Case = {};
+  User = {};
+}
+
 const { authMiddleware, roleMiddleware } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
 const zoomService = require('../services/ZoomService');

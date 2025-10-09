@@ -12,29 +12,53 @@ const generalLimiter = rateLimit({
   legacyHeaders: false, // Disable the `X-RateLimit-*` headers
 });
 
-// DISABLED: Rate limiter for authentication endpoints
-const authLimiter = (req, res, next) => {
-  // Skip rate limiting completely
-  next();
-};
+// Rate limiter for authentication endpoints
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // limit each IP to 5 requests per windowMs
+  message: {
+    error: 'Too many authentication attempts, please try again later.',
+    retryAfter: '15 minutes'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
-// DISABLED: Registration rate limiter
-const registrationLimiter = (req, res, next) => {
-  // Skip rate limiting completely
-  next();
-};
+// Registration rate limiter
+const registrationLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 3, // limit each IP to 3 registrations per hour
+  message: {
+    error: 'Too many registration attempts, please try again later.',
+    retryAfter: '1 hour'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
-// DISABLED: Password reset rate limiter
-const passwordResetLimiter = (req, res, next) => {
-  // Skip rate limiting completely
-  next();
-};
+// Password reset rate limiter
+const passwordResetLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 3, // limit each IP to 3 password reset attempts per hour
+  message: {
+    error: 'Too many password reset attempts, please try again later.',
+    retryAfter: '1 hour'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
-// DISABLED: Admin operations rate limiter
-const adminLimiter = (req, res, next) => {
-  // Skip rate limiting completely
-  next();
-};
+// Admin operations rate limiter
+const adminLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 50, // limit each IP to 50 admin requests per windowMs
+  message: {
+    error: 'Too many admin requests, please try again later.',
+    retryAfter: '15 minutes'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 module.exports = {
   generalLimiter,

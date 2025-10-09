@@ -1,92 +1,200 @@
-const { validationResult } = require('express-validator');
+/**
+ * Error Handling Middleware
+ * Provides comprehensive error handling and logging
+ */
 
-const handleValidationErrors = (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      message: 'Validation failed',
-      errors: errors.array()
-    });
-  }
-  next();
-};
+const logger = require('../utils/logger');
 
-const asyncHandler = (fn) => async (req, res, next) => {
-  try {
-    await fn(req, res, next);
-  } catch (error) {
-    console.error('AsyncHandler caught error:', error);
-    // Send error response directly instead of passing to next
-    res.status(500).json({
-      message: error.message || 'Internal Server Error',
-      ...(process.env.NODE_ENV === 'development' && { 
-        stack: error.stack,
-        details: error 
-      })
-    });
-  }
-};
+/**
+ * Generate unique error ID for tracking
+ * @returns {string} Error ID
+ */
+function generateErrorId() {
+  return `ERR_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
 
+/**
+ * Error handler middleware
+ * @param {Error} err - Error object
+ * @param {Request} req - Express request object
+ * @param {Response} res - Express response object
+ * @param {Function} next - Next middleware function
+ */
 const errorHandler = (err, req, res, next) => {
-  console.error(err.stack);
+  const errorId = generateErrorId();
+  
+  // Log error details
+  logger.error('API Error', {
+    errorId,
+    message: err.message,
+    stack: err.stack,
+    userId: req.user?.id,
+    endpoint: req.path,
+    method: req.method,
+    ip: req.ip,
+    userAgent: req.get('User-Agent'),
+    body: req.body,
+    query: req.query,
+    params: req.params
+  });
 
-  // Mongoose validation error
+  // Determine error type and status code
+  let statusCode = 500;
+  let message = 'Internal server error';
+  let details = null;
+
+  // Handle specific error types
   if (err.name === 'ValidationError') {
-    const errors = Object.values(err.errors).map(e => ({
-      field: e.path,
-      message: e.message
-    }));
-    return res.status(400).json({
-      message: 'Validation Error',
-      errors
-    });
+    statusCode = 400;
+    message = 'Validation error';
+    details = err.details || err.message;
+  } else if (err.name === 'UnauthorizedError') {
+    statusCode = 401;
+    message = 'Unauthorized';
+  } else if (err.name === 'ForbiddenError') {
+    statusCode = 403;
+    message = 'Forbidden';
+  } else if (err.name === 'NotFoundError') {
+    statusCode = 404;
+    message = 'Resource not found';
+  } else if (err.code === 'PGRST116') {
+    // Supabase "no rows" error
+    statusCode = 404;
+    message = 'Resource not found';
+  } else if (err.code && err.code.startsWith('PGRST')) {
+    // Supabase database errors
+    statusCode = 400;
+    message = 'Database error';
+    details = err.message;
+  } else if (err.message && err.message.includes('already exists')) {
+    statusCode = 409;
+    message = 'Resource already exists';
+  } else if (err.message && err.message.includes('validation')) {
+    statusCode = 400;
+    message = 'Validation failed';
+    details = err.message;
   }
 
-  // Mongoose duplicate key error
-  if (err.code === 11000) {
-    const field = Object.keys(err.keyValue)[0];
-    return res.status(400).json({
-      message: `${field} already exists`,
-      field
-    });
-  }
+  // Prepare error response
+  const errorResponse = {
+    success: false,
+    error: {
+      id: errorId,
+      message,
+      ...(details && { details }),
+      ...(process.env.NODE_ENV === 'development' && { 
+        stack: err.stack,
+        originalError: err.message 
+      })
+    },
+    timestamp: new Date().toISOString()
+  };
 
-  // Mongoose cast error
-  if (err.name === 'CastError') {
-    return res.status(400).json({
-      message: 'Invalid ID format'
-    });
-  }
+  // Send error response
+  res.status(statusCode).json(errorResponse);
+};
 
-  // JWT errors
-  if (err.name === 'JsonWebTokenError') {
-    return res.status(401).json({
-      message: 'Invalid token'
-    });
-  }
+/**
+ * 404 handler for undefined routes
+ * @param {Request} req - Express request object
+ * @param {Response} res - Express response object
+ */
+const notFoundHandler = (req, res) => {
+  const errorId = generateErrorId();
+  
+  logger.warn('404 Not Found', {
+    errorId,
+    endpoint: req.path,
+    method: req.method,
+    ip: req.ip,
+    userAgent: req.get('User-Agent')
+  });
 
-  if (err.name === 'TokenExpiredError') {
-    return res.status(401).json({
-      message: 'Token expired'
-    });
-  }
-
-  // Default error
-  res.status(err.status || 500).json({
-    message: err.message || 'Internal Server Error',
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
+  res.status(404).json({
+    success: false,
+    error: {
+      id: errorId,
+      message: 'Endpoint not found',
+      endpoint: req.path,
+      method: req.method
+    },
+    timestamp: new Date().toISOString()
   });
 };
 
-const notFound = (req, res, next) => {
-  const error = new Error(`Not Found - ${req.originalUrl}`);
-  res.status(404);
-  next(error);
+/**
+ * Async error wrapper
+ * Wraps async route handlers to catch errors
+ * @param {Function} fn - Async function to wrap
+ * @returns {Function} Wrapped function
+ */
+const asyncHandler = (fn) => {
+  return (req, res, next) => {
+    Promise.resolve(fn(req, res, next)).catch(next);
+  };
+};
+
+/**
+ * Create custom error
+ * @param {string} message - Error message
+ * @param {number} statusCode - HTTP status code
+ * @param {string} name - Error name
+ * @returns {Error} Custom error
+ */
+const createError = (message, statusCode = 500, name = 'CustomError') => {
+  const error = new Error(message);
+  error.name = name;
+  error.statusCode = statusCode;
+  return error;
+};
+
+/**
+ * Validation error
+ * @param {string} message - Error message
+ * @param {any} details - Validation details
+ * @returns {Error} Validation error
+ */
+const createValidationError = (message, details = null) => {
+  const error = createError(message, 400, 'ValidationError');
+  error.details = details;
+  return error;
+};
+
+/**
+ * Unauthorized error
+ * @param {string} message - Error message
+ * @returns {Error} Unauthorized error
+ */
+const createUnauthorizedError = (message = 'Unauthorized') => {
+  return createError(message, 401, 'UnauthorizedError');
+};
+
+/**
+ * Forbidden error
+ * @param {string} message - Error message
+ * @returns {Error} Forbidden error
+ */
+const createForbiddenError = (message = 'Forbidden') => {
+  return createError(message, 403, 'ForbiddenError');
+};
+
+/**
+ * Not found error
+ * @param {string} message - Error message
+ * @returns {Error} Not found error
+ */
+const createNotFoundError = (message = 'Resource not found') => {
+  return createError(message, 404, 'NotFoundError');
 };
 
 module.exports = {
-  handleValidationErrors,
-  asyncHandler,
   errorHandler,
-  notFound
+  notFoundHandler,
+  asyncHandler,
+  createError,
+  createValidationError,
+  createUnauthorizedError,
+  createForbiddenError,
+  createNotFoundError,
+  generateErrorId
 };

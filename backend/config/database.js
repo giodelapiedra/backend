@@ -1,14 +1,16 @@
 // Skip MongoDB completely in production
 if (process.env.NODE_ENV === 'production' || process.env.USE_SUPABASE === 'true') {
-  console.log('Skipping MongoDB completely - using Supabase only');
+  console.log('⏭️ Skipping MongoDB completely - using Supabase only (backend/backend)');
   module.exports = {
-    connectDB: async () => null,
+    connectDB: async () => {
+      console.log('⏭️ MongoDB connectDB called but skipped (using Supabase)');
+      return null;
+    },
     getConnection: () => null
   };
-  return;
-}
-
-const mongoose = require('mongoose');
+} else {
+  // Only load mongoose in development
+  const mongoose = require('mongoose');
 
 // Database connection URL - connect to occupational-rehab database
 const DB_URL = process.env.MONGODB_URI || 'mongodb://localhost:27017/occupational-rehab';
@@ -136,14 +138,15 @@ const connectDB = async () => {
   }
 };
 
-// Export connection functions that handle production environment
-module.exports = {
-  connectDB,
-  getConnection: () => {
-    // Return null connection in production to prevent MongoDB usage
-    if (process.env.NODE_ENV === 'production' || process.env.USE_SUPABASE === 'true') {
-      return null;
+  // Export connection functions that handle production environment
+  module.exports = {
+    connectDB,
+    getConnection: () => {
+      // Return null connection in production to prevent MongoDB usage
+      if (process.env.NODE_ENV === 'production' || process.env.USE_SUPABASE === 'true') {
+        return null;
+      }
+      return mongoose.connection;
     }
-    return mongoose.connection;
-  }
-};
+  };
+}

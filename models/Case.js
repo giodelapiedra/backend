@@ -1,24 +1,17 @@
 // Skip MongoDB models in production or if mongoose is not available
-try {
-  if (process.env.NODE_ENV === 'production' || process.env.USE_SUPABASE === 'true') {
-    console.log('Skipping Case model - using Supabase only');
+if (process.env.NODE_ENV === 'production' || process.env.USE_SUPABASE === 'true') {
+  console.log('⏭️ Skipping Case model - using Supabase only');
+  module.exports = {};
+} else {
+  // Only load mongoose in development
+  let mongoose;
+  try {
+    mongoose = require('mongoose');
+  } catch (error) {
+    console.log('⏭️ Mongoose not available - using Supabase only');
     module.exports = {};
     return;
   }
-} catch (error) {
-  console.log('Skipping Case model - mongoose not available');
-  module.exports = {};
-  return;
-}
-
-let mongoose;
-try {
-  mongoose = require('mongoose');
-} catch (error) {
-  console.log('Mongoose not available - using Supabase only');
-  module.exports = {};
-  return;
-}
 
 const caseSchema = new mongoose.Schema({
   caseNumber: {
@@ -184,12 +177,13 @@ caseSchema.index({ worker: 1 });
 caseSchema.index({ employer: 1 });
 caseSchema.index({ caseManager: 1 });
 caseSchema.index({ clinician: 1 });
-caseSchema.index({ status: 1 });
-caseSchema.index({ priority: 1 });
-caseSchema.index({ createdAt: -1 });
-caseSchema.index({ updatedAt: -1 });
-caseSchema.index({ worker: 1, status: 1 }); // Compound index for worker cases
-caseSchema.index({ caseManager: 1, status: 1 }); // Compound index for case manager workload
-caseSchema.index({ clinician: 1, status: 1 }); // Compound index for clinician workload
+  caseSchema.index({ status: 1 });
+  caseSchema.index({ priority: 1 });
+  caseSchema.index({ createdAt: -1 });
+  caseSchema.index({ updatedAt: -1 });
+  caseSchema.index({ worker: 1, status: 1 }); // Compound index for worker cases
+  caseSchema.index({ caseManager: 1, status: 1 }); // Compound index for case manager workload
+  caseSchema.index({ clinician: 1, status: 1 }); // Compound index for clinician workload
 
-module.exports = mongoose.model('Case', caseSchema);
+  module.exports = mongoose.model('Case', caseSchema);
+}

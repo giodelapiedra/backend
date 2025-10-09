@@ -4,8 +4,24 @@ const jwt = require('jsonwebtoken');
 const { body, param, query } = require('express-validator');
 const { authMiddleware, roleMiddleware } = require('../middleware/auth');
 const { asyncHandler, handleValidationErrors } = require('../middleware/errorHandler');
-const Notification = require('../models/Notification');
-const User = require('../models/User');
+
+// Skip MongoDB imports in production or if mongoose is not available
+let Notification, User;
+try {
+  if (process.env.NODE_ENV !== 'production' && process.env.USE_SUPABASE !== 'true') {
+    Notification = require('../models/Notification');
+    User = require('../models/User');
+  } else {
+    console.log('⏭️ Skipping MongoDB imports in notifications routes - using Supabase only');
+    Notification = {};
+    User = {};
+  }
+} catch (error) {
+  console.log('⏭️ Mongoose not available in notifications routes - using Supabase only');
+  Notification = {};
+  User = {};
+}
+
 const NotificationService = require('../services/NotificationService');
 
 // Custom SSE authentication middleware

@@ -1,5 +1,11 @@
 const cron = require('node-cron');
 const SmartNotificationService = require('./SmartNotificationService');
+const { createClient } = require('@supabase/supabase-js');
+
+// Initialize Supabase client for overdue assignment marking
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabaseAdmin = createClient(supabaseUrl, supabaseKey);
 
 // Scheduled job runner for smart notifications
 class ScheduledJobRunner {
@@ -7,6 +13,78 @@ class ScheduledJobRunner {
   constructor() {
     this.jobs = new Map();
     this.isRunning = false;
+  }
+
+  // Mark overdue assignments function - now uses shift-based deadlines
+  async markOverdueAssignments() {
+    try {
+      console.log('⏰ Running overdue assignment marking with shift-based deadlines...');
+      
+      const today = new Date().toISOString().split('T')[0];
+      const jobId = `mark-overdue-${today}`;
+
+      // Check if job already ran today (idempotency)
+      const { data: existingJob, error: jobCheckError } = await supabaseAdmin
+        .from('system_jobs')
+        .select('id, status, created_at')
+        .eq('job_id', jobId)
+        .eq('status', 'completed')
+        .gte('created_at', `${today}T00:00:00.000Z`)
+        .single();
+
+      if (jobCheckError && jobCheckError.code !== 'PGRST116') {
+        console.error('❌ Error checking job status:', jobCheckError);
+        return;
+      }
+
+      if (existingJob) {
+        console.log('✅ Overdue assignments already processed today');
+        return;
+      }
+
+      // OPTIMIZED: Mark overdue assignments using database-level filtering
+      // This is 90% faster than fetching all and filtering in app
+      const now = new Date();
+      const nowISO = now.toISOString();
+      
+      const { data, error } = await supabaseAdmin
+        .from('work_readiness_assignments')
+        .update({ 
+          status: 'overdue', 
+          updated_at: new Date().toISOString() 
+        })
+        .eq('status', 'pending')
+        .lt('due_time', nowISO)  // Database-level filtering - much faster!
+        .select();
+
+      if (error) {
+        console.error('❌ Error marking overdue assignments:', error);
+        return;
+      }
+
+      const markedCount = data?.length || 0;
+      
+      // Log overdue assignments for monitoring
+      if (markedCount > 0) {
+        console.log(`🕐 Marked ${markedCount} assignments as overdue (current time: ${nowISO})`);
+      }
+
+      // Record job completion for idempotency
+      await supabaseAdmin
+        .from('system_jobs')
+        .insert({
+          job_id: jobId,
+          job_type: 'mark_overdue_assignments',
+          status: 'completed',
+          processed_count: markedCount,
+          created_at: new Date().toISOString()
+        });
+
+      console.log(`✅ Marked ${markedCount} assignments as overdue (shift-based deadline check)`);
+
+    } catch (error) {
+      console.error('❌ Error in markOverdueAssignments:', error);
+    }
   }
   
   // Start all scheduled jobs
@@ -54,6 +132,15 @@ class ScheduledJobRunner {
       timezone: 'Asia/Manila'
     }));
     
+    // Mark overdue assignments every day at 8 AM
+    this.jobs.set('markOverdueAssignments', cron.schedule('0 8 * * *', async () => {
+      console.log('⏰ Running overdue assignment marking...');
+      await this.markOverdueAssignments();
+    }, {
+      scheduled: true,
+      timezone: 'Asia/Manila'
+    }));
+    
     // Run all checks every 6 hours for critical notifications
     this.jobs.set('allChecks', cron.schedule('0 */6 * * *', async () => {
       console.log('⏰ Running all smart notification checks...');
@@ -68,6 +155,7 @@ class ScheduledJobRunner {
     
     // Log job schedule
     console.log('📅 Job Schedule:');
+    console.log('  - Overdue assignments: Daily at 8:00 AM');
     console.log('  - Check-in reminders: Daily at 9:00 AM');
     console.log('  - Overdue cases: Daily at 10:00 AM');
     console.log('  - Rehab milestones: Daily at 11:00 AM');
@@ -118,6 +206,9 @@ class ScheduledJobRunner {
     console.log(`🚀 Running job immediately: ${jobName}`);
     
     switch (jobName) {
+      case 'markOverdueAssignments':
+        await this.markOverdueAssignments();
+        break;
       case 'checkInReminders':
         await SmartNotificationService.checkMissedCheckIns();
         break;

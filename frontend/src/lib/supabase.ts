@@ -1,9 +1,9 @@
 import { createClient } from '@supabase/supabase-js';
 import { cookieStorage } from './cookieStorage';
 
-const supabaseUrl = 'https://dtcgzgbxhefwhqpeotrl.supabase.co';
-const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR0Y2d6Z2J4aGVmd2hxcGVvdHJsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTkxNDQ3MTgsImV4cCI6MjA3NDcyMDcxOH0.n557fWuqr8-e900nNhWOfeJTzdnhSzsv5tBW2pNM4gw';
-const supabaseServiceKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR0Y2d6Z2J4aGVmd2hxcGVvdHJsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1OTE0NDcxOCwiZXhwIjoyMDc0NzIwNzE4fQ.D1wSP12YM8jPtF-llVFiC4cI7xKJtRMtiaUuwRzJ3z8';
+// ✅ SECURITY FIX: Use environment variables, with fallback for development
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://dtcgzgbxhefwhqpeotrl.supabase.co';
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR0Y2d6Z2J4aGVmd2hxcGVvdHJsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTkxNDQ3MTgsImV4cCI6MjA3NDcyMDcxOH0.n557fWuqr8-e900nNhWOfeJTzdnhSzsv5tBW2pNM4gw';
 
 // Auth client with anon key for auth operations using cookie storage
 export const authClient = createClient(supabaseUrl, supabaseAnonKey, {
@@ -16,17 +16,14 @@ export const authClient = createClient(supabaseUrl, supabaseAnonKey, {
   }
 });
 
-// Data client with service role key for data operations
-export const dataClient = createClient(supabaseUrl, supabaseServiceKey, {
+// ✅ SECURITY FIX: Data client now uses anon key (RLS will protect data)
+// Service role operations should ONLY happen on backend
+export const dataClient = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
-    autoRefreshToken: false,
-    persistSession: false
-  },
-  global: {
-    headers: {
-      'Authorization': `Bearer ${supabaseServiceKey}`,
-      'apikey': supabaseServiceKey
-    }
+    autoRefreshToken: true,
+    persistSession: true,
+    detectSessionInUrl: true,
+    storage: cookieStorage
   }
 });
 
@@ -34,7 +31,7 @@ export const dataClient = createClient(supabaseUrl, supabaseServiceKey, {
 export const supabase = authClient;
 
 // Database type definitions
-export interface Database {
+export interface Database { 
   public: {
     Tables: {
       users: {
@@ -280,43 +277,10 @@ export const supabaseHelpers = {
       if (error) {
         console.error('Storage upload error:', error);
         
-        // If bucket doesn't exist, create it using REST API
+        // ✅ SECURITY FIX: Bucket creation should be done through backend API or Supabase dashboard
+        // Don't attempt to create bucket from frontend - this is an admin operation
         if (error.message?.includes('Bucket not found') || error.message?.includes('bucket')) {
-          console.log('Creating physio bucket with anonymous access...');
-          
-          // Create bucket using REST API
-          const createBucketResponse = await fetch('https://dtcgzgbxhefwhqpeotrl.supabase.co/rest/v1/storage/v1/bucket', {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR0Y2d6Z2J4aGVmd2hxcGVvdHJsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1OTE0NDcxOCwiZXhwIjoyMDc0NzIwNzE4fQ.D1wSP12YM8jPtF-llVFiC4cI7xKJtRMtiaUuwRzJ3z8`,
-              'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR0Y2d6Z2J4aGVmd2hxcGVvdHJsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1OTE0NDcxOCwiZXhwIjoyMDc0NzIwNzE4fQ.D1wSP12YM8jPtF-llVFiC4cI7xKJtRMtiaUuwRzJ3z8',
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-              id: 'physio',
-              name: 'physio',
-              public: true,
-              file_size_limit: 5242880,
-              allowed_mime_types: ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
-            })
-          });
-          
-          console.log('Bucket creation response:', createBucketResponse.status);
-          
-          // Retry upload after creating bucket
-          const { data: retryData, error: retryError } = await dataClient.storage
-            .from('physio')
-            .upload(filePath, imageFile, {
-              cacheControl: 'max-age=300', // 5 minutes cache for profile images
-              upsert: true
-            });
-            
-          if (retryError) {
-            console.error('Error uploading after bucket creation:', retryError);
-            throw retryError;
-          }
-          
-          console.log('Upload successful after bucket creation');
+          throw new Error('Storage bucket not configured. Please contact administrator.');
         } else {
           throw error;
         }

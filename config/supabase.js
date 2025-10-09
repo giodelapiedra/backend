@@ -1,7 +1,28 @@
 const { createClient } = require('@supabase/supabase-js');
 
-const supabaseUrl = 'https://dtcgzgbxhefwhqpeotrl.supabase.co';
-const supabaseServiceKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR0Y2d6Z2J4aGVmd2hxcGVvdHJsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1OTE0NDcxOCwiZXhwIjoyMDc0NzIwNzE4fQ.D1wSP12YM8jPtF-llVFiC4cI7xKJtRMtiaUuwRzJ3z8';
+// ✅ SECURITY FIX: Load configuration from environment variables only
+// NO FALLBACK VALUES - Fail fast if configuration is missing
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+// Validate configuration - Exit immediately if missing
+if (!supabaseUrl || !supabaseServiceKey) {
+  console.error('❌ CRITICAL: Missing required Supabase configuration!');
+  console.error('');
+  console.error('Required environment variables:');
+  console.error('- SUPABASE_URL:', supabaseUrl ? '✅ Set' : '❌ Missing');
+  console.error('- SUPABASE_SERVICE_KEY:', supabaseServiceKey ? '✅ Set' : '❌ Missing');
+  console.error('');
+  console.error('Please add these to your .env file:');
+  console.error('SUPABASE_URL=https://your-project.supabase.co');
+  console.error('SUPABASE_SERVICE_KEY=your-service-role-key');
+  console.error('');
+  console.error('⚠️  NEVER commit service role keys to version control!');
+  process.exit(1);
+}
+
+console.log('✅ Supabase configuration loaded successfully');
+console.log('📍 Supabase URL:', supabaseUrl);
 
 // Create Supabase client for backend operations (service role)
 const supabase = createClient(supabaseUrl, supabaseServiceKey, {

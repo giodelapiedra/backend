@@ -3,7 +3,7 @@ const { body, query } = require('express-validator');
 const { db } = require('../config/supabase');
 const { authMiddleware, roleMiddleware } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
-const { getMyCases, getCases, getCaseById, createCase, updateCase, assignClinician } = require('../controllers/caseController');
+const { getMyCases, getCases, getCaseById, createCase, updateCase, assignClinician, getTeamsWithCases } = require('../controllers/caseController');
 const { 
   handleValidationErrors,
   validatePagination 
@@ -21,6 +21,14 @@ router.use((req, res, next) => {
   });
   next();
 });
+
+// @route   GET /api/cases/teams-with-cases
+// @desc    Get team leaders with active cases (for Site Supervisor)
+// @access  Private (Site Supervisor only)
+router.get('/teams-with-cases', [
+  authMiddleware,
+  roleMiddleware('site_supervisor')
+], asyncHandler(getTeamsWithCases));
 
 // @route   GET /api/cases/my-cases
 // @desc    Get cases assigned to the current user

@@ -240,6 +240,54 @@ export const teamsApi = createApi({
       },
       invalidatesTags: ['User'],
     }),
+
+    getUnselectedWorkers: builder.query({
+      queryFn: async ({ teamLeaderId, date }: { teamLeaderId: string; date?: string }) => {
+        try {
+          console.log('getUnselectedWorkers query called with:', { teamLeaderId, date });
+          
+          if (!teamLeaderId) {
+            console.log('No teamLeaderId provided, returning empty unselected workers');
+            return { data: { unselectedWorkers: [] } };
+          }
+
+          // Get today's date if not provided
+          const targetDate = date || new Date().toISOString().split('T')[0];
+
+          // Fetch unselected workers from the backend API
+          const response = await fetch(`/api/work-readiness-assignments/unselected?teamLeaderId=${teamLeaderId}&date=${targetDate}`, {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${localStorage.getItem('token')}`
+            }
+          });
+
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+
+          const data = await response.json();
+          
+          if (data.success && data.unselectedWorkers) {
+            // Filter out workers with closed case status
+            const activeUnselectedWorkers = data.unselectedWorkers.filter((worker: any) => 
+              worker.case_status !== 'closed'
+            );
+            
+            console.log('Unselected workers fetched:', activeUnselectedWorkers.length, 'active workers');
+            return { data: { unselectedWorkers: activeUnselectedWorkers } };
+          } else {
+            console.log('No unselected workers found or invalid response');
+            return { data: { unselectedWorkers: [] } };
+          }
+        } catch (error) {
+          console.error('getUnselectedWorkers error:', error);
+          return { error: { status: 500, data: error } };
+        }
+      },
+      providesTags: ['User'],
+    }),
   }),
 });
 
@@ -248,4 +296,5 @@ export const {
   useGetTeamMembersQuery,
   useCreateTeamMutation,
   useUpdateUserTeamMutation,
+  useGetUnselectedWorkersQuery,
 } = teamsApi;

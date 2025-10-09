@@ -1,11 +1,12 @@
 services:
   - type: web
-    name: backend
+    name: kpi-api
     env: node
     buildCommand: npm install
-    startCommand: node server.js
-    plan: free
+    startCommand: npm start
     envVars:
+      - key: NODE_VERSION
+        value: 20.18.3
       - key: NODE_ENV
         value: production
       - key: PORT
@@ -16,25 +17,13 @@ services:
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
-      - key: DATABASE_URL
-        sync: false
-      - key: JWT_SECRET
-        sync: false
-      - key: JWT_EXPIRE
-        value: 7d
-      - key: CSRF_SECRET
-        sync: false
-      - key: CLOUDINARY_CLOUD_NAME
-        sync: false
-      - key: CLOUDINARY_API_KEY
-        sync: false
-      - key: CLOUDINARY_API_SECRET
-        sync: false
-      - key: ZOOM_ACCOUNT_ID
-        sync: false
-      - key: ZOOM_CLIENT_ID
-        sync: false
-      - key: ZOOM_CLIENT_SECRET
-        sync: false
       - key: FRONTEND_URL
-        sync: false
+        value: https://sociosystem.onrender.com
+      - key: USE_SUPABASE
+        value: true
+      - key: LOG_LEVEL
+        value: info
+      - key: ENABLE_SCHEDULED_JOBS
+        value: true
+    healthCheckPath: /health
+    plan: starter
