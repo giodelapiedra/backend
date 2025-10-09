@@ -1,4 +1,3 @@
-const jwt = require('jsonwebtoken');
 const { createClient } = require('@supabase/supabase-js');
 
 // Initialize Supabase client with environment variables
@@ -18,42 +17,6 @@ const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
     persistSession: false
   }
 });
-
-/**
- * ✅ SECURITY FIX: Validate JWT secret on module load
- */
-const JWT_SECRET = process.env.JWT_SECRET;
-const JWT_EXPIRE = process.env.JWT_EXPIRE || '7d';
-
-if (!JWT_SECRET || JWT_SECRET.length < 32) {
-  console.error('❌ CRITICAL: JWT_SECRET must be set and at least 32 characters long!');
-  console.error('Generate a strong secret: node -e "console.log(require(\'crypto\').randomBytes(64).toString(\'hex\'))"');
-  process.exit(1);
-}
-
-/**
- * Generate JWT token
- */
-const generateToken = (userId, userEmail, userRole) => {
-  return jwt.sign(
-    { 
-      userId, 
-      email: userEmail,
-      role: userRole 
-    }, 
-    JWT_SECRET,
-    {
-      expiresIn: JWT_EXPIRE
-    }
-  );
-};
-
-/**
- * Verify JWT token
- */
-const verifyToken = (token) => {
-  return jwt.verify(token, JWT_SECRET);
-};
 
 /**
  * Authentication middleware for Supabase
@@ -191,8 +154,6 @@ const optionalAuth = async (req, res, next) => {
 };
 
 module.exports = {
-  generateToken,
-  verifyToken,
   authenticateToken,
   requireRole,
   optionalAuth
