@@ -39,6 +39,9 @@ const authenticateToken = async (req, res, next) => {
     }
 
     console.log('🔍 Token found, verifying with Supabase...');
+    console.log('🔍 Token length:', token.length);
+    console.log('🔍 Token preview:', token.substring(0, 50) + '...');
+    
     // Verify Supabase JWT token
     const { data: { user: authUser }, error: authError } = await supabaseAdmin.auth.getUser(token);
 

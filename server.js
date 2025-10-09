@@ -151,41 +151,20 @@ app.use('/api/work-readiness-assignments', workReadinessAssignmentRoutes);
 app.use('/api/multi-team-analytics', multiTeamAnalyticsRoutes);
 app.use('/api/shifts', shiftRoutes);
 logger.info('API routes mounted successfully', {
-  routes: ['/api/goal-kpi', '/api/work-readiness-assignments', '/api/multi-team-analytics', '/api/shifts', '/api/team-leaders']
+  routes: ['/api/goal-kpi', '/api/work-readiness-assignments', '/api/multi-team-analytics', '/api/shifts', '/api/cases', '/api/appointments', '/api/clinicians', '/api/team-leaders']
 });
 
-// TODO: Enable other routes after fixing controller issues
-// const authRoutes = require('./routes/auth.supabase');
-// const userRoutes = require('./routes/users');
-// const caseRoutes = require('./routes/cases');
-// const incidentRoutes = require('./routes/incidents');
-// const appointmentRoutes = require('./routes/appointments');
-// const notificationRoutes = require('./routes/notifications');
-// const assessmentRoutes = require('./routes/assessments');
-// const rehabilitationRoutes = require('./routes/rehabilitationPlans');
-// const checkInRoutes = require('./routes/checkIns');
-// const activityLogRoutes = require('./routes/activityLogs');
-// const adminRoutes = require('./routes/admin');
-// const clinicianRoutes = require('./routes/clinicians');
+// Supabase-compatible routes (no MongoDB dependencies)
+const caseRoutes = require('./routes/cases');
+const appointmentRoutes = require('./routes/appointments');
+const clinicianRoutes = require('./routes/clinicians');
 const teamLeaderRoutes = require('./routes/teamLeader');
-// const preventiveTaskRoutes = require('./routes/preventiveTasks');
-// const clinicianAnalyticsRoutes = require('./routes/clinicianAnalytics');
 
-// app.use('/api/auth', authRoutes);
-// app.use('/api/users', userRoutes);
-// app.use('/api/cases', caseRoutes);
-// app.use('/api/incidents', incidentRoutes);
-// app.use('/api/appointments', appointmentRoutes);
-// app.use('/api/notifications', notificationRoutes);
-// app.use('/api/assessments', assessmentRoutes);
-// app.use('/api/rehabilitation', rehabilitationRoutes);
-// app.use('/api/check-ins', checkInRoutes);
-// app.use('/api/activity-logs', activityLogRoutes);
-// app.use('/api/admin', adminRoutes);
-// app.use('/api/clinicians', clinicianRoutes);
+// Mount Supabase-compatible routes
+app.use('/api/cases', caseRoutes);
+app.use('/api/appointments', appointmentRoutes);
+app.use('/api/clinicians', clinicianRoutes);
 app.use('/api/team-leaders', teamLeaderRoutes);
-// app.use('/api/preventive-tasks', preventiveTaskRoutes);
-// app.use('/api/clinician-analytics', clinicianAnalyticsRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
