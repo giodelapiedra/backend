@@ -34,7 +34,7 @@ const handleValidationErrors = (req, res, next) => {
 // @route   GET /api/team-leader/dashboard
 // @desc    Get team leader dashboard analytics (with caching)
 // @access  Private (Team Leader)
-router.get('/dashboard', authMiddleware, asyncHandler(async (req, res) => {
+router.get('/dashboard', authenticateToken, asyncHandler(async (req, res) => {
   // Verify user is team leader
   if (req.user.role !== 'team_leader') {
     return res.status(403).json({ message: 'Access denied. Team leader role required.' });
@@ -65,7 +65,7 @@ router.get('/dashboard', authMiddleware, asyncHandler(async (req, res) => {
 // @route   GET /api/team-leader/team-members
 // @desc    Get team members with pagination and search
 // @access  Private (Team Leader)
-router.get('/team-members', authMiddleware, asyncHandler(async (req, res) => {
+router.get('/team-members', authenticateToken, asyncHandler(async (req, res) => {
   if (req.user.role !== 'team_leader') {
     return res.status(403).json({ message: 'Access denied. Team leader role required.' });
   }
@@ -76,7 +76,7 @@ router.get('/team-members', authMiddleware, asyncHandler(async (req, res) => {
 // @route   GET /api/team-leader/teams
 // @desc    Get teams managed by this team leader
 // @access  Private (Team Leader)
-router.get('/teams', authMiddleware, asyncHandler(async (req, res) => {
+router.get('/teams', authenticateToken, asyncHandler(async (req, res) => {
   if (req.user.role !== 'team_leader') {
     return res.status(403).json({ message: 'Access denied. Team leader role required.' });
   }
@@ -88,7 +88,7 @@ router.get('/teams', authMiddleware, asyncHandler(async (req, res) => {
 // @desc    Create a new team
 // @access  Private (Team Leader)
 router.post('/teams', [
-  authMiddleware,
+  authenticateToken,
   body('teamName').trim().notEmpty().withMessage('Team name is required'),
   handleValidationErrors
 ], asyncHandler(async (req, res) => {
@@ -103,7 +103,7 @@ router.post('/teams', [
 // @desc    Set default team
 // @access  Private (Team Leader)
 router.put('/teams/default', [
-  authMiddleware,
+  authenticateToken,
   body('teamName').trim().notEmpty().withMessage('Team name is required'),
   handleValidationErrors
 ], asyncHandler(async (req, res) => {
@@ -118,7 +118,7 @@ router.put('/teams/default', [
 // @desc    Create new worker user (restricted to workers only)
 // @access  Private (Team Leader)
 router.post('/create-user', [
-  authMiddleware,
+  authenticateToken,
   body('firstName').trim().notEmpty().withMessage('First name is required'),
   body('lastName').trim().notEmpty().withMessage('Last name is required'),
   body('email').isEmail().normalizeEmail().withMessage('Valid email is required'),
@@ -142,7 +142,7 @@ router.post('/create-user', [
 // @desc    Update team member information
 // @access  Private (Team Leader)
 router.put('/team-members/:id', [
-  authMiddleware,
+  authenticateToken,
   body('firstName').optional().trim().isLength({ min: 1 }),
   body('lastName').optional().trim().isLength({ min: 1 }),
   body('email').optional().isEmail(),
@@ -161,7 +161,7 @@ router.put('/team-members/:id', [
 // @route   GET /api/team-leader/team-login-activity
 // @desc    Get team member login activity
 // @access  Private (Team Leader)
-router.get('/team-login-activity', authMiddleware, asyncHandler(async (req, res) => {
+router.get('/team-login-activity', authenticateToken, asyncHandler(async (req, res) => {
   if (req.user.role !== 'team_leader') {
     return res.status(403).json({ message: 'Access denied. Team leader role required.' });
   }
@@ -172,7 +172,7 @@ router.get('/team-login-activity', authMiddleware, asyncHandler(async (req, res)
 // @route   DELETE /api/team-leader/team-members/:id
 // @desc    Remove team member (deactivate)
 // @access  Private (Team Leader)
-router.delete('/team-members/:id', authMiddleware, asyncHandler(async (req, res) => {
+router.delete('/team-members/:id', authenticateToken, asyncHandler(async (req, res) => {
   if (req.user.role !== 'team_leader') {
     return res.status(403).json({ message: 'Access denied. Team leader role required.' });
   }
@@ -214,7 +214,7 @@ router.delete('/team-members/:id', authMiddleware, asyncHandler(async (req, res)
 // @route   POST /api/team-leader/send-invite/:id
 // @desc    Send invitation to inactive team member
 // @access  Private (Team Leader)
-router.post('/send-invite/:id', authMiddleware, asyncHandler(async (req, res) => {
+router.post('/send-invite/:id', authenticateToken, asyncHandler(async (req, res) => {
   if (req.user.role !== 'team_leader') {
     return res.status(403).json({ message: 'Access denied. Team leader role required.' });
   }
@@ -259,7 +259,7 @@ router.post('/send-invite/:id', authMiddleware, asyncHandler(async (req, res) =>
 // @route   GET /api/team-leader/analytics
 // @desc    Get team leader analytics data
 // @access  Private (Team Leader)
-router.get('/analytics', authMiddleware, asyncHandler(async (req, res) => {
+router.get('/analytics', authenticateToken, asyncHandler(async (req, res) => {
   if (req.user.role !== 'team_leader') {
     return res.status(403).json({ message: 'Access denied. Team leader role required.' });
   }
@@ -270,7 +270,7 @@ router.get('/analytics', authMiddleware, asyncHandler(async (req, res) => {
 // @route   GET /api/team-leader/supervisor-overview
 // @desc    Get all team leaders and their members for supervisor monitoring
 // @access  Private (Site Supervisor)
-router.get('/supervisor-overview', authMiddleware, asyncHandler(async (req, res) => {
+router.get('/supervisor-overview', authenticateToken, asyncHandler(async (req, res) => {
   if (req.user.role !== 'site_supervisor') {
     return res.status(403).json({ message: 'Access denied. Site supervisor role required.' });
   }
@@ -315,7 +315,7 @@ const validateTeamSelection = asyncHandler(async (req, res, next) => {
 
 router.get('/teams-list', 
   teamListLimiter,
-  authMiddleware, 
+  authenticateToken, 
   validateTeamSelection,
   asyncHandler(async (req, res) => {
     // Enhanced security check
@@ -344,7 +344,7 @@ router.get('/teams-list',
 // @route   POST /api/team-leader/clear-cache
 // @desc    Clear dashboard cache for immediate data refresh
 // @access  Private (Team Leader)
-router.post('/clear-cache', authMiddleware, asyncHandler(async (req, res) => {
+router.post('/clear-cache', authenticateToken, asyncHandler(async (req, res) => {
   if (req.user.role !== 'team_leader') {
     return res.status(403).json({ message: 'Access denied. Team leader role required.' });
   }
