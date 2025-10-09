@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
-const { authMiddleware } = require('../middleware/auth');
+const { authenticateToken, requireRole } = require('../middleware/authSupabase');
 const asyncHandler = require('../middleware/asyncHandler');
 const { cache, invalidateCache } = require('../middleware/cache');
 const rateLimit = require('express-rate-limit');
