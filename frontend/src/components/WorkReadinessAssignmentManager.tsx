@@ -35,13 +35,13 @@ import {
   Cancel as CancelIcon,
   Warning as WarningIcon,
   Schedule as ScheduleIcon,
-  PersonOff as PersonOffIcon,
   Info as InfoIcon,
   Assignment as AssignmentIcon,
   Done as DoneIcon,
   KeyboardArrowLeft as KeyboardArrowLeftIcon,
   KeyboardArrowRight as KeyboardArrowRightIcon,
-  Print as PrintIcon
+  Print as PrintIcon,
+  Refresh as RefreshIcon
 } from '@mui/icons-material';
 import { SupabaseAPI } from '../utils/supabaseApi';
 import { BackendAssignmentAPI } from '../utils/backendAssignmentApi';
@@ -147,6 +147,7 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
     }
   };
 
+
   // Fetch team leader's current shift
   const fetchCurrentShift = async () => {
     try {
@@ -188,6 +189,17 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
     workerName: string;
     assignedDate: string;
   } | null>(null);
+  const [passwordDialog, setPasswordDialog] = useState(false);
+  const [passwordInput, setPasswordInput] = useState('');
+  const [passwordError, setPasswordError] = useState('');
+  const [validatingPassword, setValidatingPassword] = useState(false);
+  
+  // Overdue confirmation dialog state
+  const [showOverdueConfirmDialog, setShowOverdueConfirmDialog] = useState(false);
+  
+  // Overdue blocking dialog state
+  const [showOverdueBlockingDialog, setShowOverdueBlockingDialog] = useState(false);
+  const [overdueBlockingMessage, setOverdueBlockingMessage] = useState('');
   
   // Filter states
   const [filterDate, setFilterDate] = useState(() => {
@@ -210,6 +222,16 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
     fetchUnselectedWorkers();
     fetchCurrentShift();
   }, [teamLeaderId]);
+
+
+  // Auto-refresh assignments every 30 seconds to catch status updates
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchAssignments();
+    }, 30000); // 30 seconds
+
+    return () => clearInterval(interval);
+  }, []);
 
   // Reset pagination when filters change
   useEffect(() => {
@@ -243,18 +265,11 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
       return true; // No due time set, consider as not due
     });
 
-    // Check if worker has completed assignment for selected date AND shift deadline hasn't passed
+    // Check if worker has completed assignment for selected date - NO DUPLICATES ALLOWED
     const completed = assignments.some(assignment => {
       if (assignment.worker_id !== member.id) return false;
       if (assignment.assigned_date !== assignedDate) return false;
-      if (assignment.status !== 'completed') return false;
-      
-      // Check if shift deadline has passed
-      if (assignment.due_time) {
-        const dueDate = new Date(assignment.due_time);
-        return now < dueDate; // Block if deadline hasn't passed
-      }
-      return true; // Block if no due time
+      return assignment.status === 'completed'; // Always block if completed on same date
     });
 
     // Check if worker has unselected case
@@ -264,7 +279,26 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
         unselected.case_status !== 'closed'
     );
 
-    return pendingNotDue || completed || unselected;
+    // Check if worker has overdue assignment on the same date AND next shift hasn't started
+    const overdue = assignments.some(assignment => {
+      if (assignment.worker_id !== member.id) return false;
+      if (assignment.assigned_date !== assignedDate) return false;
+      if (assignment.status !== 'overdue') return false;
+      
+      // Check if next shift has started by comparing with current shift end time
+      if (currentShift && assignment.due_time) {
+        const dueTime = new Date(assignment.due_time);
+        const now = new Date();
+        
+        // If current time is past the shift end time, worker should be available
+        // This is a simplified check - the backend will do the precise calculation
+        return now < dueTime;
+      }
+      
+      return true; // Block if no shift info available
+    });
+
+    return pendingNotDue || completed || unselected || overdue;
   };
 
   const getAvailableTeamMembers = () => {
@@ -637,7 +671,20 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
       console.log('🔍 fetchAssignments - Assignments array:', response.assignments);
       console.log('🔍 fetchAssignments - Assignment statuses:', response.assignments?.map((a: any) => ({ id: a.id, status: a.status, worker: a.worker?.first_name })));
       
-      setAssignments(response.assignments || []);
+      // Debug stats calculation
+      const assignments = response.assignments || [];
+      const completedCount = assignments.filter(a => a.status === 'completed').length;
+      const pendingCount = assignments.filter(a => a.status === 'pending').length;
+      const overdueCount = assignments.filter(a => a.status === 'overdue').length;
+      
+      console.log('📊 Assignment Stats:', {
+        total: assignments.length,
+        completed: completedCount,
+        pending: pendingCount,
+        overdue: overdueCount
+      });
+      
+      setAssignments(assignments);
       setError(null);
     } catch (err: any) {
       console.error('Error fetching assignments:', err);
@@ -658,9 +705,138 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
     }
   };
 
+  // Check if any assignments are past due time (only for today's assignments)
+  const hasOverdueAssignments = () => {
+    const now = new Date();
+    const today = now.toISOString().split('T')[0]; // Get today's date in YYYY-MM-DD format
+    
+    return assignments.some(assignment => 
+      assignment.status === 'pending' && 
+      assignment.assigned_date === today && // Only check today's assignments
+      new Date(assignment.due_time) < now
+    );
+  };
+
+  // Check if team leader's shift has ended
+  const isShiftEnded = () => {
+    if (!currentShift) return false;
+    
+    const now = new Date();
+    const currentHour = now.getHours();
+    const currentMinute = now.getMinutes();
+    const currentTime = currentHour * 60 + currentMinute; // Current time in minutes
+    
+    // Parse shift end time
+    const [endHour, endMinute] = currentShift.end_time.split(':').map(Number);
+    const shiftEndTime = endHour * 60 + endMinute; // Shift end time in minutes
+    
+    // Handle night shift (22:00 - 06:00) - crosses midnight
+    if (endHour < 12) { // Night shift (ends before noon, e.g., 06:00)
+      // Shift ends the next day, so check if current time is past the end time
+      // OR if current time is before the start time (meaning we're in the next day)
+      const [startHour] = currentShift.start_time.split(':').map(Number);
+      const shiftStartTime = startHour * 60; // Start time in minutes
+      
+      return currentTime >= shiftEndTime || currentTime < shiftStartTime;
+    } else {
+      // Day shift (ends after noon, e.g., 14:00, 22:00)
+      return currentTime >= shiftEndTime;
+    }
+  };
+
+  // Check if overdue button should be enabled
+  const isOverdueButtonEnabled = () => {
+    return hasOverdueAssignments() && isShiftEnded();
+  };
+
+  // Check if there are overdue assignments that block new assignment creation
+  const checkOverdueBlocking = () => {
+    const now = new Date();
+    const today = now.toISOString().split('T')[0];
+    
+    // Find overdue assignments for today
+    const overdueAssignments = assignments.filter(assignment => 
+      assignment.status === 'overdue' && 
+      assignment.assigned_date === today
+    );
+    
+    if (overdueAssignments.length === 0) {
+      return { hasOverdue: false, message: '' };
+    }
+    
+    // Calculate next shift start time
+    let nextShiftStart = '';
+    if (currentShift) {
+      const [startHour, startMinute] = currentShift.start_time.split(':').map(Number);
+      const tomorrow = new Date(now);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      
+      nextShiftStart = tomorrow.toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      }) + ` at ${currentShift.start_time}`;
+    } else {
+      nextShiftStart = 'the next shift';
+    }
+    
+    const message = `Cannot assign new work readiness tasks. Some workers have overdue assignments for ${new Date(today).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    })}. They will be available when the next shift starts at ${nextShiftStart}.`;
+    
+    return { hasOverdue: true, message };
+  };
+
+  // Handle manual overdue marking confirmation
+  const confirmMarkOverdue = async () => {
+    try {
+      setLoading(true);
+      
+      // Check if there are any overdue assignments first
+      if (!hasOverdueAssignments()) {
+        setSuccessMessage('No assignments are past due time yet');
+        setShowSuccessDialog(true);
+        return;
+      }
+      
+      const response = await BackendAssignmentAPI.markOverdueAssignments();
+      
+      if (response.success) {
+        console.log(`✅ Marked ${response.count} assignments as overdue`);
+        await fetchAssignments(); // Refresh the list
+        // Show success message
+        setSuccessMessage(`Successfully marked ${response.count} assignments as overdue`);
+        setShowSuccessDialog(true);
+      } else {
+        console.error('Failed to mark overdue assignments:', response.message);
+        // Show error message
+        setSuccessMessage(`Error: ${response.message || 'Unknown error'}`);
+        setShowSuccessDialog(true);
+      }
+    } catch (error: any) {
+      console.error('Error marking overdue assignments:', error);
+      const errorMessage = error?.response?.data?.error || error?.message || 'Error marking overdue assignments';
+      setSuccessMessage(`Error: ${errorMessage}`);
+      setShowSuccessDialog(true);
+    } finally {
+      setLoading(false);
+      setShowOverdueConfirmDialog(false);
+    }
+  };
+
   const handleCreateAssignments = () => {
     if (selectedWorkers.length === 0) {
       setError('Please select at least one worker');
+      return;
+    }
+
+    // Check for overdue assignments that block new assignment creation
+    const overdueCheck = checkOverdueBlocking();
+    if (overdueCheck.hasOverdue) {
+      setOverdueBlockingMessage(overdueCheck.message);
+      setShowOverdueBlockingDialog(true);
       return;
     }
 
@@ -873,6 +1049,41 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
     }
   };
 
+  // Password validation function
+  const validatePassword = async (password: string): Promise<boolean> => {
+    try {
+      setValidatingPassword(true);
+      setPasswordError('');
+      
+      const { data: { session } } = await authClient.auth.getSession();
+      if (!session) {
+        throw new Error('No active session');
+      }
+
+      // Use Supabase auth to verify password
+      const { error } = await authClient.auth.signInWithPassword({
+        email: session.user.email || '',
+        password: password
+      });
+
+      if (error) {
+        if (error.message.includes('Invalid login credentials')) {
+          setPasswordError('Incorrect password. Please try again.');
+          return false;
+        }
+        throw error;
+      }
+
+      return true;
+    } catch (err: any) {
+      console.error('Password validation error:', err);
+      setPasswordError(err.message || 'Failed to validate password');
+      return false;
+    } finally {
+      setValidatingPassword(false);
+    }
+  };
+
   const handleCancelAssignment = async (assignmentId: string) => {
     // Find the assignment details for the dialog
     const assignment = assignments.find(a => a.id === assignmentId);
@@ -886,7 +1097,27 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
       workerName,
       assignedDate: assignment.assigned_date
     });
-    setShowCancelDialog(true);
+    
+    // Show password dialog first
+    setPasswordDialog(true);
+    setPasswordInput('');
+    setPasswordError('');
+  };
+
+  const handlePasswordSubmit = async () => {
+    if (!passwordInput.trim()) {
+      setPasswordError('Please enter your password');
+      return;
+    }
+
+    const isValid = await validatePassword(passwordInput);
+    if (isValid) {
+      // Password is correct, show cancel confirmation dialog
+      setPasswordDialog(false);
+      setShowCancelDialog(true);
+      setPasswordInput('');
+      setPasswordError('');
+    }
   };
 
   const confirmCancelAssignment = async () => {
@@ -1052,17 +1283,61 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
         <Typography variant="h5" sx={{ fontWeight: 700, color: '#171717' }}>
           Work Readiness Assignments
         </Typography>
-        <Button
-          variant="contained"
-          startIcon={<AddIcon />}
-          onClick={() => setOpenDialog(true)}
-          sx={{
-            backgroundColor: '#6366f1',
-            '&:hover': { backgroundColor: '#4f46e5' }
-          }}
-        >
-          Create Assignment
-        </Button>
+        <Box sx={{ display: 'flex', gap: 2 }}>
+          <Button
+            variant="outlined"
+            startIcon={loading ? <CircularProgress size={16} /> : <RefreshIcon />}
+            onClick={fetchAssignments}
+            disabled={loading}
+            sx={{
+              borderColor: '#6366f1',
+              color: '#6366f1',
+              '&:hover': { 
+                borderColor: '#4f46e5',
+                backgroundColor: '#f8fafc'
+              },
+              '&:disabled': {
+                borderColor: '#d1d5db',
+                color: '#9ca3af'
+              }
+            }}
+          >
+            {loading ? 'Refreshing...' : 'Refresh'}
+          </Button>
+          <Button
+            variant="contained"
+            color="warning"
+            startIcon={<ScheduleIcon />}
+            onClick={() => setShowOverdueConfirmDialog(true)}
+            disabled={loading || !isOverdueButtonEnabled()}
+            sx={{ 
+              bgcolor: '#f59e0b',
+              '&:hover': { bgcolor: '#d97706' },
+              '&:disabled': {
+                bgcolor: '#d1d5db',
+                color: '#9ca3af'
+              }
+            }}
+            title={
+              !isShiftEnded() ? "Cannot mark overdue during active shift" :
+              !hasOverdueAssignments() ? "No assignments are past due time yet" :
+              "Mark assignments as overdue if past due time"
+            }
+          >
+            Mark Overdue
+          </Button>
+          <Button
+            variant="contained"
+            startIcon={<AddIcon />}
+            onClick={() => setOpenDialog(true)}
+            sx={{
+              backgroundColor: '#6366f1',
+              '&:hover': { backgroundColor: '#4f46e5' }
+            }}
+          >
+            Create Assignment
+          </Button>
+        </Box>
       </Box>
 
       {/* Alerts */}
@@ -1162,8 +1437,7 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
                 { value: 'pending', label: 'Pending', icon: <ScheduleIcon />, color: '#f59e0b' },
                 { value: 'completed', label: 'Completed', icon: <DoneIcon />, color: '#10b981' },
                 { value: 'overdue', label: 'Overdue', icon: <WarningIcon />, color: '#ef4444' },
-                { value: 'cancelled', label: 'Cancelled', icon: <CancelIcon />, color: '#6b7280' },
-                { value: 'unselected', label: 'Unselected Workers', icon: <PersonOffIcon />, color: '#f59e0b' }
+                { value: 'cancelled', label: 'Cancelled', icon: <CancelIcon />, color: '#6b7280' }
               ].map((tab) => (
                 <Button
                   key={tab.value}
@@ -1192,9 +1466,6 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
                     let count = 0;
                     if (tab.value === 'all') {
                       count = getFilteredAssignments().length;
-                    } else if (tab.value === 'unselected') {
-                      // Only count unselected workers with open cases
-                      count = getFilteredUnselectedWorkers().filter(w => w.case_status !== 'closed').length;
                     } else {
                       count = getFilteredAssignments().filter(a => a.status === tab.value).length;
                     }
@@ -1276,190 +1547,6 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
             <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
               <CircularProgress />
             </Box>
-          ) : filterStatus === 'unselected' ? (
-            // Unselected Workers Table - Only show workers with open cases
-            (() => {
-              const openCases = getFilteredUnselectedWorkers().filter(w => w.case_status !== 'closed');
-              const paginatedOpenCases = getPaginatedUnselectedWorkers();
-              const totalPages = getTotalPages(openCases);
-              
-              return openCases.length === 0 ? (
-            <Box sx={{ textAlign: 'center', p: 4 }}>
-                  <PersonOffIcon sx={{ fontSize: 48, color: '#9ca3af', mb: 2 }} />
-                  <Typography color="text.secondary" variant="h6">
-                    No open unselected cases
-                  </Typography>
-                  <Typography color="text.secondary">
-                    All unselected worker cases have been closed. Workers are now available for assignment.
-                  </Typography>
-                </Box>
-              ) : (
-              <Box>
-                {/* Unselected Workers Header */}
-                <Box sx={{ mb: 3, p: 2, bgcolor: '#fffbeb', borderRadius: 2, border: '1px solid #f59e0b' }}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-                    <PersonOffIcon sx={{ mr: 1, color: '#f59e0b' }} />
-                    <Typography variant="h6" sx={{ fontWeight: 600, color: '#92400e' }}>
-                      Unselected Workers Management
-                    </Typography>
-                  </Box>
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                    Workers who were not selected for assignments with their reasons. Close cases to make them available for future assignments.
-                  </Typography>
-                  <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-                    <Chip
-                      label={`Open Cases: ${openCases.length}`}
-                      color="error"
-                      size="small"
-                      variant="outlined"
-                    />
-                    <Chip
-                      label={`Closed Cases: ${unselectedWorkers.filter(w => w.case_status === 'closed').length}`}
-                      color="success"
-                      size="small"
-                      variant="outlined"
-                    />
-                  </Box>
-                </Box>
-
-                <TableContainer component={Paper} elevation={0}>
-                  <Table>
-                  <TableHead>
-                    <TableRow>
-                      <TableCell><strong>Worker</strong></TableCell>
-                      <TableCell><strong>Date</strong></TableCell>
-                      <TableCell><strong>Reason</strong></TableCell>
-                      <TableCell><strong>Case Status</strong></TableCell>
-                      <TableCell><strong>Notes</strong></TableCell>
-                      <TableCell align="center"><strong>Actions</strong></TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {paginatedOpenCases.map((unselected) => (
-                      <TableRow key={unselected.id}>
-                        <TableCell>
-                          <Box>
-                            <Typography variant="body2" fontWeight={600}>
-                              {unselected.worker?.first_name} {unselected.worker?.last_name}
-                            </Typography>
-                            <Typography variant="caption" color="text.secondary">
-                              {unselected.worker?.email}
-                            </Typography>
-                          </Box>
-                        </TableCell>
-                        <TableCell>
-                          {new Date(unselected.assignment_date).toLocaleDateString()}
-                        </TableCell>
-                        <TableCell>
-                          <Chip
-                            label={getReasonLabel(unselected.reason)}
-                            color="warning"
-                            size="small"
-                            variant="outlined"
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <Chip
-                            label={getCaseStatusLabel(unselected.case_status || 'open')}
-                            color={getCaseStatusColor(unselected.case_status || 'open') as any}
-                            size="small"
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <Tooltip title={unselected.notes || 'No notes'}>
-                            <Typography
-                              variant="body2"
-                              sx={{
-                                maxWidth: 200,
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap'
-                              }}
-                            >
-                              {unselected.notes || '-'}
-                            </Typography>
-                          </Tooltip>
-                        </TableCell>
-                        <TableCell align="center">
-                          {unselected.case_status !== 'closed' ? (
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                              <Button
-                                variant="contained"
-                                size="small"
-                                startIcon={<CheckCircleIcon />}
-                                onClick={() => handleCloseCase(unselected.id)}
-                                disabled={loading}
-                                sx={{
-                                  backgroundColor: '#10b981',
-                                  color: 'white',
-                                  textTransform: 'none',
-                                  fontSize: '0.75rem',
-                                  fontWeight: 600,
-                                  px: 2,
-                                  py: 0.5,
-                                  borderRadius: 2,
-                                  '&:hover': {
-                                    backgroundColor: '#059669',
-                                    transform: 'translateY(-1px)',
-                                    boxShadow: '0 4px 12px rgba(16, 185, 129, 0.4)'
-                                  },
-                                  '&:disabled': {
-                                    backgroundColor: '#9ca3af',
-                                    color: '#6b7280'
-                                  },
-                                  transition: 'all 0.2s ease-in-out'
-                                }}
-                              >
-                                Close Case
-                              </Button>
-                              <Tooltip title="Close this case to make the worker available for assignment again">
-                                <InfoIcon 
-                                  sx={{ 
-                                    fontSize: 16, 
-                                    color: '#6b7280',
-                                    cursor: 'help'
-                                  }} 
-                                />
-                              </Tooltip>
-                            </Box>
-                          ) : (
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                              <Chip
-                                icon={<CheckCircleIcon />}
-                                label="Case Closed"
-                                color="success"
-                                size="small"
-                                variant="filled"
-                                sx={{
-                                  fontWeight: 600,
-                                  '& .MuiChip-icon': {
-                                    color: 'white'
-                                  }
-                                }}
-                              />
-                              <Typography variant="caption" color="text.secondary">
-                                Available
-                              </Typography>
-                            </Box>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-              
-              {/* Pagination for Unselected Workers */}
-              <PaginationComponent
-                currentPage={unselectedPage}
-                totalPages={totalPages}
-                onPageChange={handleUnselectedPageChange}
-                totalItems={openCases.length}
-                itemsPerPage={itemsPerPage}
-              />
-              </Box>
-              );
-            })()
           ) : (
             // Regular Assignments Table
             (() => {
@@ -1624,213 +1711,295 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
 
 
       {/* Create Assignment Dialog */}
-      <Dialog open={openDialog} onClose={() => setOpenDialog(false)} maxWidth="md" fullWidth>
-        <DialogTitle sx={{ pb: 1 }}>
-          Create Work Readiness Assignment
+      <Dialog open={openDialog} onClose={() => setOpenDialog(false)} maxWidth="lg" fullWidth>
+        <DialogTitle sx={{ 
+          pb: 2, 
+          borderBottom: '1px solid #e0e0e0',
+          background: 'linear-gradient(135deg, #1976d2 0%, #1565c0 100%)',
+          color: 'white',
+          position: 'relative'
+        }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            <Box sx={{ 
+              width: 48, 
+              height: 48, 
+              borderRadius: '12px', 
+              bgcolor: 'rgba(255,255,255,0.2)', 
+              display: 'flex', 
+              alignItems: 'center', 
+              justifyContent: 'center' 
+            }}>
+              <AssignmentIcon sx={{ fontSize: 24, color: 'white' }} />
+            </Box>
+            <Box>
+              <Typography variant="h5" fontWeight={700}>
+                Create Work Readiness Assignment
+              </Typography>
+              <Typography variant="body2" sx={{ opacity: 0.9, mt: 0.5 }}>
+                Assign work readiness tasks to your team members
+              </Typography>
+            </Box>
+          </Box>
         </DialogTitle>
-        <DialogContent dividers>
-          <Box sx={{ pt: 1 }}>
-            {/* Info Alert */}
-            <Alert severity="info" sx={{ mb: 3 }}>
-              <Typography variant="body2">
-                <strong>Assign work readiness tasks</strong> to selected team members. They will be required to submit their work readiness assessment on the assigned date.
-              </Typography>
-            </Alert>
+        
+        <DialogContent dividers sx={{ p: 0 }}>
+          <Box sx={{ p: 3 }}>
+            {/* Progress Steps */}
+            <Box sx={{ mb: 4 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 2 }}>
+                <Box sx={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  px: 2, 
+                  py: 1, 
+                  bgcolor: '#e3f2fd', 
+                  borderRadius: '20px',
+                  border: '2px solid #1976d2'
+                }}>
+                  <Typography variant="body2" fontWeight={600} color="#1976d2">
+                    Step 1 of 3: Basic Information
+                  </Typography>
+                </Box>
+              </Box>
+            </Box>
 
-            {/* Date and Time Section */}
-            <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 2, color: '#1976d2' }}>
-              📅 Schedule
-            </Typography>
-            <Grid container spacing={2} sx={{ mb: 3 }}>
-              <Grid item xs={12}>
-                <TextField
-                  label="Assigned Date"
-                  type="date"
-                  value={assignedDate}
-                  onChange={(e) => setAssignedDate(e.target.value)}
-                  fullWidth
-                  required
-                  InputLabelProps={{ shrink: true }}
-                  helperText="Date when workers should submit (due by end of day)"
-                  sx={{
-                    '& .MuiOutlinedInput-root': {
-                      '&:hover fieldset': {
-                        borderColor: '#1976d2',
+            {/* Basic Information Section */}
+            <Card sx={{ mb: 3, border: '1px solid #e0e0e0', borderRadius: '12px' }}>
+              <CardContent sx={{ p: 3 }}>
+                <Typography variant="h6" fontWeight={600} sx={{ mb: 3, color: '#1976d2' }}>
+                  📅 Assignment Details
+                </Typography>
+                
+                <Grid container spacing={3}>
+                  <Grid item xs={12} md={6}>
+                    <TextField
+                      label="Assignment Date"
+                      type="date"
+                      value={assignedDate}
+                      onChange={(e) => setAssignedDate(e.target.value)}
+                      fullWidth
+                      required
+                      InputLabelProps={{ shrink: true }}
+                      sx={{
+                        '& .MuiOutlinedInput-root': {
+                          borderRadius: '8px',
+                          '&:hover fieldset': {
+                            borderColor: '#1976d2',
+                          },
+                        },
+                      }}
+                    />
+                  </Grid>
+                  <Grid item xs={12} md={6}>
+                    <Box sx={{ 
+                      p: 2, 
+                      bgcolor: '#f8f9fa', 
+                      borderRadius: '8px',
+                      border: '1px solid #e9ecef'
+                    }}>
+                      <Typography variant="body2" fontWeight={600} color="#6c757d" sx={{ mb: 1 }}>
+                        ⏰ Deadline Information
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        Deadline will be automatically set based on your current shift schedule
+                      </Typography>
+                    </Box>
+                  </Grid>
+                </Grid>
+
+                <Box sx={{ mt: 3 }}>
+                  <TextField
+                    label="Special Instructions (Optional)"
+                    multiline
+                    rows={2}
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    fullWidth
+                    sx={{ 
+                      '& .MuiOutlinedInput-root': {
+                        borderRadius: '8px',
+                        '&:hover fieldset': {
+                          borderColor: '#1976d2',
+                        },
                       },
-                    },
-                  }}
-                />
-              </Grid>
-            </Grid>
-
-            {/* Shift-Based Deadline Information */}
-            <Alert severity="info" sx={{ mb: 3 }}>
-              <Typography variant="body2">
-                <strong>🕐 Deadline Information:</strong> The deadline for work readiness submissions will be automatically calculated based on your current shift schedule. Workers must complete their assessment before the end of your shift.
-              </Typography>
-            </Alert>
-            <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 2, color: '#1976d2' }}>
-              📝 Instructions (Optional)
-            </Typography>
-            <TextField
-              label="Special Instructions"
-              multiline
-              rows={3}
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              fullWidth
-              sx={{ 
-                mb: 3,
-                '& .MuiOutlinedInput-root': {
-                  '&:hover fieldset': {
-                    borderColor: '#1976d2',
-                  },
-                },
-              }}
-              placeholder="Example: Please complete before start of shift, Focus on fatigue assessment, etc."
-            />
+                    }}
+                    placeholder="Add any special instructions for this assignment..."
+                  />
+                </Box>
+              </CardContent>
+            </Card>
 
 
             {/* Worker Selection Section */}
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-              <Typography variant="subtitle2" fontWeight={600} sx={{ color: '#1976d2' }}>
-              👥 Select Team Members
-            </Typography>
-              {(() => {
-                const availableMembers = getAvailableTeamMembers();
-                const allSelected = availableMembers.length > 0 && selectedWorkers.length === availableMembers.length;
-                const someSelected = selectedWorkers.length > 0 && selectedWorkers.length < availableMembers.length;
-                
-                return availableMembers.length > 0 && (
-                  <Button
-                    variant="outlined"
-                    size="small"
-                    onClick={() => {
-                      if (allSelected) {
-                        setSelectedWorkers([]);
-                        setUnselectedWorkerReasons({});
-                      } else {
-                        setSelectedWorkers(availableMembers.map(member => member.id));
-                      }
-                    }}
-                    sx={{
-                      borderColor: allSelected ? '#ef4444' : '#1976d2',
-                      color: allSelected ? '#ef4444' : '#1976d2',
-                      textTransform: 'none',
-                      fontSize: '0.75rem',
-                      fontWeight: 600,
-                      px: 2,
-                      py: 0.5,
-                      '&:hover': {
-                        borderColor: allSelected ? '#dc2626' : '#1565c0',
-                        backgroundColor: allSelected ? '#fef2f2' : '#e3f2fd'
-                      }
-                    }}
-                  >
-                    {allSelected ? 'Deselect All' : someSelected ? 'Select All' : 'Select All'}
-                  </Button>
-                );
-              })()}
-            </Box>
-            <Box sx={{ 
-              mb: 2, 
-              p: 1.5, 
-              bgcolor: selectedWorkers.length > 0 ? '#e3f2fd' : '#f5f5f5', 
-              borderRadius: 1,
-              border: selectedWorkers.length > 0 ? '2px solid #1976d2' : '1px solid #e0e0e0',
-              transition: 'all 0.3s ease'
-            }}>
-              <Typography variant="body2" fontWeight={600} color={selectedWorkers.length > 0 ? '#1976d2' : 'text.secondary'}>
-                {selectedWorkers.length === 0 
-                  ? '⚠️ No workers selected - Please select at least one team member'
-                  : `✅ ${selectedWorkers.length} worker${selectedWorkers.length > 1 ? 's' : ''} selected`
-                }
-              </Typography>
-            </Box>
+            <Card sx={{ mb: 3, border: '1px solid #e0e0e0', borderRadius: '12px' }}>
+              <CardContent sx={{ p: 3 }}>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+                  <Typography variant="h6" fontWeight={600} sx={{ color: '#1976d2' }}>
+                    👥 Select Team Members
+                  </Typography>
+                  {(() => {
+                    const availableMembers = getAvailableTeamMembers();
+                    const allSelected = availableMembers.length > 0 && selectedWorkers.length === availableMembers.length;
+                    
+                    return availableMembers.length > 0 && (
+                      <Button
+                        variant={allSelected ? "contained" : "outlined"}
+                        size="small"
+                        onClick={() => {
+                          if (allSelected) {
+                            setSelectedWorkers([]);
+                            setUnselectedWorkerReasons({});
+                          } else {
+                            setSelectedWorkers(availableMembers.map(member => member.id));
+                          }
+                        }}
+                        sx={{
+                          borderRadius: '20px',
+                          textTransform: 'none',
+                          fontWeight: 600,
+                          px: 3,
+                          py: 1,
+                          ...(allSelected ? {
+                            bgcolor: '#ef4444',
+                            '&:hover': { bgcolor: '#dc2626' }
+                          } : {
+                            borderColor: '#1976d2',
+                            color: '#1976d2',
+                            '&:hover': {
+                              borderColor: '#1565c0',
+                              backgroundColor: '#e3f2fd'
+                            }
+                          })
+                        }}
+                      >
+                        {allSelected ? 'Deselect All' : 'Select All Available'}
+                      </Button>
+                    );
+                  })()}
+                </Box>
 
-            {(() => {
-              const availableMembers = getAvailableTeamMembers();
-              return availableMembers.length === 0 ? (
-                <Alert severity="info">
-                  {teamMembers.length === 0 
-                    ? "No team members found. Please add workers to your team first."
-                    : "All team members already have assignments for this date. They will appear again after completing their assignments."
-                  }
-              </Alert>
-            ) : (
-              <Box sx={{ 
-                maxHeight: 300, 
-                overflowY: 'auto',
-                border: '1px solid #e0e0e0',
-                borderRadius: 1,
-                p: 1
-              }}>
-                <FormGroup>
-                    {availableMembers.map((member) => (
-                    <Box
-                      key={member.id}
-                      sx={{
-                        p: 1.5,
-                        mb: 1,
-                        borderRadius: 1,
-                        bgcolor: selectedWorkers.includes(member.id) ? '#e3f2fd' : 'transparent',
-                        border: selectedWorkers.includes(member.id) ? '1px solid #1976d2' : '1px solid transparent',
-                        transition: 'all 0.2s ease',
-                        '&:hover': {
-                          bgcolor: selectedWorkers.includes(member.id) ? '#e3f2fd' : '#f5f5f5',
-                          border: '1px solid #1976d2',
+                {/* Selection Summary */}
+                <Box sx={{ 
+                  mb: 3, 
+                  p: 2, 
+                  bgcolor: selectedWorkers.length > 0 ? '#e8f5e8' : '#fff3cd', 
+                  borderRadius: '8px',
+                  border: selectedWorkers.length > 0 ? '1px solid #28a745' : '1px solid #ffc107',
+                  transition: 'all 0.3s ease'
+                }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    {selectedWorkers.length > 0 ? (
+                      <>
+                        <CheckCircleIcon sx={{ color: '#28a745', fontSize: 20 }} />
+                        <Typography variant="body2" fontWeight={600} color="#28a745">
+                          {selectedWorkers.length} worker{selectedWorkers.length > 1 ? 's' : ''} selected for assignment
+                        </Typography>
+                      </>
+                    ) : (
+                      <>
+                        <WarningIcon sx={{ color: '#ffc107', fontSize: 20 }} />
+                        <Typography variant="body2" fontWeight={600} color="#856404">
+                          Please select at least one team member to continue
+                        </Typography>
+                      </>
+                    )}
+                  </Box>
+                </Box>
+
+                {/* Available Workers List */}
+                {(() => {
+                  const availableMembers = getAvailableTeamMembers();
+                  return availableMembers.length === 0 ? (
+                    <Box sx={{ 
+                      p: 3, 
+                      textAlign: 'center', 
+                      bgcolor: '#f8f9fa', 
+                      borderRadius: '8px',
+                      border: '1px solid #e9ecef'
+                    }}>
+                      <InfoIcon sx={{ fontSize: 48, color: '#6c757d', mb: 2 }} />
+                      <Typography variant="h6" fontWeight={600} color="#6c757d" sx={{ mb: 1 }}>
+                        No Available Workers
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        {teamMembers.length === 0 
+                          ? "No team members found. Please add workers to your team first."
+                          : "All team members already have assignments for this date. They will appear again after completing their assignments."
                         }
-                      }}
-                    >
-                      <FormControlLabel
-                        control={
-                          <Checkbox
-                            checked={selectedWorkers.includes(member.id)}
-                            onChange={() => handleWorkerToggle(member.id)}
-                            sx={{
-                              color: '#1976d2',
-                              '&.Mui-checked': {
-                                color: '#1976d2',
-                              },
-                            }}
-                          />
-                        }
-                        label={
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      </Typography>
+                    </Box>
+                  ) : (
+                    <Box sx={{ 
+                      maxHeight: 400, 
+                      overflowY: 'auto',
+                      border: '1px solid #e0e0e0',
+                      borderRadius: '8px',
+                      p: 2,
+                      bgcolor: '#fafafa'
+                    }}>
+                      <Grid container spacing={2}>
+                        {availableMembers.map((member) => (
+                          <Grid item xs={12} sm={6} md={4} key={member.id}>
                             <Box
                               sx={{
-                                width: 40,
-                                height: 40,
-                                borderRadius: '50%',
-                                bgcolor: '#1976d2',
-                                color: 'white',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                fontWeight: 700,
-                                fontSize: '0.875rem'
+                                p: 2,
+                                borderRadius: '8px',
+                                bgcolor: selectedWorkers.includes(member.id) ? '#e3f2fd' : 'white',
+                                border: selectedWorkers.includes(member.id) ? '2px solid #1976d2' : '1px solid #e0e0e0',
+                                transition: 'all 0.2s ease',
+                                cursor: 'pointer',
+                                '&:hover': {
+                                  border: '2px solid #1976d2',
+                                  boxShadow: '0 2px 8px rgba(25, 118, 210, 0.15)',
+                                }
                               }}
+                              onClick={() => handleWorkerToggle(member.id)}
                             >
-                              {member.first_name?.[0]}{member.last_name?.[0]}
+                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                                <Checkbox
+                                  checked={selectedWorkers.includes(member.id)}
+                                  onChange={() => handleWorkerToggle(member.id)}
+                                  sx={{
+                                    color: '#1976d2',
+                                    '&.Mui-checked': {
+                                      color: '#1976d2',
+                                    },
+                                  }}
+                                />
+                                <Box
+                                  sx={{
+                                    width: 40,
+                                    height: 40,
+                                    borderRadius: '50%',
+                                    bgcolor: '#1976d2',
+                                    color: 'white',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    fontWeight: 700,
+                                    fontSize: '0.875rem'
+                                  }}
+                                >
+                                  {member.first_name?.[0]}{member.last_name?.[0]}
+                                </Box>
+                                <Box sx={{ flex: 1 }}>
+                                  <Typography variant="body2" fontWeight={600}>
+                                    {member.first_name} {member.last_name}
+                                  </Typography>
+                                  <Typography variant="caption" color="text.secondary">
+                                    {member.email}
+                                  </Typography>
+                                </Box>
+                              </Box>
                             </Box>
-                            <Box>
-                              <Typography variant="body2" fontWeight={600}>
-                                {member.first_name} {member.last_name}
-                              </Typography>
-                              <Typography variant="caption" color="text.secondary">
-                                {member.email}
-                              </Typography>
-                            </Box>
-                          </Box>
-                        }
-                        sx={{ width: '100%', m: 0 }}
-                      />
+                          </Grid>
+                        ))}
+                      </Grid>
                     </Box>
-                  ))}
-                </FormGroup>
-              </Box>
-              );
-            })()}
+                  );
+                })()}
+              </CardContent>
+            </Card>
 
             {/* Unavailable Workers Section */}
             {(() => {
@@ -1954,68 +2123,52 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
                     </>
                   )}
 
-                  {/* Overdue Workers Section - Show workers who can be reassigned */}
+                  {/* Completed Workers Section - Show workers who have already completed assignments */}
                   {(() => {
-                    const now = new Date();
-                    const overdueMembers = teamMembers.filter(member => {
-                      // Check if worker has overdue assignments
-                      const overdue = assignments.some(assignment => {
+                    const completedMembers = teamMembers.filter(member => {
+                      // Check if worker has completed assignment on the same date
+                      return assignments.some(assignment => {
                         if (assignment.worker_id !== member.id) return false;
-                        if (assignment.status !== 'pending') return false;
-                        
-                        if (assignment.due_time) {
-                          const dueDate = new Date(assignment.due_time);
-                          return now >= dueDate; // Past due
-                        }
-                        return false; // No due time = not overdue
+                        if (assignment.assigned_date !== assignedDate) return false;
+                        return assignment.status === 'completed';
                       });
-
-                      // Also check if they don't have completed assignments for today
-                      const completedToday = assignments.some(assignment => 
-                        assignment.worker_id === member.id &&
-                        assignment.assigned_date === assignedDate &&
-                        assignment.status === 'completed'
-                      );
-
-                      return overdue && !completedToday;
                     });
 
-                    return overdueMembers.length > 0 && (
+                    return completedMembers.length > 0 && (
                       <>
-                        <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 1, mt: 3, color: '#f59e0b' }}>
-                          ⚠️ Workers with Overdue Assignments (Can be Reassigned)
+                        <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 1, mt: 3, color: '#10b981' }}>
+                          ✅ Workers with Completed Assignments (Unavailable)
                         </Typography>
-                        <Alert severity="info" sx={{ mb: 2 }}>
+                        <Alert severity="success" sx={{ mb: 2 }}>
                           <Typography variant="body2">
-                            <strong>Note:</strong> These workers have overdue assignments but can still receive new assignments. The KPI system will apply penalties for overdue assignments.
+                            <strong>Note:</strong> These workers have already completed their work readiness assignment for today. Duplicate assignments are not allowed on the same date.
                           </Typography>
                         </Alert>
 
                         <Box sx={{ 
                           maxHeight: 200, 
                           overflowY: 'auto',
-                          border: '1px solid #f59e0b',
+                          border: '1px solid #10b981',
                           borderRadius: 1,
                           p: 1,
-                          bgcolor: '#fffbeb'
+                          bgcolor: '#f0fdf4'
                         }}>
-                          {overdueMembers.map((member) => {
-                            const overdueAssignment = assignments.find(assignment => 
+                          {completedMembers.map((member) => {
+                            const completedAssignment = assignments.find(assignment => 
                               assignment.worker_id === member.id &&
-                              assignment.status === 'pending' &&
-                              assignment.due_time &&
-                              now >= new Date(assignment.due_time)
+                              assignment.assigned_date === assignedDate &&
+                              assignment.status === 'completed'
                             );
 
                             return (
                               <Box
-                                key={`overdue-${member.id}`}
+                                key={`completed-${member.id}`}
                                 sx={{
                                   p: 1.5,
                                   mb: 1,
                                   borderRadius: 1,
                                   bgcolor: 'white',
-                                  border: '1px solid #f59e0b',
+                                  border: '1px solid #10b981',
                                   display: 'flex',
                                   alignItems: 'center',
                                   gap: 2
@@ -2026,7 +2179,7 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
                                     width: 32,
                                     height: 32,
                                     borderRadius: '50%',
-                                    bgcolor: '#f59e0b',
+                                    bgcolor: '#10b981',
                                     color: 'white',
                                     display: 'flex',
                                     alignItems: 'center',
@@ -2042,7 +2195,7 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
                                     {member.first_name} {member.last_name}
                                   </Typography>
                                   <Typography variant="caption" color="text.secondary">
-                                    Overdue assignment from {overdueAssignment?.assigned_date} (Due: {overdueAssignment?.due_time?.split('T')[0]})
+                                    Completed assignment on {completedAssignment?.assigned_date} - No duplicates allowed
                                   </Typography>
                                 </Box>
                               </Box>
@@ -2053,166 +2206,79 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
                     );
                   })()}
 
-                  {/* Unselected Workers Section */}
-                  {unselectedMembers.length > 0 && (
-                <>
-                  <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 1, mt: 3, color: '#f59e0b' }}>
-                    🚫 Specify Reasons for Unselected Workers
-                  </Typography>
-                  <Alert severity="info" sx={{ mb: 2 }}>
-                    <Typography variant="body2">
-                      <strong>Note:</strong> Please specify why each unselected worker is not included in this assignment. If not specified, "Not rostered" will be automatically assigned as the default reason.
-                    </Typography>
-                  </Alert>
-
-                  <Box sx={{ 
-                    maxHeight: 300, 
-                    overflowY: 'auto',
-                    border: '1px solid #f59e0b',
-                    borderRadius: 1,
-                    p: 1,
-                    bgcolor: '#fffbeb'
-                  }}>
-                    {unselectedMembers.map((member) => (
-                      <Box
-                        key={`unselected-${member.id}`}
-                        sx={{
-                          p: 2,
-                          mb: 2,
-                          borderRadius: 1,
-                          bgcolor: 'white',
-                          border: '1px solid #f59e0b',
-                        }}
-                      >
-                        <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
-                          <Box
-                            sx={{
-                              width: 40,
-                              height: 40,
-                              borderRadius: '50%',
-                              bgcolor: '#f59e0b',
-                              color: 'white',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              fontWeight: 700,
-                              fontSize: '0.875rem',
-                              mr: 2
-                            }}
-                          >
-                            {member.first_name?.[0]}{member.last_name?.[0]}
-                          </Box>
-                          <Box>
-                            <Typography variant="body2" fontWeight={600}>
-                              {member.first_name} {member.last_name}
-                            </Typography>
-                            <Typography variant="caption" color="text.secondary">
-                              {member.email}
-                            </Typography>
-                          </Box>
-                        </Box>
-
-                        <Grid container spacing={2}>
-                          <Grid item xs={12} md={6}>
-                            <TextField
-                              label="Reason for not selecting"
-                              select
-                              value={unselectedWorkerReasons[member.id]?.reason || ''}
-                              onChange={(e) => handleUnselectedWorkerReasonChange(member.id, e.target.value)}
-                              fullWidth
-                              required
-                              size="small"
-                              SelectProps={{ native: true }}
-                              sx={{
-                                '& .MuiOutlinedInput-root': {
-                                  '&:hover fieldset': {
-                                    borderColor: '#f59e0b',
-                                  },
-                                },
-                              }}
-                            >
-                              <option value="">Select reason...</option>
-                              <option value="sick">Sick</option>
-                              <option value="on_leave_rdo">On leave / RDO</option>
-                              <option value="transferred">Transferred to another site</option>
-                              <option value="injured_medical">Injured / Medical</option>
-                              <option value="not_rostered">Not rostered</option>
-                            </TextField>
-                          </Grid>
-                          <Grid item xs={12} md={6}>
-                            <TextField
-                              label="Additional notes (optional)"
-                              value={unselectedWorkerReasons[member.id]?.notes || ''}
-                              onChange={(e) => handleUnselectedWorkerNotesChange(member.id, e.target.value)}
-                              fullWidth
-                              size="small"
-                              placeholder="e.g., Expected return date, medical certificate provided, etc."
-                              sx={{
-                                '& .MuiOutlinedInput-root': {
-                                  '&:hover fieldset': {
-                                    borderColor: '#f59e0b',
-                                  },
-                                },
-                              }}
-                            />
-                          </Grid>
-                        </Grid>
-                      </Box>
-                    ))}
-                  </Box>
-                    </>
-                  )}
                 </>
               );
             })()}
           </Box>
         </DialogContent>
-        <DialogActions sx={{ px: 3, py: 2, bgcolor: '#f5f5f5' }}>
-          <Button 
-            onClick={() => {
-              setOpenDialog(false);
-              resetForm();
-            }} 
-            color="inherit"
-            sx={{
-              px: 3,
-              py: 1,
-              fontWeight: 600,
-              '&:hover': {
-                bgcolor: '#e0e0e0'
-              }
-            }}
-          >
-            Cancel
-          </Button>
-          <Button
-            onClick={handleCreateAssignments}
-            variant="contained"
-            disabled={loading || selectedWorkers.length === 0}
-            startIcon={loading ? <CircularProgress size={20} color="inherit" /> : <CheckCircleIcon />}
-            sx={{
-              px: 3,
-              py: 1,
-              fontWeight: 600,
-              backgroundColor: '#1976d2',
-              '&:hover': { 
-                backgroundColor: '#1565c0',
-                transform: 'translateY(-2px)',
-                boxShadow: '0 4px 12px rgba(25, 118, 210, 0.4)'
-              },
-              '&:disabled': {
-                backgroundColor: '#bdbdbd'
-              },
-              transition: 'all 0.3s ease'
-            }}
-          >
-            {loading ? 'Creating...' : (() => {
-              const availableMembers = getAvailableTeamMembers();
-              const totalAvailable = availableMembers.length + selectedWorkers.length;
-              const unselectedCount = totalAvailable - selectedWorkers.length;
-              return `Create Assignment (${selectedWorkers.length} selected, ${unselectedCount} unselected)`;
-            })()}
-          </Button>
+        <DialogActions sx={{ 
+          px: 4, 
+          py: 3, 
+          bgcolor: '#f8f9fa',
+          borderTop: '1px solid #e0e0e0',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center'
+        }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            <Typography variant="body2" color="text.secondary">
+              {selectedWorkers.length} worker{selectedWorkers.length !== 1 ? 's' : ''} selected
+            </Typography>
+            {selectedWorkers.length > 0 && (
+              <Chip 
+                label="Ready to create" 
+                color="success" 
+                size="small" 
+                icon={<CheckCircleIcon />}
+              />
+            )}
+          </Box>
+          
+          <Box sx={{ display: 'flex', gap: 2 }}>
+            <Button 
+              onClick={() => {
+                setOpenDialog(false);
+                resetForm();
+              }} 
+              variant="outlined"
+              sx={{
+                px: 3,
+                py: 1.5,
+                fontWeight: 600,
+                borderRadius: '8px',
+                borderColor: '#6c757d',
+                color: '#6c757d',
+                '&:hover': {
+                  borderColor: '#495057',
+                  backgroundColor: '#e9ecef'
+                }
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleCreateAssignments}
+              variant="contained"
+              disabled={loading || selectedWorkers.length === 0}
+              startIcon={loading ? <CircularProgress size={20} color="inherit" /> : <AssignmentIcon />}
+              sx={{
+                px: 4,
+                py: 1.5,
+                fontWeight: 600,
+                borderRadius: '8px',
+                bgcolor: '#28a745',
+                '&:hover': {
+                  bgcolor: '#218838'
+                },
+                '&:disabled': {
+                  bgcolor: '#e0e0e0',
+                  color: '#9e9e9e'
+                }
+              }}
+            >
+              {loading ? 'Creating...' : 'Create Assignment'}
+            </Button>
+          </Box>
         </DialogActions>
       </Dialog>
 
@@ -2502,6 +2568,197 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
         </DialogActions>
       </Dialog>
 
+      {/* Password Validation Dialog */}
+      <Dialog
+        open={passwordDialog}
+        onClose={() => {
+          setPasswordDialog(false);
+          setPasswordInput('');
+          setPasswordError('');
+          setAssignmentToCancel(null);
+        }}
+        maxWidth="sm"
+        fullWidth
+        PaperProps={{
+          sx: {
+            borderRadius: 3,
+            boxShadow: '0 20px 40px rgba(0,0,0,0.15)',
+            overflow: 'hidden'
+          }
+        }}
+      >
+        <DialogTitle sx={{ 
+          display: 'flex', 
+          alignItems: 'center', 
+          gap: 2, 
+          bgcolor: '#3b82f6', 
+          color: 'white',
+          fontWeight: 600,
+          p: 3
+        }}>
+          <Box sx={{
+            width: 40,
+            height: 40,
+            borderRadius: '50%',
+            bgcolor: 'rgba(255,255,255,0.2)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}>
+            <InfoIcon sx={{ fontSize: 24 }} />
+          </Box>
+          Password Verification Required
+        </DialogTitle>
+        
+        <DialogContent sx={{ p: 4 }}>
+          <Box sx={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            justifyContent: 'center',
+            mb: 3
+          }}>
+            <Box sx={{
+              width: 80,
+              height: 80,
+              borderRadius: '50%',
+              bgcolor: '#dbeafe',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              border: '3px solid #3b82f6'
+            }}>
+              <InfoIcon sx={{ fontSize: 40, color: '#3b82f6' }} />
+            </Box>
+          </Box>
+          
+          <Typography variant="h5" align="center" sx={{ mb: 2, fontWeight: 700, color: '#1e40af' }}>
+            Verify Your Identity
+          </Typography>
+          
+          <Typography variant="body1" align="center" sx={{ mb: 3, color: '#64748b' }}>
+            To cancel this assignment, please enter your password to confirm your identity.
+          </Typography>
+
+          {assignmentToCancel && (
+            <Box sx={{ 
+              p: 3, 
+              bgcolor: '#f8fafc', 
+              borderRadius: 2, 
+              border: '1px solid #e2e8f0',
+              mb: 3
+            }}>
+              <Typography variant="body1" sx={{ fontWeight: 600, color: '#374151', mb: 1 }}>
+                Assignment Details:
+              </Typography>
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                <Typography variant="body2" sx={{ color: '#6b7280' }}>
+                  <strong>Worker:</strong> {assignmentToCancel.workerName}
+                </Typography>
+                <Typography variant="body2" sx={{ color: '#6b7280' }}>
+                  <strong>Assigned Date:</strong> {new Date(assignmentToCancel.assignedDate).toLocaleDateString('en-US', {
+                    weekday: 'long',
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric'
+                  })}
+                </Typography>
+              </Box>
+            </Box>
+          )}
+
+          <TextField
+            fullWidth
+            type="password"
+            label="Enter your password"
+            value={passwordInput}
+            onChange={(e) => {
+              setPasswordInput(e.target.value);
+              setPasswordError('');
+            }}
+            error={!!passwordError}
+            helperText={passwordError}
+            disabled={validatingPassword}
+            sx={{
+              '& .MuiOutlinedInput-root': {
+                '&:hover fieldset': {
+                  borderColor: '#3b82f6',
+                },
+                '&.Mui-focused fieldset': {
+                  borderColor: '#3b82f6',
+                }
+              },
+              '& .MuiInputLabel-root.Mui-focused': {
+                color: '#3b82f6'
+              }
+            }}
+            onKeyPress={(e) => {
+              if (e.key === 'Enter') {
+                handlePasswordSubmit();
+              }
+            }}
+          />
+
+          <Alert severity="info" sx={{ mt: 2 }}>
+            <Typography variant="body2">
+              🔒 Your password is required for security purposes to prevent unauthorized assignment cancellations.
+            </Typography>
+          </Alert>
+        </DialogContent>
+        
+        <DialogActions sx={{ 
+          p: 3, 
+          pt: 1, 
+          justifyContent: 'space-between',
+          bgcolor: '#fafafa'
+        }}>
+          <Button
+            onClick={() => {
+              setPasswordDialog(false);
+              setPasswordInput('');
+              setPasswordError('');
+              setAssignmentToCancel(null);
+            }}
+            variant="outlined"
+            size="large"
+            sx={{
+              borderColor: '#6b7280',
+              color: '#6b7280',
+              '&:hover': {
+                borderColor: '#4b5563',
+                bgcolor: '#f9fafb'
+              },
+              fontWeight: 600,
+              px: 4,
+              py: 1.5
+            }}
+          >
+            Cancel
+          </Button>
+          
+          <Button
+            onClick={handlePasswordSubmit}
+            variant="contained"
+            size="large"
+            disabled={validatingPassword || !passwordInput.trim()}
+            startIcon={validatingPassword ? <CircularProgress size={20} color="inherit" /> : <InfoIcon />}
+            sx={{
+              bgcolor: '#3b82f6',
+              '&:hover': { 
+                bgcolor: '#2563eb',
+                transform: 'translateY(-1px)',
+                boxShadow: '0 4px 12px rgba(59, 130, 246, 0.4)'
+              },
+              fontWeight: 600,
+              px: 4,
+              py: 1.5,
+              transition: 'all 0.2s ease-in-out'
+            }}
+          >
+            {validatingPassword ? 'Verifying...' : 'Verify Password'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       {/* Cancel Assignment Confirmation Dialog */}
       <Dialog
         open={showCancelDialog}
@@ -2661,6 +2918,223 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
             }}
           >
             {loading ? 'Cancelling...' : 'Yes, Cancel Assignment'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Overdue Confirmation Dialog */}
+      <Dialog
+        open={showOverdueConfirmDialog}
+        onClose={() => setShowOverdueConfirmDialog(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle sx={{ 
+          bgcolor: '#fef3c7', 
+          color: '#92400e',
+          fontWeight: 600,
+          borderBottom: '1px solid #fbbf24'
+        }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <ScheduleIcon />
+            Confirm Overdue Marking
+          </Box>
+        </DialogTitle>
+        
+        <DialogContent sx={{ p: 3 }}>
+          <Typography variant="body1" sx={{ mb: 2, color: '#374151' }}>
+            Are you sure you want to mark assignments as overdue?
+          </Typography>
+          
+          <Box sx={{ 
+            bgcolor: '#fef3c7', 
+            p: 2, 
+            borderRadius: 2, 
+            border: '1px solid #fbbf24',
+            mb: 2
+          }}>
+            <Typography variant="body2" sx={{ color: '#92400e', fontWeight: 500 }}>
+              ⚠️ <strong>Important:</strong> This action will mark all assignments past their due time as overdue.
+            </Typography>
+          </Box>
+          
+          <Typography variant="body2" sx={{ color: '#6b7280' }}>
+            💡 <strong>Note:</strong> Overdue assignments cannot be completed later and will affect worker performance records.
+          </Typography>
+        </DialogContent>
+        
+        <DialogActions sx={{ 
+          p: 3, 
+          pt: 1, 
+          justifyContent: 'space-between',
+          bgcolor: '#fafafa'
+        }}>
+          <Button
+            onClick={() => setShowOverdueConfirmDialog(false)}
+            variant="outlined"
+            size="large"
+            sx={{
+              borderColor: '#6b7280',
+              color: '#6b7280',
+              '&:hover': {
+                borderColor: '#4b5563',
+                bgcolor: '#f9fafb'
+              },
+              fontWeight: 600,
+              px: 4,
+              py: 1.5
+            }}
+          >
+            Cancel
+          </Button>
+          
+          <Button
+            onClick={confirmMarkOverdue}
+            variant="contained"
+            size="large"
+            disabled={loading}
+            startIcon={loading ? <CircularProgress size={20} color="inherit" /> : <ScheduleIcon />}
+            sx={{
+              bgcolor: '#f59e0b',
+              '&:hover': { 
+                bgcolor: '#d97706',
+                transform: 'translateY(-1px)',
+                boxShadow: '0 4px 12px rgba(245, 158, 11, 0.4)'
+              },
+              fontWeight: 600,
+              px: 4,
+              py: 1.5,
+              transition: 'all 0.2s ease-in-out'
+            }}
+          >
+            {loading ? 'Marking...' : 'Yes, Mark as Overdue'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Overdue Blocking Dialog */}
+      <Dialog
+        open={showOverdueBlockingDialog}
+        onClose={() => setShowOverdueBlockingDialog(false)}
+        maxWidth="sm"
+        fullWidth
+        PaperProps={{
+          sx: {
+            borderRadius: 3,
+            boxShadow: '0 20px 40px rgba(0,0,0,0.15)',
+            overflow: 'hidden'
+          }
+        }}
+      >
+        <DialogTitle sx={{ 
+          bgcolor: '#fef2f2', 
+          color: '#991b1b',
+          fontWeight: 600,
+          borderBottom: '1px solid #fecaca',
+          p: 3
+        }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            <Box sx={{
+              width: 40,
+              height: 40,
+              borderRadius: '50%',
+              bgcolor: '#ef4444',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}>
+              <WarningIcon sx={{ fontSize: 24, color: 'white' }} />
+            </Box>
+            Cannot Create Assignment
+          </Box>
+        </DialogTitle>
+        
+        <DialogContent sx={{ p: 4 }}>
+          <Box sx={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            justifyContent: 'center',
+            mb: 3
+          }}>
+            <Box sx={{
+              width: 100,
+              height: 100,
+              borderRadius: '50%',
+              bgcolor: '#fef2f2',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              border: '3px solid #ef4444',
+              animation: 'pulse 2s infinite'
+            }}>
+              <WarningIcon sx={{ fontSize: 50, color: '#ef4444' }} />
+            </Box>
+          </Box>
+          
+          <Typography variant="h5" align="center" sx={{ mb: 3, fontWeight: 700, color: '#991b1b' }}>
+            ⚠️ Assignment Blocked
+          </Typography>
+          
+          <Box sx={{ 
+            p: 3, 
+            bgcolor: '#fef2f2', 
+            borderRadius: 2, 
+            border: '1px solid #fecaca',
+            mb: 3
+          }}>
+            <Typography variant="body1" sx={{ fontWeight: 600, color: '#991b1b', whiteSpace: 'pre-line', textAlign: 'center' }}>
+              {overdueBlockingMessage}
+            </Typography>
+          </Box>
+
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            <Typography variant="body2" sx={{ fontWeight: 600 }}>
+              Why this happens:
+            </Typography>
+            <Typography variant="body2" component="div" sx={{ mt: 1 }}>
+              • Workers with overdue assignments cannot receive new assignments<br/>
+              • This prevents assignment conflicts and ensures proper workflow<br/>
+              • Workers become available again when the next shift starts<br/>
+              • Consider marking overdue assignments first if needed
+            </Typography>
+          </Alert>
+
+          <Box sx={{ 
+            p: 2, 
+            bgcolor: '#f0f9ff', 
+            borderRadius: 1, 
+            border: '1px solid #0ea5e9'
+          }}>
+            <Typography variant="body2" sx={{ color: '#0c4a6e', fontWeight: 500 }}>
+              💡 <strong>Tip:</strong> Use the "Mark Overdue" button to mark pending assignments as overdue, then create new assignments for the next day.
+            </Typography>
+          </Box>
+        </DialogContent>
+        
+        <DialogActions sx={{ 
+          p: 3, 
+          pt: 1, 
+          justifyContent: 'center',
+          bgcolor: '#fafafa'
+        }}>
+          <Button
+            onClick={() => setShowOverdueBlockingDialog(false)}
+            variant="contained"
+            size="large"
+            sx={{
+              bgcolor: '#6b7280',
+              '&:hover': { 
+                bgcolor: '#4b5563',
+                transform: 'translateY(-1px)',
+                boxShadow: '0 4px 12px rgba(107, 114, 128, 0.4)'
+              },
+              fontWeight: 600,
+              px: 4,
+              py: 1.5,
+              transition: 'all 0.2s ease-in-out'
+            }}
+          >
+            Understood
           </Button>
         </DialogActions>
       </Dialog>

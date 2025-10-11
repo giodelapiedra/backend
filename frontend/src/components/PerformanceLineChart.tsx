@@ -415,3 +415,4 @@ const PerformanceLineChart: React.FC<PerformanceLineChartProps> = ({
 };
 
 export default PerformanceLineChart;
+

@@ -14,8 +14,13 @@ interface AssignmentKPIData {
   score: number;
   completionRate: number;
   onTimeRate: number;
+  lateRate: number;
   qualityScore: number;
+  pendingBonus: number;
+  overduePenalty: number;
   completedAssignments: number;
+  pendingAssignments: number;
+  overdueAssignments: number;
   totalAssignments: number;
 }
 
@@ -23,9 +28,13 @@ interface AssignmentMetrics {
   totalAssignments: number;
   completedAssignments: number;
   onTimeSubmissions: number;
+  pendingAssignments: number;
+  overdueAssignments: number;
   qualityScore: number;
   completionRate: number;
   onTimeRate: number;
+  lateRate: number;
+  totalMembers: number;
 }
 
 interface RecentAssignment {
@@ -37,7 +46,7 @@ interface RecentAssignment {
   isOnTime: boolean;
 }
 
-interface AssignmentKPIResponse extends BaseAPIResponse {
+export interface AssignmentKPIResponse extends BaseAPIResponse {
   kpi: AssignmentKPIData;
   metrics: AssignmentMetrics;
   recentAssignments: RecentAssignment[];
@@ -46,34 +55,6 @@ interface AssignmentKPIResponse extends BaseAPIResponse {
     end: string;
     month: string;
   };
-}
-
-interface TeamAssignmentKPIData {
-  rating: string;
-  color: string;
-  description: string;
-  score: number;
-  completionRate: number;
-  onTimeRate: number;
-  qualityScore: number;
-  pendingBonus: number;
-  overduePenalty: number;
-  completedAssignments: number;
-  pendingAssignments: number;
-  overdueAssignments: number;
-  totalAssignments: number;
-}
-
-interface TeamAssignmentMetrics {
-  totalAssignments: number;
-  completedAssignments: number;
-  onTimeSubmissions: number;
-  pendingAssignments: number;
-  overdueAssignments: number;
-  qualityScore: number;
-  completionRate: number;
-  onTimeRate: number;
-  totalMembers: number;
 }
 
 interface IndividualAssignmentKPI {
@@ -92,7 +73,7 @@ interface IndividualAssignmentKPI {
 
 interface TeamAssignmentKPIResponse extends BaseAPIResponse {
   teamKPI: AssignmentKPIData;
-  teamMetrics: TeamAssignmentMetrics;
+  teamMetrics: AssignmentMetrics;
   individualKPIs: IndividualAssignmentKPI[];
   period: {
     start: string;
@@ -105,19 +86,6 @@ interface AssessmentSubmissionResponse extends BaseAPIResponse {
   assessmentData: any;
   cycleInfo?: any;
   message: string; // Make message required since it's used in components
-}
-
-interface AssignmentResponse extends BaseAPIResponse {
-  assignments: any[];
-}
-
-interface UnselectedWorkersResponse extends BaseAPIResponse {
-  unselectedWorkers: any[];
-}
-
-interface CanSubmitResponse extends BaseAPIResponse {
-  canSubmit: boolean;
-  assignment?: any;
 }
 
 // Backend API base URL from environment variables

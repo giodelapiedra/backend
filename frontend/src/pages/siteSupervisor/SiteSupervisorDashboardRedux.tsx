@@ -1,4 +1,4 @@
-import React, { useEffect, useCallback, useState } from 'react';
+import React, { useEffect, useCallback, useState, useRef } from 'react';
 import {
   Box,
   Typography,
@@ -227,6 +227,14 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
   const cases = casesData?.cases || [];
   const teams = teamsData?.teams || [];
   const currentTeam = teamsData?.currentTeam || null;
+  
+  // Use ref to prevent infinite loop
+  const casesRef = useRef(cases);
+  
+  // Update cases ref when cases change
+  useEffect(() => {
+    casesRef.current = cases;
+  }, [cases]);
   // teamMembers comes from Redux state, not from API directly
 
   // Redux teamMembers state
@@ -448,20 +456,32 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
       console.log('📋 Raw unselected workers data:', unselectedWorkersData.unselectedWorkers);
       
       // Transform unselected workers data to match the expected format
-      const formattedWorkers = unselectedWorkersData.unselectedWorkers.map((unselected: any) => {
-        console.log('📋 Processing worker:', unselected);
-        const formatted = {
-          id: unselected.worker_id, // Use worker_id from the main object
-          first_name: unselected.worker.first_name,
-          last_name: unselected.worker.last_name,
-          email: unselected.worker.email,
-          reason: unselected.reason,
-          notes: unselected.notes || 'No notes provided',
-          caseStatus: unselected.case_status || 'open'
-        };
-        console.log('📋 Formatted worker:', formatted);
-        return formatted;
-      });
+      const formattedWorkers = unselectedWorkersData.unselectedWorkers
+        // IMPORTANT FIX: Filter out workers who already have cases - they should not be selectable for new incidents
+        .filter((unselected: any) => {
+          // Check if the worker has any existing cases - using ref to prevent infinite loop
+          const hasExistingCase = casesRef.current.some((c: any) => c.worker_id === unselected.worker_id && c.status !== 'closed');
+          
+          if (hasExistingCase) {
+            console.log('⛔ Excluding worker with existing case:', unselected.worker?.first_name, unselected.worker?.last_name);
+            return false;
+          }
+          return true;
+        })
+        .map((unselected: any) => {
+          console.log('📋 Processing worker:', unselected);
+          const formatted = {
+            id: unselected.worker_id, // Use worker_id from the main object
+            first_name: unselected.worker.first_name,
+            last_name: unselected.worker.last_name,
+            email: unselected.worker.email,
+            reason: unselected.reason,
+            notes: unselected.notes || 'No notes provided',
+            caseStatus: unselected.case_status || 'open'
+          };
+          console.log('📋 Formatted worker:', formatted);
+          return formatted;
+        });
       
       console.log('✅ All formatted workers:', formattedWorkers);
       dispatch(setTeamMembers(formattedWorkers));

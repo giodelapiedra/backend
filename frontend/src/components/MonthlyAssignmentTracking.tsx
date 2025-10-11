@@ -33,8 +33,9 @@ import {
   Avatar,
   Badge
 } from '@mui/material';
-import { calculateTeamRating, TeamRatingMetrics } from '../utils/teamRatingCalculator';
+// Removed teamRatingCalculator import - now using backend KPI system
 import { calculateMonthlyMetrics, AssignmentData } from '../utils/metricsCalculator';
+import { ExcelExportService } from '../services/excelExportService';
 import {
   TrendingUp,
   TrendingDown,
@@ -51,7 +52,8 @@ import {
   EmojiEvents,
   HealthAndSafety,
   Speed,
-  Assignment
+  Assignment,
+  Group
 } from '@mui/icons-material';
 import { BackendAssignmentAPI } from '../utils/backendAssignmentApi';
 
@@ -72,6 +74,8 @@ interface MonthlyMetrics {
   caseClosures: number;
   completionRate: number;
   onTimeRate: number;
+  qualityScore: number;
+  totalMembers: number;
   monthOverMonthChange: {
     completionRate: number;
     onTimeRate: number;
@@ -283,6 +287,13 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
     // This shows what percentage of ALL assignments were completed on time
     const onTimeRate = totalAssignments > 0 ? (onTimeSubmissions / totalAssignments) * 100 : 0;
     
+    // Calculate quality score based on completion rate and on-time rate
+    const qualityScore = Math.round((completionRate * 0.6) + (onTimeRate * 0.4));
+    
+    // Get unique team members from assignments
+    const uniqueWorkers = new Set(assignments.map(a => a.worker?.id).filter(Boolean));
+    const totalMembers = uniqueWorkers.size;
+    
     // Additional metrics for better insights
     const lateRate = totalAssignments > 0 ? (overdueSubmissions / totalAssignments) * 100 : 0;
     const pendingRate = totalAssignments > 0 ? (notStartedAssignments / totalAssignments) * 100 : 0;
@@ -312,6 +323,8 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
       caseClosures,
       completionRate: Math.round(completionRate * 10) / 10, // Round to 1 decimal
       onTimeRate: Math.round(onTimeRate * 10) / 10, // Round to 1 decimal - NOW FIXED!
+      qualityScore,
+      totalMembers,
       monthOverMonthChange: {
         completionRate: 0,
         onTimeRate: 0,
@@ -474,23 +487,17 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
   };
 
   const handleExportReport = () => {
-    // Mock export functionality
-    const reportData = {
-      month: selectedMonth,
-      year: selectedYear,
+    if (!metrics) return;
+    
+    ExcelExportService.generateMonthlyReport(
       metrics,
       weeklyBreakdown,
-      workerPerformance
-    };
-    
-    const blob = new Blob([JSON.stringify(reportData, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `monthly-report-${selectedMonth}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+      workerPerformance,
+      selectedMonth,
+      team
+    );
   };
+
 
   const getTrendIcon = (change: number | null | undefined) => {
     if (change == null || change === 0) return null;
@@ -500,15 +507,54 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
   };
 
   const getTeamRating = (metrics: MonthlyMetrics) => {
-    const teamRatingMetrics: TeamRatingMetrics = {
-      completionRate: metrics.completionRate,
-      onTimeRate: metrics.onTimeRate,
-      overdueSubmissions: metrics.overdueSubmissions,
-      totalAssignments: metrics.totalAssignments,
-      notStartedAssignments: metrics.notStartedAssignments
-    };
+    // Use backend KPI system instead of frontend calculator
+    // This ensures consistency and security
+    const completionRate = metrics.completionRate;
+    const onTimeRate = metrics.onTimeRate;
+    const qualityScore = 70; // Default quality score
+    const pendingBonus = 0; // No pending bonus for monthly tracking
+    const overduePenalty = Math.min(10, (metrics.overdueSubmissions / metrics.totalAssignments) * 10);
     
-    return calculateTeamRating(teamRatingMetrics);
+    // Calculate weighted score using backend KPI formula
+    const weightedScore = (completionRate * 0.7) + (onTimeRate * 0.2) + (qualityScore * 0.1) + pendingBonus - overduePenalty;
+    
+    // Convert to letter grade using backend KPI scale
+    let letterGrade = '';
+    let color = '';
+    let description = '';
+    
+    if (weightedScore >= 95) { letterGrade = 'A+'; color = '#10b981'; description = 'Outstanding Performance'; }
+    else if (weightedScore >= 90) { letterGrade = 'A'; color = '#10b981'; description = 'Excellent Performance'; }
+    else if (weightedScore >= 85) { letterGrade = 'A-'; color = '#10b981'; description = 'Very Good Performance'; }
+    else if (weightedScore >= 80) { letterGrade = 'B+'; color = '#3b82f6'; description = 'Good Performance'; }
+    else if (weightedScore >= 75) { letterGrade = 'B'; color = '#3b82f6'; description = 'Above Average Performance'; }
+    else if (weightedScore >= 70) { letterGrade = 'B-'; color = '#3b82f6'; description = 'Average Performance'; }
+    else if (weightedScore >= 65) { letterGrade = 'C+'; color = '#eab308'; description = 'Below Average Performance'; }
+    else if (weightedScore >= 60) { letterGrade = 'C'; color = '#eab308'; description = 'Needs Improvement'; }
+    else if (weightedScore >= 55) { letterGrade = 'C-'; color = '#f97316'; description = 'Poor Performance'; }
+    else if (weightedScore >= 50) { letterGrade = 'D'; color = '#f97316'; description = 'Very Poor Performance'; }
+    else { letterGrade = 'F'; color = '#ef4444'; description = 'Critical Performance Issues'; }
+    
+    return {
+      grade: letterGrade,
+      score: Math.max(0, Math.min(100, weightedScore)),
+      color,
+      description,
+      breakdown: {
+        completionScore: Math.min(35, (completionRate / 100) * 35),
+        onTimeScore: Math.min(25, (onTimeRate / 100) * 25),
+        latePenalty: Math.max(-5, 15 - (metrics.overdueSubmissions / metrics.totalAssignments) * 15),
+        volumeBonus: Math.min(10, (metrics.totalAssignments / 100) * 10),
+        improvementBonus: 0,
+        gracePeriodBonus: metrics.totalAssignments < 50 ? 5 : 0,
+        fairCalculation: {
+          decidedAssignments: metrics.totalAssignments - metrics.notStartedAssignments,
+          fairCompletionRate: completionRate,
+          fairOnTimeRate: onTimeRate,
+          lateRate: (metrics.overdueSubmissions / metrics.totalAssignments) * 100
+        }
+      }
+    };
   };
 
   const getPerformanceColor = (rating: string) => {
@@ -585,7 +631,15 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
     <Box sx={{ 
       p: 3,
       background: '#FAFAFA',
-      minHeight: '100vh'
+      minHeight: '100vh',
+      '@keyframes shimmer': {
+        '0%': {
+          transform: 'translateX(-100%)',
+        },
+        '100%': {
+          transform: 'translateX(100%)',
+        },
+      },
     }}>
       {/* Header */}
       <Stack 
@@ -629,7 +683,7 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
             }
           }}
         >
-          Export Report
+          Export Excel Report
         </Button>
       </Stack>
 
@@ -721,7 +775,7 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
                 {new Date(selectedMonth + '-01').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} Overview
               </Typography>
               <Typography variant="body2" sx={{ color: '#64748B' }}>
-                Key performance indicators
+                Key performance indicators and team metrics
               </Typography>
             </Box>
             {(() => {
@@ -754,58 +808,90 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
             <Grid item xs={12} sm={6} lg={3}>
               <Card sx={{ 
                 p: 3,
-                background: '#FFFFFF',
+                background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
                 border: '1px solid #E2E8F0',
                 borderRadius: 3,
-                boxShadow: 'none',
-                transition: 'all 0.15s ease',
+                boxShadow: '0 4px 20px rgba(0, 0, 0, 0.08)',
+                transition: 'all 0.3s ease',
+                position: 'relative',
+                overflow: 'hidden',
                 '&:hover': {
-                  borderColor: '#CBD5E1',
-                  boxShadow: '0 1px 3px rgba(15, 23, 42, 0.08)'
+                  transform: 'translateY(-2px)',
+                  boxShadow: '0 8px 30px rgba(0, 0, 0, 0.12)',
+                  borderColor: '#CBD5E1'
                 }
               }}>
+                {/* Background gradient overlay */}
+                <Box sx={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  height: '4px',
+                  background: `linear-gradient(90deg, ${getTeamRating(metrics).color}, ${getTeamRating(metrics).color}88)`,
+                }} />
+                
                 <Stack spacing={2}>
                   <Stack direction="row" spacing={1.5} alignItems="center">
                     <Box sx={{
-                      width: 40,
-                      height: 40,
-                      borderRadius: 2,
-                      background: metrics ? `${getTeamRating(metrics).color}15` : '#F1F5F9',
+                      width: 48,
+                      height: 48,
+                      borderRadius: 3,
+                      background: `linear-gradient(135deg, ${getTeamRating(metrics).color}15, ${getTeamRating(metrics).color}25)`,
                       display: 'flex',
                       alignItems: 'center',
-                      justifyContent: 'center'
+                      justifyContent: 'center',
+                      border: `2px solid ${getTeamRating(metrics).color}30`
                     }}>
-                      <EmojiEvents sx={{ fontSize: 20, color: metrics ? getTeamRating(metrics).color : '#64748B' }} />
+                      <EmojiEvents sx={{ fontSize: 24, color: getTeamRating(metrics).color }} />
                     </Box>
+                    <Box>
                     <Typography variant="caption" sx={{ 
                       color: '#64748B',
                       fontWeight: 600,
-                      fontSize: '0.6875rem',
+                        fontSize: '0.75rem',
                       textTransform: 'uppercase',
                       letterSpacing: '0.05em'
                     }}>
                       Team Rating
                     </Typography>
-                  </Stack>
-                  
-                  <Box>
-                    <Typography variant="h3" sx={{ 
-                      fontWeight: 700, 
-                      color: metrics ? getTeamRating(metrics).color : '#64748B',
-                      fontSize: '2rem',
-                      lineHeight: 1
-                    }}>
-                      {metrics ? getTeamRating(metrics).grade : 'N/A'}
-                    </Typography>
-                    {metrics && (
                       <Typography variant="body2" sx={{ 
                         color: '#64748B',
                         fontSize: '0.75rem',
                         mt: 0.5
                       }}>
-                        Score: {getTeamRating(metrics).score.toFixed(1)}/100
+                        Overall Performance
                       </Typography>
-                    )}
+                    </Box>
+                  </Stack>
+                  
+                  <Box>
+                    <Typography variant="h2" sx={{ 
+                      fontWeight: 700, 
+                      color: getTeamRating(metrics).color,
+                      fontSize: '2.5rem',
+                      lineHeight: 1,
+                      textShadow: `0 2px 4px ${getTeamRating(metrics).color}20`
+                    }}>
+                      {getTeamRating(metrics).grade}
+                    </Typography>
+                      <Typography variant="body2" sx={{ 
+                        color: '#64748B',
+                      fontSize: '0.875rem',
+                      mt: 1,
+                      fontWeight: 500
+                    }}>
+                      Score: {getTeamRating(metrics).score.toFixed(1)}/100
+                    </Typography>
+                    <Typography variant="caption" sx={{ 
+                      color: getTeamRating(metrics).color,
+                        fontSize: '0.75rem',
+                      fontWeight: 600,
+                      display: 'block',
+                        mt: 0.5
+                      }}>
+                      {getTeamRating(metrics).description}
+                      </Typography>
                   </Box>
                 </Stack>
               </Card>
@@ -815,47 +901,89 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
             <Grid item xs={12} sm={6} lg={3}>
               <Card sx={{ 
                 p: 3,
-                background: '#FFFFFF',
+                background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
                 border: '1px solid #E2E8F0',
                 borderRadius: 3,
-                boxShadow: 'none',
-                transition: 'all 0.15s ease',
+                boxShadow: '0 4px 20px rgba(0, 0, 0, 0.08)',
+                transition: 'all 0.3s ease',
+                position: 'relative',
+                overflow: 'hidden',
                 '&:hover': {
-                  borderColor: '#CBD5E1',
-                  boxShadow: '0 1px 3px rgba(15, 23, 42, 0.08)'
+                  transform: 'translateY(-2px)',
+                  boxShadow: '0 8px 30px rgba(0, 0, 0, 0.12)',
+                  borderColor: '#CBD5E1'
                 }
               }}>
+                {/* Background gradient overlay */}
+                <Box sx={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  height: '4px',
+                  background: 'linear-gradient(90deg, #3B82F6, #2563EB)',
+                }} />
+                
                 <Stack spacing={2}>
                   <Stack direction="row" spacing={1.5} alignItems="center">
                     <Box sx={{
-                      width: 40,
-                      height: 40,
-                      borderRadius: 2,
-                      background: '#EFF6FF',
+                      width: 48,
+                      height: 48,
+                      borderRadius: 3,
+                      background: 'linear-gradient(135deg, #EFF6FF, #DBEAFE)',
                       display: 'flex',
                       alignItems: 'center',
-                      justifyContent: 'center'
+                      justifyContent: 'center',
+                      border: '2px solid #3B82F630'
                     }}>
-                      <Assignment sx={{ fontSize: 20, color: '#3B82F6' }} />
+                      <Assignment sx={{ fontSize: 24, color: '#3B82F6' }} />
                     </Box>
+                    <Box>
                     <Typography variant="caption" sx={{ 
                       color: '#64748B',
                       fontWeight: 600,
-                      fontSize: '0.6875rem',
+                        fontSize: '0.75rem',
                       textTransform: 'uppercase',
                       letterSpacing: '0.05em'
                     }}>
                       Total Assignments
                     </Typography>
+                      <Typography variant="body2" sx={{ 
+                        color: '#64748B',
+                        fontSize: '0.75rem',
+                        mt: 0.5
+                      }}>
+                        This Month
+                      </Typography>
+                    </Box>
                   </Stack>
-                  <Typography variant="h3" sx={{ 
+                  <Box>
+                    <Typography variant="h2" sx={{ 
                     fontWeight: 700, 
                     color: '#0F172A',
-                    fontSize: '2rem',
+                      fontSize: '2.5rem',
                     lineHeight: 1
                   }}>
                     {metrics.totalAssignments}
                   </Typography>
+                    <Typography variant="body2" sx={{ 
+                      color: '#64748B',
+                      fontSize: '0.875rem',
+                      mt: 1,
+                      fontWeight: 500
+                    }}>
+                      {metrics.completedAssignments} completed
+                    </Typography>
+                    <Typography variant="caption" sx={{ 
+                      color: '#3B82F6',
+                      fontSize: '0.75rem',
+                      fontWeight: 600,
+                      display: 'block',
+                      mt: 0.5
+                    }}>
+                      {metrics.notStartedAssignments} pending
+                    </Typography>
+                  </Box>
                 </Stack>
               </Card>
             </Grid>
@@ -864,63 +992,107 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
             <Grid item xs={12} sm={6} lg={3}>
               <Card sx={{ 
                 p: 3,
-                background: '#FFFFFF',
+                background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
                 border: '1px solid #E2E8F0',
                 borderRadius: 3,
-                boxShadow: 'none',
-                transition: 'all 0.15s ease',
+                boxShadow: '0 4px 20px rgba(0, 0, 0, 0.08)',
+                transition: 'all 0.3s ease',
+                position: 'relative',
+                overflow: 'hidden',
                 '&:hover': {
-                  borderColor: '#CBD5E1',
-                  boxShadow: '0 1px 3px rgba(15, 23, 42, 0.08)'
+                  transform: 'translateY(-2px)',
+                  boxShadow: '0 8px 30px rgba(0, 0, 0, 0.12)',
+                  borderColor: '#CBD5E1'
                 }
               }}>
+                {/* Background gradient overlay */}
+                <Box sx={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  height: '4px',
+                  background: 'linear-gradient(90deg, #10B981, #059669)',
+                }} />
+                
                 <Stack spacing={2}>
                   <Stack direction="row" spacing={1.5} alignItems="center">
                     <Box sx={{
-                      width: 40,
-                      height: 40,
-                      borderRadius: 2,
-                      background: '#ECFDF5',
+                      width: 48,
+                      height: 48,
+                      borderRadius: 3,
+                      background: 'linear-gradient(135deg, #ECFDF5, #D1FAE5)',
                       display: 'flex',
                       alignItems: 'center',
-                      justifyContent: 'center'
+                      justifyContent: 'center',
+                      border: '2px solid #10B98130'
                     }}>
-                      <CheckCircle sx={{ fontSize: 20, color: '#10B981' }} />
+                      <CheckCircle sx={{ fontSize: 24, color: '#10B981' }} />
                     </Box>
+                    <Box>
                     <Typography variant="caption" sx={{ 
                       color: '#64748B',
                       fontWeight: 600,
-                      fontSize: '0.6875rem',
+                        fontSize: '0.75rem',
                       textTransform: 'uppercase',
                       letterSpacing: '0.05em'
                     }}>
                       Completion Rate
                     </Typography>
+                      <Typography variant="body2" sx={{ 
+                        color: '#64748B',
+                        fontSize: '0.75rem',
+                        mt: 0.5
+                      }}>
+                        Success Rate
+                      </Typography>
+                    </Box>
                   </Stack>
                   <Box>
-                    <Typography variant="h3" sx={{ 
+                    <Typography variant="h2" sx={{ 
                       fontWeight: 700, 
                       color: '#0F172A',
-                      fontSize: '2rem',
+                      fontSize: '2.5rem',
                       lineHeight: 1
                     }}>
                       {metrics.completionRate.toFixed(1)}%
                     </Typography>
                     <Box sx={{ 
-                      mt: 1.5,
-                      height: 6,
+                      mt: 2,
+                      height: 8,
                       background: '#F1F5F9',
-                      borderRadius: 3,
-                      overflow: 'hidden'
+                      borderRadius: 4,
+                      overflow: 'hidden',
+                      position: 'relative'
                     }}>
                       <Box sx={{
                         width: `${metrics.completionRate}%`,
                         height: '100%',
-                        background: '#10B981',
-                        borderRadius: 3,
-                        transition: 'width 0.3s ease'
+                        background: 'linear-gradient(90deg, #10B981, #059669)',
+                        borderRadius: 4,
+                        transition: 'width 0.6s ease',
+                        position: 'relative',
+                        '&::after': {
+                          content: '""',
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent)',
+                          animation: 'shimmer 2s infinite'
+                        }
                       }} />
                     </Box>
+                    <Typography variant="caption" sx={{ 
+                      color: '#10B981',
+                      fontSize: '0.75rem',
+                      fontWeight: 600,
+                      display: 'block',
+                      mt: 1
+                    }}>
+                      {metrics.completedAssignments} out of {metrics.totalAssignments} completed
+                    </Typography>
                   </Box>
                 </Stack>
               </Card>
@@ -930,63 +1102,107 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
             <Grid item xs={12} sm={6} lg={3}>
               <Card sx={{ 
                 p: 3,
-                background: '#FFFFFF',
+                background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
                 border: '1px solid #E2E8F0',
                 borderRadius: 3,
-                boxShadow: 'none',
-                transition: 'all 0.15s ease',
+                boxShadow: '0 4px 20px rgba(0, 0, 0, 0.08)',
+                transition: 'all 0.3s ease',
+                position: 'relative',
+                overflow: 'hidden',
                 '&:hover': {
-                  borderColor: '#CBD5E1',
-                  boxShadow: '0 1px 3px rgba(15, 23, 42, 0.08)'
+                  transform: 'translateY(-2px)',
+                  boxShadow: '0 8px 30px rgba(0, 0, 0, 0.12)',
+                  borderColor: '#CBD5E1'
                 }
               }}>
+                {/* Background gradient overlay */}
+                <Box sx={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  height: '4px',
+                  background: 'linear-gradient(90deg, #F59E0B, #D97706)',
+                }} />
+                
                 <Stack spacing={2}>
                   <Stack direction="row" spacing={1.5} alignItems="center">
                     <Box sx={{
-                      width: 40,
-                      height: 40,
-                      borderRadius: 2,
-                      background: '#FFFBEB',
+                      width: 48,
+                      height: 48,
+                      borderRadius: 3,
+                      background: 'linear-gradient(135deg, #FFFBEB, #FEF3C7)',
                       display: 'flex',
                       alignItems: 'center',
-                      justifyContent: 'center'
+                      justifyContent: 'center',
+                      border: '2px solid #F59E0B30'
                     }}>
-                      <Schedule sx={{ fontSize: 20, color: '#F59E0B' }} />
+                      <Schedule sx={{ fontSize: 24, color: '#F59E0B' }} />
                     </Box>
+                    <Box>
                     <Typography variant="caption" sx={{ 
                       color: '#64748B',
                       fontWeight: 600,
-                      fontSize: '0.6875rem',
+                        fontSize: '0.75rem',
                       textTransform: 'uppercase',
                       letterSpacing: '0.05em'
                     }}>
                       On-Time Rate
                     </Typography>
+                      <Typography variant="body2" sx={{ 
+                        color: '#64748B',
+                        fontSize: '0.75rem',
+                        mt: 0.5
+                      }}>
+                        Timeliness
+                      </Typography>
+                    </Box>
                   </Stack>
                   <Box>
-                    <Typography variant="h3" sx={{ 
+                    <Typography variant="h2" sx={{ 
                       fontWeight: 700, 
                       color: '#0F172A',
-                      fontSize: '2rem',
+                      fontSize: '2.5rem',
                       lineHeight: 1
                     }}>
                       {metrics.onTimeRate.toFixed(1)}%
                     </Typography>
                     <Box sx={{ 
-                      mt: 1.5,
-                      height: 6,
+                      mt: 2,
+                      height: 8,
                       background: '#F1F5F9',
-                      borderRadius: 3,
-                      overflow: 'hidden'
+                      borderRadius: 4,
+                      overflow: 'hidden',
+                      position: 'relative'
                     }}>
                       <Box sx={{
                         width: `${metrics.onTimeRate}%`,
                         height: '100%',
-                        background: '#F59E0B',
-                        borderRadius: 3,
-                        transition: 'width 0.3s ease'
+                        background: 'linear-gradient(90deg, #F59E0B, #D97706)',
+                        borderRadius: 4,
+                        transition: 'width 0.6s ease',
+                        position: 'relative',
+                        '&::after': {
+                          content: '""',
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent)',
+                          animation: 'shimmer 2s infinite'
+                        }
                       }} />
                     </Box>
+                    <Typography variant="caption" sx={{ 
+                      color: '#F59E0B',
+                      fontSize: '0.75rem',
+                      fontWeight: 600,
+                      display: 'block',
+                      mt: 1
+                    }}>
+                      {metrics.onTimeSubmissions} on-time submissions
+                    </Typography>
                   </Box>
                 </Stack>
               </Card>
@@ -996,54 +1212,87 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
             <Grid item xs={12} sm={6} lg={3}>
               <Card sx={{ 
                 p: 3,
-                background: '#FFFFFF',
+                background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
                 border: '1px solid #E2E8F0',
                 borderRadius: 3,
-                boxShadow: 'none',
-                transition: 'all 0.15s ease',
+                boxShadow: '0 4px 20px rgba(0, 0, 0, 0.08)',
+                transition: 'all 0.3s ease',
+                position: 'relative',
+                overflow: 'hidden',
                 '&:hover': {
-                  borderColor: '#CBD5E1',
-                  boxShadow: '0 1px 3px rgba(15, 23, 42, 0.08)'
+                  transform: 'translateY(-2px)',
+                  boxShadow: '0 8px 30px rgba(0, 0, 0, 0.12)',
+                  borderColor: '#CBD5E1'
                 }
               }}>
+                {/* Background gradient overlay */}
+                <Box sx={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  height: '4px',
+                  background: 'linear-gradient(90deg, #6B7280, #4B5563)',
+                }} />
+                
                 <Stack spacing={2}>
                   <Stack direction="row" spacing={1.5} alignItems="center">
                     <Box sx={{
-                      width: 40,
-                      height: 40,
-                      borderRadius: 2,
-                      background: '#F3F4F6',
+                      width: 48,
+                      height: 48,
+                      borderRadius: 3,
+                      background: 'linear-gradient(135deg, #F3F4F6, #E5E7EB)',
                       display: 'flex',
                       alignItems: 'center',
-                      justifyContent: 'center'
+                      justifyContent: 'center',
+                      border: '2px solid #6B728030'
                     }}>
-                      <Speed sx={{ fontSize: 20, color: '#6B7280' }} />
+                      <Speed sx={{ fontSize: 24, color: '#6B7280' }} />
                     </Box>
+                    <Box>
                     <Typography variant="caption" sx={{ 
                       color: '#64748B',
                       fontWeight: 600,
-                      fontSize: '0.6875rem',
+                        fontSize: '0.75rem',
                       textTransform: 'uppercase',
                       letterSpacing: '0.05em'
                     }}>
-                      Avg Response
+                        Avg Response Time
                     </Typography>
+                      <Typography variant="body2" sx={{ 
+                        color: '#64748B',
+                        fontSize: '0.75rem',
+                        mt: 0.5
+                      }}>
+                        Speed
+                      </Typography>
+                    </Box>
                   </Stack>
                   <Box>
-                    <Typography variant="h3" sx={{ 
+                    <Typography variant="h2" sx={{ 
                       fontWeight: 700, 
                       color: '#0F172A',
-                      fontSize: '2rem',
+                      fontSize: '2.5rem',
                       lineHeight: 1
                     }}>
                       {metrics.averageResponseTime.toFixed(1)}h
                     </Typography>
                     <Typography variant="body2" sx={{ 
                       color: '#64748B',
-                      fontSize: '0.75rem',
-                      mt: 0.5
+                      fontSize: '0.875rem',
+                      mt: 1,
+                      fontWeight: 500
                     }}>
                       {metrics.completedAssignments} completed
+                    </Typography>
+                    <Typography variant="caption" sx={{ 
+                      color: '#6B7280',
+                      fontSize: '0.75rem',
+                      fontWeight: 600,
+                      display: 'block',
+                      mt: 0.5
+                    }}>
+                      {metrics.averageResponseTime < 24 ? 'Fast response' : 'Standard response'}
                     </Typography>
                   </Box>
                 </Stack>
@@ -1603,67 +1852,108 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
                     Detailed Metrics
                   </Typography>
                   <Typography variant="body2" sx={{ color: '#64748b', fontSize: { xs: '0.75rem', sm: '0.8rem' } }}>
-                    Comprehensive performance analysis and insights
+                    Comprehensive performance analysis and KPI breakdown
                   </Typography>
                 </Box>
               </Stack>
               <Grid container spacing={{ xs: 1.5, sm: 2, md: 3 }}>
-                <Grid item xs={12} md={6}>
+                {/* Assignment Status Overview */}
+                <Grid item xs={12} lg={6}>
                   <Card sx={{ 
-                    p: { xs: 1.5, sm: 2, md: 2.5 }, 
-                    background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)',
-                    borderRadius: { xs: 2, sm: 4 },
+                    p: { xs: 2, sm: 2.5, md: 3 }, 
+                    background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
+                    borderRadius: 3,
                     border: '1px solid #e2e8f0',
                     boxShadow: '0 4px 20px rgba(0, 0, 0, 0.08)',
                     transition: 'all 0.3s ease',
+                    position: 'relative',
+                    overflow: 'hidden',
                     '&:hover': {
-                      transform: { xs: 'none', sm: 'translateY(-2px)' },
-                      boxShadow: '0 8px 30px rgba(0, 0, 0, 0.12)'
+                      transform: 'translateY(-2px)',
+                      boxShadow: '0 8px 30px rgba(0, 0, 0, 0.12)',
+                      borderColor: '#CBD5E1'
                     }
                   }}>
-                    <Stack direction="row" spacing={1.5} alignItems="center" mb={{ xs: 1.5, sm: 2, md: 3 }}>
-                      <Avatar sx={{ bgcolor: '#6366f1', width: { xs: 28, sm: 32 }, height: { xs: 28, sm: 32 } }}>
-                        <Assignment sx={{ color: 'white', fontSize: { xs: 14, sm: 16 } }} />
-                      </Avatar>
-                      <Typography variant="h6" sx={{ fontWeight: 700, color: '#0f172a', fontSize: { xs: '0.9rem', sm: '1rem', md: '1.25rem' } }}>
+                    {/* Top border indicator */}
+                    <Box sx={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      height: '4px',
+                      background: 'linear-gradient(90deg, #6366f1, #8b5cf6)',
+                    }} />
+                    
+                    <Stack direction="row" spacing={1.5} alignItems="center" mb={3}>
+                      <Box sx={{
+                        width: 48,
+                        height: 48,
+                        borderRadius: 3,
+                        background: 'linear-gradient(135deg, #EFF6FF, #DBEAFE)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        border: '2px solid #6366f130'
+                      }}>
+                        <Assignment sx={{ fontSize: 24, color: '#6366f1' }} />
+                      </Box>
+                      <Box>
+                        <Typography variant="h6" sx={{ fontWeight: 700, color: '#0f172a', fontSize: '1.25rem' }}>
                         Assignment Status
                       </Typography>
+                        <Typography variant="body2" sx={{ color: '#64748b', fontSize: '0.875rem' }}>
+                          Current month breakdown
+                        </Typography>
+                      </Box>
                     </Stack>
-                    <Stack spacing={{ xs: 2, sm: 2.5, md: 3 }}>
+                    
+                    <Stack spacing={3}>
+                      {/* Completed Assignments */}
                       <Box>
-                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
-                          <Stack direction="row" spacing={0.5} alignItems="center">
-                            <CheckCircle sx={{ color: '#10b981', fontSize: { xs: 16, sm: 18 } }} />
-                            <Typography variant="body1" sx={{ fontWeight: 600, color: '#374151', fontSize: { xs: '0.8rem', sm: '0.875rem' } }}>Completed</Typography>
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                          <Stack direction="row" spacing={1} alignItems="center">
+                            <CheckCircle sx={{ color: '#10b981', fontSize: 20 }} />
+                            <Typography variant="body1" sx={{ fontWeight: 600, color: '#374151' }}>Completed</Typography>
                           </Stack>
-                          <Typography variant="body1" sx={{ fontWeight: 700, color: '#0f172a', fontSize: { xs: '0.8rem', sm: '0.875rem' } }}>{metrics.completedAssignments}</Typography>
+                          <Box sx={{ textAlign: 'right' }}>
+                            <Typography variant="h6" sx={{ fontWeight: 700, color: '#0f172a' }}>{metrics.completedAssignments}</Typography>
+                            <Typography variant="caption" sx={{ color: '#10b981', fontWeight: 600 }}>
+                              {metrics.completionRate.toFixed(1)}%
+                            </Typography>
+                          </Box>
                         </Box>
                         <LinearProgress
                           variant="determinate"
-                          value={(metrics.completedAssignments / metrics.totalAssignments) * 100}
+                          value={metrics.completionRate}
                           sx={{ 
-                            height: { xs: 8, sm: 10, md: 12 }, 
-                            borderRadius: { xs: 4, sm: 5, md: 6 },
+                            height: 12, 
+                            borderRadius: 6,
                             bgcolor: '#e5e7eb',
                             '& .MuiLinearProgress-bar': {
                               background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                              borderRadius: { xs: 4, sm: 5, md: 6 }
+                              borderRadius: 6
                             }
                           }}
                         />
                       </Box>
                       
+                      {/* On-Time Submissions */}
                       <Box>
                         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
                           <Stack direction="row" spacing={1} alignItems="center">
-                            <Schedule sx={{ color: '#3b82f6', fontSize: 18 }} />
+                            <Schedule sx={{ color: '#3b82f6', fontSize: 20 }} />
                             <Typography variant="body1" sx={{ fontWeight: 600, color: '#374151' }}>On-Time</Typography>
                           </Stack>
-                          <Typography variant="body1" sx={{ fontWeight: 700, color: '#0f172a' }}>{metrics.onTimeSubmissions}</Typography>
+                          <Box sx={{ textAlign: 'right' }}>
+                            <Typography variant="h6" sx={{ fontWeight: 700, color: '#0f172a' }}>{metrics.onTimeSubmissions}</Typography>
+                            <Typography variant="caption" sx={{ color: '#3b82f6', fontWeight: 600 }}>
+                              {metrics.onTimeRate.toFixed(1)}%
+                            </Typography>
+                          </Box>
                         </Box>
                         <LinearProgress
                           variant="determinate"
-                          value={(metrics.onTimeSubmissions / metrics.totalAssignments) * 100}
+                          value={metrics.onTimeRate}
                           sx={{ 
                             height: 12, 
                             borderRadius: 6,
@@ -1676,13 +1966,19 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
                         />
                       </Box>
                       
+                      {/* Overdue Submissions */}
                       <Box>
                         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
                           <Stack direction="row" spacing={1} alignItems="center">
-                            <Warning sx={{ color: '#ef4444', fontSize: 18 }} />
+                            <Warning sx={{ color: '#ef4444', fontSize: 20 }} />
                             <Typography variant="body1" sx={{ fontWeight: 600, color: '#374151' }}>Overdue</Typography>
                           </Stack>
-                          <Typography variant="body1" sx={{ fontWeight: 700, color: '#0f172a' }}>{metrics.overdueSubmissions}</Typography>
+                          <Box sx={{ textAlign: 'right' }}>
+                            <Typography variant="h6" sx={{ fontWeight: 700, color: '#0f172a' }}>{metrics.overdueSubmissions}</Typography>
+                            <Typography variant="caption" sx={{ color: '#ef4444', fontWeight: 600 }}>
+                              {((metrics.overdueSubmissions / metrics.totalAssignments) * 100).toFixed(1)}%
+                            </Typography>
+                          </Box>
                         </Box>
                         <LinearProgress
                           variant="determinate"
@@ -1699,13 +1995,19 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
                         />
                       </Box>
                       
+                      {/* Pending Assignments */}
                       <Box>
                         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
                           <Stack direction="row" spacing={1} alignItems="center">
-                            <Error sx={{ color: '#f59e0b', fontSize: 18 }} />
-                            <Typography variant="body1" sx={{ fontWeight: 600, color: '#374151' }}>Not Started</Typography>
+                            <Error sx={{ color: '#f59e0b', fontSize: 20 }} />
+                            <Typography variant="body1" sx={{ fontWeight: 600, color: '#374151' }}>Pending</Typography>
                           </Stack>
-                          <Typography variant="body1" sx={{ fontWeight: 700, color: '#0f172a' }}>{metrics.notStartedAssignments}</Typography>
+                          <Box sx={{ textAlign: 'right' }}>
+                            <Typography variant="h6" sx={{ fontWeight: 700, color: '#0f172a' }}>{metrics.notStartedAssignments}</Typography>
+                            <Typography variant="caption" sx={{ color: '#f59e0b', fontWeight: 600 }}>
+                              {((metrics.notStartedAssignments / metrics.totalAssignments) * 100).toFixed(1)}%
+                            </Typography>
+                          </Box>
                         </Box>
                         <LinearProgress
                           variant="determinate"
@@ -1722,10 +2024,10 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
                         />
                       </Box>
                       
-                      {/* NEW: Overall Assignment Status Progress Bar */}
-                      <Box sx={{ mt: 3, p: 2, bgcolor: '#f8fafc', borderRadius: 2, border: '1px solid #e2e8f0' }}>
-                        <Typography variant="body1" sx={{ mb: 2, fontWeight: 600, color: '#374151' }}>Overall Assignment Status</Typography>
-                        <Box sx={{ position: 'relative', height: 20, borderRadius: 10, bgcolor: '#e5e7eb', overflow: 'hidden' }}>
+                      {/* Overall Status Visualization */}
+                      <Box sx={{ mt: 3, p: 3, bgcolor: '#f8fafc', borderRadius: 3, border: '1px solid #e2e8f0' }}>
+                        <Typography variant="h6" sx={{ mb: 2, fontWeight: 600, color: '#374151' }}>Overall Status Distribution</Typography>
+                        <Box sx={{ position: 'relative', height: 24, borderRadius: 12, bgcolor: '#e5e7eb', overflow: 'hidden' }}>
                           <Box sx={{
                             position: 'absolute',
                             left: 0,
@@ -1733,7 +2035,7 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
                             height: '100%',
                             width: `${(metrics.completedAssignments / metrics.totalAssignments) * 100}%`,
                             background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                            borderRadius: '10px 0 0 10px'
+                            borderRadius: '12px 0 0 12px'
                           }} />
                           <Box sx={{
                             position: 'absolute',
@@ -1750,57 +2052,102 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
                             height: '100%',
                             width: `${(metrics.notStartedAssignments / metrics.totalAssignments) * 100}%`,
                             background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
-                            borderRadius: '0 10px 10px 0'
+                            borderRadius: '0 12px 12px 0'
                           }} />
                         </Box>
-                        <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 1 }}>
-                          <Typography variant="caption" sx={{ color: '#166534', fontWeight: 600 }}>
-                            ✅ {metrics.completedAssignments} Completed
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 2 }}>
+                          <Box sx={{ textAlign: 'center' }}>
+                            <Typography variant="caption" sx={{ color: '#166534', fontWeight: 600, display: 'block' }}>
+                              ✅ Completed
                           </Typography>
-                          <Typography variant="caption" sx={{ color: '#991b1b', fontWeight: 600 }}>
-                            ⚠️ {metrics.overdueSubmissions} Overdue
+                            <Typography variant="body2" sx={{ color: '#166534', fontWeight: 700 }}>
+                              {metrics.completedAssignments}
                           </Typography>
-                          <Typography variant="caption" sx={{ color: '#92400e', fontWeight: 600 }}>
-                            ⏳ {metrics.notStartedAssignments} Pending
+                          </Box>
+                          <Box sx={{ textAlign: 'center' }}>
+                            <Typography variant="caption" sx={{ color: '#991b1b', fontWeight: 600, display: 'block' }}>
+                              ⚠️ Overdue
+                            </Typography>
+                            <Typography variant="body2" sx={{ color: '#991b1b', fontWeight: 700 }}>
+                              {metrics.overdueSubmissions}
                           </Typography>
+                          </Box>
+                          <Box sx={{ textAlign: 'center' }}>
+                            <Typography variant="caption" sx={{ color: '#92400e', fontWeight: 600, display: 'block' }}>
+                              ⏳ Pending
+                            </Typography>
+                            <Typography variant="body2" sx={{ color: '#92400e', fontWeight: 700 }}>
+                              {metrics.notStartedAssignments}
+                            </Typography>
+                          </Box>
                         </Box>
                       </Box>
                     </Stack>
                   </Card>
                 </Grid>
                 
-                <Grid item xs={12} md={6}>
+                {/* Team Rating System */}
+                <Grid item xs={12} lg={6}>
                   <Card sx={{ 
-                    p: { xs: 1.5, sm: 2, md: 2.5 }, 
-                    background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)',
-                    borderRadius: { xs: 2, sm: 4 },
+                    p: { xs: 2, sm: 2.5, md: 3 }, 
+                    background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
+                    borderRadius: 3,
                     border: '1px solid #e2e8f0',
                     boxShadow: '0 4px 20px rgba(0, 0, 0, 0.08)',
                     transition: 'all 0.3s ease',
+                    position: 'relative',
+                    overflow: 'hidden',
                     '&:hover': {
-                      transform: { xs: 'none', sm: 'translateY(-2px)' },
-                      boxShadow: '0 8px 30px rgba(0, 0, 0, 0.12)'
+                      transform: 'translateY(-2px)',
+                      boxShadow: '0 8px 30px rgba(0, 0, 0, 0.12)',
+                      borderColor: '#CBD5E1'
                     }
                   }}>
-                    <Stack direction="row" spacing={1.5} alignItems="center" mb={{ xs: 1.5, sm: 2, md: 3 }}>
-                      <Avatar sx={{ bgcolor: '#8b5cf6', width: { xs: 28, sm: 32 }, height: { xs: 28, sm: 32 } }}>
-                        <EmojiEvents sx={{ color: 'white', fontSize: { xs: 14, sm: 16 } }} />
-                      </Avatar>
-                      <Typography variant="h6" sx={{ fontWeight: 700, color: '#0f172a', fontSize: { xs: '0.9rem', sm: '1rem', md: '1.25rem' } }}>
+                    {/* Top border indicator */}
+                    <Box sx={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      height: '4px',
+                      background: 'linear-gradient(90deg, #8b5cf6, #7c3aed)',
+                    }} />
+                    
+                    <Stack direction="row" spacing={1.5} alignItems="center" mb={3}>
+                      <Box sx={{
+                        width: 48,
+                        height: 48,
+                        borderRadius: 3,
+                        background: 'linear-gradient(135deg, #F3E8FF, #E9D5FF)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        border: '2px solid #8b5cf630'
+                      }}>
+                        <EmojiEvents sx={{ fontSize: 24, color: '#8b5cf6' }} />
+                      </Box>
+                      <Box>
+                        <Typography variant="h6" sx={{ fontWeight: 700, color: '#0f172a', fontSize: '1.25rem' }}>
                         Team Rating System
                       </Typography>
+                        <Typography variant="body2" sx={{ color: '#64748b', fontSize: '0.875rem' }}>
+                          KPI breakdown and scoring
+                        </Typography>
+                      </Box>
                     </Stack>
+                    
                     <Stack spacing={3}>
                       {metrics && (() => {
                         const rating = getTeamRating(metrics);
                         return (
                           <>
+                            {/* Current Team Grade */}
                             <Box>
-                              <Typography variant="body1" sx={{ mb: 2, fontWeight: 600, color: '#374151' }}>Current Team Grade</Typography>
-                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                              <Typography variant="h6" sx={{ mb: 2, fontWeight: 600, color: '#374151' }}>Current Team Grade</Typography>
+                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 3 }}>
                                 <Box sx={{
-                                  width: 80,
-                                  height: 80,
+                                  width: 100,
+                                  height: 100,
                                   borderRadius: '50%',
                                   display: 'flex',
                                   alignItems: 'center',
@@ -1808,193 +2155,213 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
                                   background: `linear-gradient(135deg, ${rating.color} 0%, ${rating.color}dd 100%)`,
                                   color: 'white',
                                   fontWeight: 'bold',
-                                  fontSize: '1.5rem',
-                                  boxShadow: `0 4px 20px ${rating.color}40`
+                                  fontSize: '2rem',
+                                  boxShadow: `0 8px 32px ${rating.color}40`,
+                                  border: `4px solid ${rating.color}20`
                                 }}>
                                   {rating.grade}
                                 </Box>
                                 <Box>
-                                  <Typography variant="h6" sx={{ fontWeight: 700, color: '#0f172a' }}>
+                                  <Typography variant="h5" sx={{ fontWeight: 700, color: '#0f172a', mb: 1 }}>
                                     {rating.description}
                                   </Typography>
-                                  <Typography variant="body2" sx={{ color: '#64748b' }}>
+                                  <Typography variant="h6" sx={{ color: '#64748b', mb: 2 }}>
                                     Score: {rating.score.toFixed(1)}/100
                                   </Typography>
+                                  <Chip
+                                    label={`${rating.score.toFixed(1)}/100`}
+                                    sx={{
+                                      bgcolor: rating.color,
+                                      color: 'white',
+                                      fontWeight: 600,
+                                      fontSize: '0.875rem',
+                                      px: 2,
+                                      py: 1
+                                    }}
+                                  />
                                 </Box>
                               </Box>
                             </Box>
                             
+                            {/* KPI Breakdown */}
                             <Box>
-                              <Typography variant="body1" sx={{ mb: 2, fontWeight: 600, color: '#374151' }}>Rating Breakdown</Typography>
-                              <Stack spacing={2}>
+                              <Typography variant="h6" sx={{ mb: 2, fontWeight: 600, color: '#374151' }}>KPI Breakdown</Typography>
+                              <Stack spacing={2.5}>
+                                {/* Completion Rate */}
                                 <Box>
-                                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
-                                    <Typography variant="body2" sx={{ fontWeight: 600, color: '#374151' }}>Completion Rate (35%)</Typography>
-                                    <Typography variant="body2" sx={{ fontWeight: 600, color: '#0f172a' }}>{metrics.completionRate.toFixed(1)}%</Typography>
+                                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                                    <Stack direction="row" spacing={1} alignItems="center">
+                                      <CheckCircle sx={{ color: '#10b981', fontSize: 18 }} />
+                                      <Typography variant="body1" sx={{ fontWeight: 600, color: '#374151' }}>Completion Rate</Typography>
+                                    </Stack>
+                                    <Box sx={{ textAlign: 'right' }}>
+                                      <Typography variant="h6" sx={{ fontWeight: 700, color: '#0f172a' }}>{metrics.completionRate.toFixed(1)}%</Typography>
+                                      <Typography variant="caption" sx={{ color: '#10b981', fontWeight: 600 }}>
+                                        35% weight
+                                      </Typography>
+                                    </Box>
                                   </Box>
                                   <LinearProgress
                                     variant="determinate"
                                     value={metrics.completionRate}
                                     sx={{ 
-                                      height: 8, 
-                                      borderRadius: 4,
+                                      height: 10, 
+                                      borderRadius: 5,
                                       bgcolor: '#e5e7eb',
                                       '& .MuiLinearProgress-bar': {
                                         background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                                        borderRadius: 4
+                                        borderRadius: 5
                                       }
                                     }}
                                   />
                                 </Box>
                                 
+                                {/* On-Time Rate */}
                                 <Box>
-                                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
-                                    <Typography variant="body2" sx={{ fontWeight: 600, color: '#374151' }}>On-Time Rate (25%)</Typography>
-                                    <Typography variant="body2" sx={{ fontWeight: 600, color: '#0f172a' }}>{metrics.onTimeRate.toFixed(1)}%</Typography>
+                                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                                    <Stack direction="row" spacing={1} alignItems="center">
+                                      <Schedule sx={{ color: '#3b82f6', fontSize: 18 }} />
+                                      <Typography variant="body1" sx={{ fontWeight: 600, color: '#374151' }}>On-Time Rate</Typography>
+                                    </Stack>
+                                    <Box sx={{ textAlign: 'right' }}>
+                                      <Typography variant="h6" sx={{ fontWeight: 700, color: '#0f172a' }}>{metrics.onTimeRate.toFixed(1)}%</Typography>
+                                      <Typography variant="caption" sx={{ color: '#3b82f6', fontWeight: 600 }}>
+                                        25% weight
+                                      </Typography>
+                                    </Box>
                                   </Box>
                                   <LinearProgress
                                     variant="determinate"
                                     value={metrics.onTimeRate}
                                     sx={{ 
-                                      height: 8, 
-                                      borderRadius: 4,
+                                      height: 10, 
+                                      borderRadius: 5,
                                       bgcolor: '#e5e7eb',
                                       '& .MuiLinearProgress-bar': {
                                         background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
-                                        borderRadius: 4
+                                        borderRadius: 5
                                       }
                                     }}
                                   />
                                 </Box>
                                 
+                                {/* Late Rate */}
                                 <Box>
-                                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
-                                    <Typography variant="body2" sx={{ fontWeight: 600, color: '#374151' }}>Late Rate (15%)</Typography>
-                                    <Typography variant="body2" sx={{ fontWeight: 600, color: '#0f172a' }}>{((metrics.overdueSubmissions / metrics.totalAssignments) * 100).toFixed(1)}%</Typography>
+                                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                                    <Stack direction="row" spacing={1} alignItems="center">
+                                      <Warning sx={{ color: '#ef4444', fontSize: 18 }} />
+                                      <Typography variant="body1" sx={{ fontWeight: 600, color: '#374151' }}>Late Rate</Typography>
+                                    </Stack>
+                                    <Box sx={{ textAlign: 'right' }}>
+                                      <Typography variant="h6" sx={{ fontWeight: 700, color: '#0f172a' }}>
+                                        {((metrics.overdueSubmissions / metrics.totalAssignments) * 100).toFixed(1)}%
+                                      </Typography>
+                                      <Typography variant="caption" sx={{ color: '#ef4444', fontWeight: 600 }}>
+                                        15% weight
+                                      </Typography>
+                                    </Box>
                                   </Box>
                                   <LinearProgress
                                     variant="determinate"
                                     value={(metrics.overdueSubmissions / metrics.totalAssignments) * 100}
                                     sx={{ 
-                                      height: 8, 
-                                      borderRadius: 4,
+                                      height: 10, 
+                                      borderRadius: 5,
                                       bgcolor: '#e5e7eb',
                                       '& .MuiLinearProgress-bar': {
                                         background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
-                                        borderRadius: 4
+                                        borderRadius: 5
                                       }
                                     }}
                                   />
                                 </Box>
                                 
+                                {/* Volume Bonus */}
                                 <Box>
-                                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
-                                    <Typography variant="body2" sx={{ fontWeight: 600, color: '#374151' }}>Volume Bonus (10%)</Typography>
-                                    <Typography variant="body2" sx={{ fontWeight: 600, color: '#0f172a' }}>{metrics.totalAssignments} assignments</Typography>
+                                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                                    <Stack direction="row" spacing={1} alignItems="center">
+                                      <Assignment sx={{ color: '#8b5cf6', fontSize: 18 }} />
+                                      <Typography variant="body1" sx={{ fontWeight: 600, color: '#374151' }}>Volume Bonus</Typography>
+                                    </Stack>
+                                    <Box sx={{ textAlign: 'right' }}>
+                                      <Typography variant="h6" sx={{ fontWeight: 700, color: '#0f172a' }}>
+                                        {metrics.totalAssignments} assignments
+                                      </Typography>
+                                      <Typography variant="caption" sx={{ color: '#8b5cf6', fontWeight: 600 }}>
+                                        10% bonus
+                                      </Typography>
+                                    </Box>
                                   </Box>
                                   <LinearProgress
                                     variant="determinate"
                                     value={Math.min(100, (metrics.totalAssignments / 100) * 100)}
                                     sx={{ 
-                                      height: 8, 
-                                      borderRadius: 4,
+                                      height: 10, 
+                                      borderRadius: 5,
                                       bgcolor: '#e5e7eb',
                                       '& .MuiLinearProgress-bar': {
                                         background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
-                                        borderRadius: 4
-                                      }
-                                    }}
-                                  />
-                                </Box>
-                                
-                                <Box>
-                                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
-                                    <Typography variant="body2" sx={{ fontWeight: 600, color: '#374151' }}>Improvement Bonus (10%)</Typography>
-                                    <Typography variant="body2" sx={{ fontWeight: 600, color: '#0f172a' }}>
-                                      {rating.breakdown.improvementBonus > 0 ? `+${rating.breakdown.improvementBonus}` : '0'}
-                                    </Typography>
-                                  </Box>
-                                  <LinearProgress
-                                    variant="determinate"
-                                    value={rating.breakdown.improvementBonus * 10}
-                                    sx={{ 
-                                      height: 8, 
-                                      borderRadius: 4,
-                                      bgcolor: '#e5e7eb',
-                                      '& .MuiLinearProgress-bar': {
-                                        background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
-                                        borderRadius: 4
-                                      }
-                                    }}
-                                  />
-                                </Box>
-                                
-                                <Box>
-                                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
-                                    <Typography variant="body2" sx={{ fontWeight: 600, color: '#374151' }}>Grace Period (5%)</Typography>
-                                    <Typography variant="body2" sx={{ fontWeight: 600, color: '#0f172a' }}>
-                                      {rating.breakdown.gracePeriodBonus > 0 ? `+${rating.breakdown.gracePeriodBonus}` : '0'}
-                                    </Typography>
-                                  </Box>
-                                  <LinearProgress
-                                    variant="determinate"
-                                    value={rating.breakdown.gracePeriodBonus * 20}
-                                    sx={{ 
-                                      height: 8, 
-                                      borderRadius: 4,
-                                      bgcolor: '#e5e7eb',
-                                      '& .MuiLinearProgress-bar': {
-                                        background: 'linear-gradient(135deg, #06b6d4 0%, #0891b2 100%)',
-                                        borderRadius: 4
+                                        borderRadius: 5
                                       }
                                     }}
                                   />
                                 </Box>
                               </Stack>
+                                </Box>
+                                
+                            {/* Grade Scale */}
+                                <Box>
+                              <Typography variant="h6" sx={{ mb: 2, fontWeight: 600, color: '#374151' }}>Grade Scale</Typography>
+                              <Stack spacing={1.5}>
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, p: 1.5, bgcolor: '#f0fdf4', borderRadius: 2, border: '1px solid #bbf7d0' }}>
+                                  <Box sx={{ width: 24, height: 24, borderRadius: '50%', bgcolor: '#10b981', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                    <Typography variant="caption" sx={{ color: 'white', fontWeight: 700 }}>A</Typography>
+                                  </Box>
+                                  <Typography variant="body2" sx={{ color: '#166534', fontWeight: 600 }}>A+ to A- (90-100): Outstanding to Very Good</Typography>
+                                </Box>
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, p: 1.5, bgcolor: '#eff6ff', borderRadius: 2, border: '1px solid #93c5fd' }}>
+                                  <Box sx={{ width: 24, height: 24, borderRadius: '50%', bgcolor: '#3b82f6', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                    <Typography variant="caption" sx={{ color: 'white', fontWeight: 700 }}>B</Typography>
                             </Box>
-                            
-                            <Box>
-                              <Typography variant="body1" sx={{ mb: 2, fontWeight: 600, color: '#374151' }}>Grade Scale</Typography>
-                              <Stack spacing={1}>
-                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                  <Box sx={{ width: 20, height: 20, borderRadius: '50%', bgcolor: '#10b981' }} />
-                                  <Typography variant="body2" sx={{ color: '#374151' }}>A+ to A- (90-100): Outstanding to Very Good</Typography>
+                                  <Typography variant="body2" sx={{ color: '#1e40af', fontWeight: 600 }}>B+ to B- (70-89): Good to Average</Typography>
                                 </Box>
-                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                  <Box sx={{ width: 20, height: 20, borderRadius: '50%', bgcolor: '#3b82f6' }} />
-                                  <Typography variant="body2" sx={{ color: '#374151' }}>B+ to B- (70-89): Good to Average</Typography>
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, p: 1.5, bgcolor: '#fffbeb', borderRadius: 2, border: '1px solid #fde68a' }}>
+                                  <Box sx={{ width: 24, height: 24, borderRadius: '50%', bgcolor: '#f59e0b', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                    <Typography variant="caption" sx={{ color: 'white', fontWeight: 700 }}>C</Typography>
                                 </Box>
-                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                  <Box sx={{ width: 20, height: 20, borderRadius: '50%', bgcolor: '#f59e0b' }} />
-                                  <Typography variant="body2" sx={{ color: '#374151' }}>C+ to C- (55-69): Below Average to Poor</Typography>
+                                  <Typography variant="body2" sx={{ color: '#92400e', fontWeight: 600 }}>C+ to C- (55-69): Below Average to Poor</Typography>
                                 </Box>
-                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                  <Box sx={{ width: 20, height: 20, borderRadius: '50%', bgcolor: '#ef4444' }} />
-                                  <Typography variant="body2" sx={{ color: '#374151' }}>D to F (0-54): Very Poor to Critical</Typography>
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, p: 1.5, bgcolor: '#fef2f2', borderRadius: 2, border: '1px solid #fca5a5' }}>
+                                  <Box sx={{ width: 24, height: 24, borderRadius: '50%', bgcolor: '#ef4444', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                    <Typography variant="caption" sx={{ color: 'white', fontWeight: 700 }}>D</Typography>
+                                  </Box>
+                                  <Typography variant="body2" sx={{ color: '#991b1b', fontWeight: 600 }}>D to F (0-54): Very Poor to Critical</Typography>
                                 </Box>
                               </Stack>
                             </Box>
                             
-                            <Box sx={{ mt: 3, p: 2, bgcolor: '#f0f9ff', borderRadius: 2, border: '1px solid #bae6fd' }}>
-                              <Typography variant="body2" sx={{ fontWeight: 600, color: '#0369a1', mb: 1 }}>
-                                ✅ Fair Calculation: Pending Assignments
+                            {/* Important Notes */}
+                            <Box sx={{ mt: 3, p: 3, bgcolor: '#f0f9ff', borderRadius: 3, border: '1px solid #bae6fd' }}>
+                              <Typography variant="body2" sx={{ fontWeight: 600, color: '#0369a1', mb: 2, fontSize: '0.875rem' }}>
+                                💡 How Team Rating Works
                               </Typography>
+                              <Stack spacing={1.5}>
                               <Typography variant="body2" sx={{ color: '#0369a1', fontSize: '0.875rem' }}>
-                                Team Rating only counts assignments that have been <strong>decided</strong> (completed, overdue, cancelled). 
-                                Pending assignments within their due time are <strong>excluded</strong> to give workers the full 24 hours 
-                                to complete their tasks. This ensures fair evaluation.
+                                  • <strong>Completion Rate (35%)</strong>: Percentage of assignments completed
                               </Typography>
-                            </Box>
-                            
-                            <Box sx={{ mt: 2, p: 2, bgcolor: '#fef2f2', borderRadius: 2, border: '1px solid #fecaca' }}>
-                              <Typography variant="body2" sx={{ fontWeight: 600, color: '#991b1b', mb: 1 }}>
-                                ⚠️ Important: Overdue Assignments
+                                <Typography variant="body2" sx={{ color: '#0369a1', fontSize: '0.875rem' }}>
+                                  • <strong>On-Time Rate (25%)</strong>: Percentage completed before deadline
                               </Typography>
-                              <Typography variant="body2" sx={{ color: '#991b1b', fontSize: '0.875rem' }}>
-                                Overdue assignments are <strong>permanent records</strong> and cannot be completed after the deadline. 
-                                This ensures accurate performance tracking and prevents "catch-up" submissions that would 
-                                distort the true team performance record.
+                                <Typography variant="body2" sx={{ color: '#0369a1', fontSize: '0.875rem' }}>
+                                  • <strong>Late Rate (15%)</strong>: Penalty for overdue assignments
                               </Typography>
+                                <Typography variant="body2" sx={{ color: '#0369a1', fontSize: '0.875rem' }}>
+                                  • <strong>Volume Bonus (10%)</strong>: Bonus for high assignment volume
+                                </Typography>
+                                <Typography variant="body2" sx={{ color: '#0369a1', fontSize: '0.875rem' }}>
+                                  • <strong>Pending assignments</strong> are excluded from rating calculation
+                                </Typography>
+                              </Stack>
                             </Box>
                           </>
                         );
@@ -2003,39 +2370,88 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
                   </Card>
                 </Grid>
                 
-                <Grid item xs={12} md={6}>
+                {/* Team Health & Safety */}
+                <Grid item xs={12} lg={6}>
                   <Card sx={{ 
-                    p: { xs: 1.5, sm: 2, md: 2.5 }, 
-                    background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)',
-                    borderRadius: { xs: 2, sm: 4 },
+                    p: { xs: 2, sm: 2.5, md: 3 }, 
+                    background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
+                    borderRadius: 3,
                     border: '1px solid #e2e8f0',
                     boxShadow: '0 4px 20px rgba(0, 0, 0, 0.08)',
                     transition: 'all 0.3s ease',
+                    position: 'relative',
+                    overflow: 'hidden',
                     '&:hover': {
-                      transform: { xs: 'none', sm: 'translateY(-2px)' },
-                      boxShadow: '0 8px 30px rgba(0, 0, 0, 0.12)'
+                      transform: 'translateY(-2px)',
+                      boxShadow: '0 8px 30px rgba(0, 0, 0, 0.12)',
+                      borderColor: '#CBD5E1'
                     }
                   }}>
-                    <Stack direction="row" spacing={1.5} alignItems="center" mb={{ xs: 1.5, sm: 2, md: 3 }}>
-                      <Avatar sx={{ bgcolor: '#8b5cf6', width: { xs: 28, sm: 32 }, height: { xs: 28, sm: 32 } }}>
-                        <HealthAndSafety sx={{ color: 'white', fontSize: { xs: 14, sm: 16 } }} />
-                      </Avatar>
-                      <Typography variant="h6" sx={{ fontWeight: 700, color: '#0f172a', fontSize: { xs: '0.9rem', sm: '1rem', md: '1.25rem' } }}>
+                    {/* Top border indicator */}
+                    <Box sx={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      height: '4px',
+                      background: 'linear-gradient(90deg, #10b981, #059669)',
+                    }} />
+                    
+                    <Stack direction="row" spacing={1.5} alignItems="center" mb={3}>
+                      <Box sx={{
+                        width: 48,
+                        height: 48,
+                        borderRadius: 3,
+                        background: 'linear-gradient(135deg, #ECFDF5, #D1FAE5)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        border: '2px solid #10b98130'
+                      }}>
+                        <HealthAndSafety sx={{ fontSize: 24, color: '#10b981' }} />
+                      </Box>
+                      <Box>
+                        <Typography variant="h6" sx={{ fontWeight: 700, color: '#0f172a', fontSize: '1.25rem' }}>
                         Team Health & Safety
                       </Typography>
+                        <Typography variant="body2" sx={{ color: '#64748b', fontSize: '0.875rem' }}>
+                          Worker wellness metrics
+                        </Typography>
+                      </Box>
                     </Stack>
+                    
                     <Stack spacing={3}>
+                      {/* Team Health Score */}
                       <Box>
-                        <Typography variant="body1" sx={{ mb: 2, fontWeight: 600, color: '#374151' }}>Team Health Score</Typography>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                        <Typography variant="h6" sx={{ mb: 2, fontWeight: 600, color: '#374151' }}>Team Health Score</Typography>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+                          <Box sx={{
+                            width: 80,
+                            height: 80,
+                            borderRadius: '50%',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            background: metrics.teamHealthScore >= 85 ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' : 
+                                       metrics.teamHealthScore >= 70 ? 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' : 
+                                       'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+                            color: 'white',
+                            fontWeight: 'bold',
+                            fontSize: '1.5rem',
+                            boxShadow: `0 8px 32px ${metrics.teamHealthScore >= 85 ? '#10b981' : metrics.teamHealthScore >= 70 ? '#f59e0b' : '#ef4444'}40`,
+                            border: `4px solid ${metrics.teamHealthScore >= 85 ? '#10b981' : metrics.teamHealthScore >= 70 ? '#f59e0b' : '#ef4444'}20`
+                          }}>
+                            {metrics.teamHealthScore.toFixed(0)}%
+                          </Box>
+                          <Box sx={{ flexGrow: 1 }}>
                           <LinearProgress
                             variant="determinate"
                             value={metrics.teamHealthScore}
                             sx={{ 
-                              flexGrow: 1, 
                               height: 16, 
                               borderRadius: 8,
                               bgcolor: '#e5e7eb',
+                                mb: 1,
                               '& .MuiLinearProgress-bar': {
                                 background: metrics.teamHealthScore >= 85 ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' : 
                                            metrics.teamHealthScore >= 70 ? 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' : 
@@ -2044,14 +2460,19 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
                               }
                             }}
                           />
-                          <Typography variant="h6" sx={{ fontWeight: 700, color: '#0f172a', minWidth: 60 }}>
-                            {metrics.teamHealthScore.toFixed(1)}%
+                            <Typography variant="body2" sx={{ color: '#64748b', fontSize: '0.875rem' }}>
+                              {metrics.teamHealthScore >= 85 ? 'Excellent health status' : 
+                               metrics.teamHealthScore >= 70 ? 'Good health status' : 
+                               'Needs attention'}
                           </Typography>
+                          </Box>
                         </Box>
                       </Box>
                       
+                      {/* High-Risk Reports */}
                       <Box>
-                        <Typography variant="body1" sx={{ mb: 2, fontWeight: 600, color: '#374151' }}>High-Risk Reports</Typography>
+                        <Typography variant="h6" sx={{ mb: 2, fontWeight: 600, color: '#374151' }}>High-Risk Reports</Typography>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
                         <Chip
                           icon={<Warning />}
                           label={`${metrics.highRiskReports} reports`}
@@ -2066,10 +2487,18 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
                             borderColor: metrics.highRiskReports <= 5 ? '#bbf7d0' : metrics.highRiskReports <= 10 ? '#fde68a' : '#fca5a5'
                           }}
                         />
+                          <Typography variant="body2" sx={{ color: '#64748b', fontSize: '0.875rem' }}>
+                            {metrics.highRiskReports <= 5 ? 'Low risk level' : 
+                             metrics.highRiskReports <= 10 ? 'Moderate risk level' : 
+                             'High risk level'}
+                          </Typography>
+                        </Box>
                       </Box>
                       
+                      {/* Case Closures */}
                       <Box>
-                        <Typography variant="body1" sx={{ mb: 2, fontWeight: 600, color: '#374151' }}>Case Closures</Typography>
+                        <Typography variant="h6" sx={{ mb: 2, fontWeight: 600, color: '#374151' }}>Case Closures</Typography>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
                         <Chip
                           icon={<CheckCircle />}
                           label={`${metrics.caseClosures} closed cases`}
@@ -2083,6 +2512,224 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
                             border: '1px solid #93c5fd'
                           }}
                         />
+                          <Typography variant="body2" sx={{ color: '#64748b', fontSize: '0.875rem' }}>
+                            Successfully resolved cases
+                          </Typography>
+                        </Box>
+                      </Box>
+                      
+                      {/* Response Time Analysis */}
+                      <Box>
+                        <Typography variant="h6" sx={{ mb: 2, fontWeight: 600, color: '#374151' }}>Response Time Analysis</Typography>
+                        <Box sx={{ p: 2, bgcolor: '#f8fafc', borderRadius: 2, border: '1px solid #e2e8f0' }}>
+                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                            <Typography variant="body2" sx={{ color: '#374151', fontWeight: 600 }}>Average Response Time</Typography>
+                            <Typography variant="h6" sx={{ color: '#0f172a', fontWeight: 700 }}>
+                              {metrics.averageResponseTime.toFixed(1)} hours
+                            </Typography>
+                          </Box>
+                          <LinearProgress
+                            variant="determinate"
+                            value={Math.min(100, (24 - metrics.averageResponseTime) / 24 * 100)}
+                            sx={{ 
+                              height: 8, 
+                              borderRadius: 4,
+                              bgcolor: '#e5e7eb',
+                              '& .MuiLinearProgress-bar': {
+                                background: metrics.averageResponseTime < 12 ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' : 
+                                           metrics.averageResponseTime < 24 ? 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' : 
+                                           'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+                                borderRadius: 4
+                              }
+                            }}
+                          />
+                          <Typography variant="caption" sx={{ color: '#64748b', fontSize: '0.75rem', mt: 1, display: 'block' }}>
+                            {metrics.averageResponseTime < 12 ? 'Fast response time' : 
+                             metrics.averageResponseTime < 24 ? 'Standard response time' : 
+                             'Slow response time'}
+                          </Typography>
+                        </Box>
+                      </Box>
+                    </Stack>
+                  </Card>
+                </Grid>
+                
+                {/* Performance Insights */}
+                <Grid item xs={12} lg={6}>
+                  <Card sx={{ 
+                    p: { xs: 2, sm: 2.5, md: 3 }, 
+                    background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
+                    borderRadius: 3,
+                    border: '1px solid #e2e8f0',
+                    boxShadow: '0 4px 20px rgba(0, 0, 0, 0.08)',
+                    transition: 'all 0.3s ease',
+                    position: 'relative',
+                    overflow: 'hidden',
+                    '&:hover': {
+                      transform: 'translateY(-2px)',
+                      boxShadow: '0 8px 30px rgba(0, 0, 0, 0.12)',
+                      borderColor: '#CBD5E1'
+                    }
+                  }}>
+                    {/* Top border indicator */}
+                    <Box sx={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      height: '4px',
+                      background: 'linear-gradient(90deg, #f59e0b, #d97706)',
+                    }} />
+                    
+                    <Stack direction="row" spacing={1.5} alignItems="center" mb={3}>
+                      <Box sx={{
+                        width: 48,
+                        height: 48,
+                        borderRadius: 3,
+                        background: 'linear-gradient(135deg, #FFFBEB, #FEF3C7)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        border: '2px solid #f59e0b30'
+                      }}>
+                        <TrendingUp sx={{ fontSize: 24, color: '#f59e0b' }} />
+                      </Box>
+                      <Box>
+                        <Typography variant="h6" sx={{ fontWeight: 700, color: '#0f172a', fontSize: '1.25rem' }}>
+                          Performance Insights
+                        </Typography>
+                        <Typography variant="body2" sx={{ color: '#64748b', fontSize: '0.875rem' }}>
+                          Key performance indicators
+                        </Typography>
+                      </Box>
+                    </Stack>
+                    
+                    <Stack spacing={3}>
+                      {/* Quality Score */}
+                      <Box>
+                        <Typography variant="h6" sx={{ mb: 2, fontWeight: 600, color: '#374151' }}>Quality Score</Typography>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+                          <Box sx={{
+                            width: 80,
+                            height: 80,
+                            borderRadius: '50%',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            background: metrics.qualityScore >= 85 ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' : 
+                                       metrics.qualityScore >= 70 ? 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' : 
+                                       'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+                            color: 'white',
+                            fontWeight: 'bold',
+                            fontSize: '1.5rem',
+                            boxShadow: `0 8px 32px ${metrics.qualityScore >= 85 ? '#10b981' : metrics.qualityScore >= 70 ? '#f59e0b' : '#ef4444'}40`,
+                            border: `4px solid ${metrics.qualityScore >= 85 ? '#10b981' : metrics.qualityScore >= 70 ? '#f59e0b' : '#ef4444'}20`
+                          }}>
+                            {metrics.qualityScore.toFixed(0)}%
+                          </Box>
+                          <Box sx={{ flexGrow: 1 }}>
+                            <LinearProgress
+                              variant="determinate"
+                              value={metrics.qualityScore}
+                              sx={{ 
+                                height: 16, 
+                                borderRadius: 8,
+                                bgcolor: '#e5e7eb',
+                                mb: 1,
+                                '& .MuiLinearProgress-bar': {
+                                  background: metrics.qualityScore >= 85 ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' : 
+                                             metrics.qualityScore >= 70 ? 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' : 
+                                             'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+                                  borderRadius: 8
+                                }
+                              }}
+                            />
+                            <Typography variant="body2" sx={{ color: '#64748b', fontSize: '0.875rem' }}>
+                              {metrics.qualityScore >= 85 ? 'Excellent quality' : 
+                               metrics.qualityScore >= 70 ? 'Good quality' : 
+                               'Needs improvement'}
+                            </Typography>
+                          </Box>
+                        </Box>
+                      </Box>
+                      
+                      {/* Late Rate Analysis */}
+                      <Box>
+                        <Typography variant="h6" sx={{ mb: 2, fontWeight: 600, color: '#374151' }}>Late Rate Analysis</Typography>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                          <Chip
+                            icon={<Warning />}
+                            label={`${((metrics.overdueSubmissions / metrics.totalAssignments) * 100).toFixed(1)}% late`}
+                            sx={{
+                              bgcolor: ((metrics.overdueSubmissions / metrics.totalAssignments) * 100) <= 5 ? '#dcfce7' : 
+                                       ((metrics.overdueSubmissions / metrics.totalAssignments) * 100) <= 15 ? '#fef3c7' : '#fecaca',
+                              color: ((metrics.overdueSubmissions / metrics.totalAssignments) * 100) <= 5 ? '#166534' : 
+                                     ((metrics.overdueSubmissions / metrics.totalAssignments) * 100) <= 15 ? '#92400e' : '#991b1b',
+                              fontWeight: 600,
+                              px: 2,
+                              py: 1,
+                              fontSize: '0.875rem',
+                              border: '1px solid',
+                              borderColor: ((metrics.overdueSubmissions / metrics.totalAssignments) * 100) <= 5 ? '#bbf7d0' : 
+                                          ((metrics.overdueSubmissions / metrics.totalAssignments) * 100) <= 15 ? '#fde68a' : '#fca5a5'
+                            }}
+                          />
+                          <Typography variant="body2" sx={{ color: '#64748b', fontSize: '0.875rem' }}>
+                            {((metrics.overdueSubmissions / metrics.totalAssignments) * 100) <= 5 ? 'Low late rate' : 
+                             ((metrics.overdueSubmissions / metrics.totalAssignments) * 100) <= 15 ? 'Moderate late rate' : 
+                             'High late rate'}
+                          </Typography>
+                        </Box>
+                      </Box>
+                      
+                      {/* Team Members */}
+                      <Box>
+                        <Typography variant="h6" sx={{ mb: 2, fontWeight: 600, color: '#374151' }}>Team Members</Typography>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                          <Chip
+                            icon={<Group />}
+                            label={`${metrics.totalMembers} members`}
+                            sx={{
+                              bgcolor: '#dbeafe',
+                              color: '#1e40af',
+                              fontWeight: 600,
+                              px: 2,
+                              py: 1,
+                              fontSize: '0.875rem',
+                              border: '1px solid #93c5fd'
+                            }}
+                          />
+                          <Typography variant="body2" sx={{ color: '#64748b', fontSize: '0.875rem' }}>
+                            Active team members
+                          </Typography>
+                        </Box>
+                      </Box>
+                      
+                      {/* Performance Summary */}
+                      <Box>
+                        <Typography variant="h6" sx={{ mb: 2, fontWeight: 600, color: '#374151' }}>Performance Summary</Typography>
+                        <Box sx={{ p: 2, bgcolor: '#f8fafc', borderRadius: 2, border: '1px solid #e2e8f0' }}>
+                          <Stack spacing={1.5}>
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <Typography variant="body2" sx={{ color: '#374151', fontWeight: 600 }}>Completion Rate</Typography>
+                              <Typography variant="body2" sx={{ color: '#0f172a', fontWeight: 700 }}>
+                                {metrics.completionRate.toFixed(1)}%
+                              </Typography>
+                            </Box>
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <Typography variant="body2" sx={{ color: '#374151', fontWeight: 600 }}>On-Time Rate</Typography>
+                              <Typography variant="body2" sx={{ color: '#0f172a', fontWeight: 700 }}>
+                                {metrics.onTimeRate.toFixed(1)}%
+                              </Typography>
+                            </Box>
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <Typography variant="body2" sx={{ color: '#374151', fontWeight: 600 }}>Quality Score</Typography>
+                              <Typography variant="body2" sx={{ color: '#0f172a', fontWeight: 700 }}>
+                                {metrics.qualityScore.toFixed(1)}%
+                              </Typography>
+                            </Box>
+                          </Stack>
+                        </Box>
                       </Box>
                     </Stack>
                   </Card>

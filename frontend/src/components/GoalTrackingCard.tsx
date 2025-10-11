@@ -25,48 +25,8 @@ import {
 } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext.supabase';
 import { authClient } from '../lib/supabase';
-import { kpiAPI } from '../utils/backendApi';
+import { kpiAPI, AssignmentKPIResponse } from '../utils/backendApi';
 
-interface AssignmentKPIData {
-  rating: string;
-  color: string;
-  description: string;
-  score: number;
-  completionRate: number;
-  onTimeRate: number;
-  qualityScore: number;
-  completedAssignments: number;
-  totalAssignments: number;
-}
-
-interface AssignmentMetrics {
-  totalAssignments: number;
-  completedAssignments: number;
-  onTimeSubmissions: number;
-  qualityScore: number;
-  completionRate: number;
-  onTimeRate: number;
-}
-
-interface RecentAssignment {
-  id: string;
-  assignedDate: string;
-  status: string;
-  dueTime: string;
-  completedAt?: string;
-  isOnTime: boolean;
-}
-
-interface AssignmentKPIResponse {
-  kpi: AssignmentKPIData;
-  metrics: AssignmentMetrics;
-  recentAssignments: RecentAssignment[];
-  period: {
-    start: string;
-    end: string;
-    month: string;
-  };
-}
 
 interface GoalTrackingCardProps {
   userId: string;
@@ -372,7 +332,7 @@ const GoalTrackingCard: React.FC<GoalTrackingCardProps> = ({
           </Box>
         ) : (
           <Grid container spacing={2}>
-            <Grid item xs={6}>
+            <Grid item xs={4}>
               <Box sx={{ 
                 textAlign: 'center',
                 p: 2,
@@ -392,7 +352,27 @@ const GoalTrackingCard: React.FC<GoalTrackingCardProps> = ({
                 </Typography>
               </Box>
             </Grid>
-            <Grid item xs={6}>
+            <Grid item xs={4}>
+              <Box sx={{ 
+                textAlign: 'center',
+                p: 2,
+                backgroundColor: '#f8fafc',
+                borderRadius: 2,
+                border: '1px solid #e2e8f0'
+              }}>
+                <Typography variant="h6" sx={{ 
+                  fontWeight: 700, 
+                  color: '#dc2626',
+                  fontSize: '1.25rem'
+                }}>
+                  {metrics.lateRate}%
+                </Typography>
+                <Typography variant="caption" sx={{ color: '#64748b' }}>
+                  Late Rate
+                </Typography>
+              </Box>
+            </Grid>
+            <Grid item xs={4}>
               <Box sx={{ 
                 textAlign: 'center',
                 p: 2,

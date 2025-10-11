@@ -121,18 +121,6 @@ export const getDefaultAvatarUrl = (): string => {
 };
 
 /**
- * Check if a Supabase storage URL exists
- */
-const checkSupabaseImageExists = async (url: string): Promise<boolean> => {
-  try {
-    const response = await fetch(url, { method: 'HEAD' });
-    return response.ok;
-  } catch {
-    return false;
-  }
-};
-
-/**
  * Optimized profile image props with cache busting for Supabase URLs
  * @param profileImageUrl - The profile image URL from database
  * @returns Image props with proper cache handling

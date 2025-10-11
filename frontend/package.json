@@ -15,6 +15,7 @@
     "@testing-library/react": "^13.4.0",
     "@testing-library/user-event": "^13.5.0",
     "@types/bcryptjs": "^2.4.6",
+    "@types/dompurify": "^3.0.5",
     "@types/jest": "^27.5.2",
     "@types/js-cookie": "^3.0.3",
     "@types/node": "^16.18.39",
@@ -23,11 +24,13 @@
     "@types/react-window": "^1.8.8",
     "@types/recharts": "^1.8.29",
     "@types/socket.io-client": "^1.4.36",
+    "@types/xlsx": "^0.0.35",
     "autoprefixer": "^10.4.21",
     "axios": "^1.4.0",
     "bcryptjs": "^3.0.2",
     "chart.js": "^4.5.0",
     "date-fns": "^4.1.0",
+    "dompurify": "^3.2.7",
     "framer-motion": "^12.23.21",
     "js-cookie": "^3.0.5",
     "react": "^18.2.0",
@@ -41,7 +44,8 @@
     "recharts": "^3.2.1",
     "socket.io-client": "^4.8.1",
     "typescript": "^4.9.5",
-    "web-vitals": "^2.1.4"
+    "web-vitals": "^2.1.4",
+    "xlsx": "^0.18.5"
   },
   "scripts": {
     "start": "react-scripts start",

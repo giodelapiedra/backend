@@ -13,15 +13,12 @@ import { Line } from 'react-chartjs-2';
 import { Box, Typography, Button, Card, CardContent, Grid, Fade, Tabs, Tab } from '@mui/material';
 import { 
   People, 
-  TrendingUp, 
   Assignment, 
-  CheckCircle,
-  Timeline
+  CheckCircle
 } from '@mui/icons-material';
 import StatCard from '../../components/StatCard';
-import TrendChart from '../../components/TrendChart';
+// TrendChart moved inline to TeamAnalytics.tsx
 import RecentActivityItem from '../../components/RecentActivityItem';
-import TeamKPIDashboard from '../../components/TeamKPIDashboard';
 import MonthlyAssignmentTracking from '../../components/MonthlyAssignmentTracking';
 import TeamLeaderShiftDisplay from '../../components/TeamLeaderShiftDisplay';
 import {
@@ -920,34 +917,25 @@ const TeamLeaderDashboard: React.FC = () => {
     }
   }, []);
 
-  // Email validation function
+  // Email validation function - simplified to avoid RLS issues
   const validateEmail = useCallback(async (email: string) => {
     if (!email || !email.includes('@')) {
       setEmailValidation({ isValid: true, message: '', checking: false });
       return;
     }
 
-    setEmailValidation({ isValid: true, message: '', checking: true });
-
-    try {
-      const emailExists = await SupabaseAPI.checkEmailExists(email);
-      if (emailExists) {
-        setEmailValidation({
-          isValid: false,
-          message: 'Email already registered',
-          checking: false
-        });
-              } else {
-        setEmailValidation({
-          isValid: true,
-          message: 'Email is available',
-          checking: false
-        });
-      }
-        } catch (error) {
+    // Basic email format validation only
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      setEmailValidation({
+        isValid: false,
+        message: 'Invalid email format',
+        checking: false
+      });
+    } else {
       setEmailValidation({
         isValid: true,
-        message: '',
+        message: 'Email format is valid',
         checking: false
       });
     }
@@ -1753,9 +1741,7 @@ const TeamLeaderDashboard: React.FC = () => {
           }}
         >
           <Tab iconPosition="start" icon={<Assignment sx={{ fontSize: 18 }} />} label="Monthly Tracking" />
-          <Tab iconPosition="start" icon={<TrendingUp sx={{ fontSize: 18 }} />} label="Team KPI" />
           <Tab iconPosition="start" icon={<People sx={{ fontSize: 18 }} />} label="Team Members" />
-          <Tab iconPosition="start" icon={<Timeline sx={{ fontSize: 18 }} />} label="Weekly Goals" />
         </Tabs>
       </Box>
 
@@ -1769,25 +1755,11 @@ const TeamLeaderDashboard: React.FC = () => {
         </Box>
       )}
 
-      {/* Tab 1: Team Assignment Performance */}
+      {/* Tab 1: Team Members */}
       {mainTab === 1 && (
-        <Box sx={{ mb: 4, p: { xs: 1, md: 0 } }}>
-          <TeamKPIDashboard teamLeaderId={user?.id || ''} />
-        </Box>
-      )}
-
-      {/* Tab 2: Team Members */}
-      {mainTab === 2 && (
         <React.Fragment>
           {/* Team Members content moved here from below */}
         </React.Fragment>
-      )}
-
-      {/* Tab 3: Weekly Goals & KPI */}
-      {mainTab === 3 && (
-        <Box sx={{ mb: 4, p: { xs: 1, md: 0 } }}>
-          {/* Monthly Performance Section removed - using main dashboard monthly component instead */}
-        </Box>
       )}
 
 
@@ -2318,7 +2290,7 @@ const TeamLeaderDashboard: React.FC = () => {
 
 
       {/* Team Members - Modern Card Layout */}
-      {mainTab === 2 && (
+      {mainTab === 1 && (
       <Box sx={{ 
         background: { xs: 'white', md: 'rgba(255, 255, 255, 0.8)' },
         backdropFilter: { md: 'blur(10px)' },
@@ -3386,9 +3358,12 @@ const TeamLeaderDashboard: React.FC = () => {
                     fontSize: '0.875rem'
                   }}
                   required
-                  minLength={12}
+                  minLength={8}
+                  pattern="^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$"
                 />
-                <p style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem' }}>Minimum 12 characters</p>
+                <p style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem' }}>
+                  Minimum 8 characters with uppercase, lowercase, and number
+                </p>
               </div>
 
               <div>

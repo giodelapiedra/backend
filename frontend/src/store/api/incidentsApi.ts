@@ -65,28 +65,6 @@ export const incidentsApi = createApi({
             throw new Error('description is required');
           }
 
-          // Map frontend severity values to database enum values
-          const severityMapping: { [key: string]: string } = {
-            'low': 'near_miss',
-            'medium': 'first_aid', 
-            'high': 'medical_treatment',
-            'critical': 'lost_time',
-            'fatal': 'fatality'
-          };
-
-          // Map frontend incident type values to database enum values
-          const incidentTypeMapping: { [key: string]: string } = {
-            'slip_fall': 'slip_fall',
-            'strain_injury': 'overexertion', // Map strain_injury to overexertion
-            'cut_laceration': 'cut_laceration',
-            'burn': 'burn',
-            'struck_by': 'struck_by',
-            'struck_against': 'struck_against',
-            'overexertion': 'overexertion',
-            'crush': 'crush',
-            'other': 'other'
-          };
-
           // Map severity if provided, otherwise use default
           let mappedSeverity = 'near_miss'; // Default severity
           if (incidentData.severity) {

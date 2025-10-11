@@ -1,11 +1,11 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuth } from '../../contexts/AuthContext.supabase';
 import { SupabaseAPI } from '../../utils/supabaseApi';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import Toast from '../../components/Toast';
 import LayoutWithSidebar from '../../components/LayoutWithSidebar';
-import { Box, Card, CardContent, Typography, Button } from '@mui/material';
-import TrendChart from '../../components/TrendChart';
+import { Box, Card, CardContent, Typography, Button, ButtonGroup, useTheme, useMediaQuery } from '@mui/material';
+// TrendChart component moved inline below
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -20,6 +20,18 @@ import {
   Filler
 } from 'chart.js';
 import { Line, Pie, Bar } from 'react-chartjs-2';
+import { 
+  AreaChart, 
+  Area, 
+  LineChart as RechartsLineChart, 
+  Line as RechartsLine, 
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip as RechartsTooltip, 
+  ResponsiveContainer 
+} from 'recharts';
+import { ShowChart, Timeline } from '@mui/icons-material';
 
 ChartJS.register(
   CategoryScale,
@@ -33,6 +45,608 @@ ChartJS.register(
   BarElement,
   Filler
 );
+
+// Inline TrendChart Component
+interface TrendChartProps {
+  title: string;
+  data: Array<{
+    date: string;
+    fitForWork: number;
+    minorConcernsFitForWork: number;
+    notFitForWork: number;
+    total?: number;
+  }>;
+  isLoading?: boolean;
+  height?: number;
+  externalTimePeriod?: TimePeriod;
+  onTimePeriodChange?: (period: TimePeriod) => void;
+}
+
+type ChartType = 'area' | 'line';
+type TimePeriod = 'week' | 'month' | 'year';
+
+const TrendChart: React.FC<TrendChartProps> = ({
+  title,
+  data,
+  isLoading = false,
+  height = 300,
+  externalTimePeriod,
+  onTimePeriodChange
+}) => {
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
+  const [chartType, setChartType] = useState<ChartType>('area');
+  const [chartKey, setChartKey] = useState(0);
+  
+  // Use external time period if provided, otherwise use internal state
+  const [internalTimePeriod, setInternalTimePeriod] = useState<TimePeriod>('week');
+  const timePeriod = externalTimePeriod || internalTimePeriod;
+  
+  // Force chart re-render when switching between mobile and desktop
+  useEffect(() => {
+    setChartKey(prev => prev + 1);
+  }, [isMobile]);
+  
+  const setTimePeriod = (period: TimePeriod) => {
+    if (onTimePeriodChange) {
+      onTimePeriodChange(period);
+    } else {
+      setInternalTimePeriod(period);
+    }
+  };
+
+  // Process data based on time period (optimized)
+  // Backend already filters data by date range, so we just format it here
+  const processedData = useMemo(() => {
+    if (!data || !data.length) {
+      console.log('TrendChart - No data to process');
+      return [];
+    }
+
+    console.log('TrendChart - Processing data:', {
+      timePeriod,
+      dataLength: data.length,
+      firstDate: data[0]?.date,
+      lastDate: data[data.length - 1]?.date,
+      sampleData: data.slice(0, 3)
+    });
+
+    // Format dates for display based on time period
+    return data.map(item => {
+      try {
+        const date = new Date(item.date);
+        if (isNaN(date.getTime())) {
+          console.error('Invalid date:', item.date);
+          return item;
+        }
+
+        let formattedDate = '';
+        
+        switch (timePeriod) {
+          case 'week':
+            // Show as "Mon 15" format
+            formattedDate = date.toLocaleDateString('en-US', { weekday: 'short', day: 'numeric' });
+            break;
+          case 'month':
+            // Show as "Oct 15" format
+            formattedDate = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            break;
+          case 'year':
+            // Show as "Jan '24" format
+            formattedDate = date.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+            break;
+          default:
+            formattedDate = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        }
+        
+        return {
+          ...item,
+          date: formattedDate,
+          fitForWork: item.fitForWork || 0,
+          minorConcernsFitForWork: item.minorConcernsFitForWork || 0,
+          notFitForWork: item.notFitForWork || 0
+        };
+      } catch (error) {
+        console.error('Error processing data item:', error, item);
+        return item;
+      }
+    });
+  }, [data, timePeriod]);
+
+  // Custom tooltip
+  const CustomTooltip = ({ active, payload, label }: any) => {
+    if (active && payload && payload.length) {
+      return (
+        <Box
+          sx={{
+            backgroundColor: 'white',
+            padding: 2,
+            borderRadius: 2,
+            boxShadow: '0 8px 32px rgba(0, 0, 0, 0.12)',
+            border: '1px solid rgba(0, 0, 0, 0.08)'
+          }}
+        >
+          <Typography
+            sx={{
+              fontWeight: 600,
+              fontSize: '0.875rem',
+              color: '#1e293b',
+              mb: 1,
+              fontFamily: 'Inter, system-ui, sans-serif'
+            }}
+          >
+            {label}
+          </Typography>
+          {payload.map((entry: any, index: number) => (
+            <Box key={index} sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+              <Box
+                sx={{
+                  width: 12,
+                  height: 12,
+                  borderRadius: '50%',
+                  backgroundColor: entry.color
+                }}
+              />
+              <Typography
+                sx={{
+                  fontSize: '0.75rem',
+                  color: '#64748b',
+                  fontFamily: 'Inter, system-ui, sans-serif'
+                }}
+              >
+                {entry.name}: {entry.value}
+              </Typography>
+            </Box>
+          ))}
+        </Box>
+      );
+    }
+    return null;
+  };
+
+  const chartColors = {
+    fitForWork: '#10b981',
+    minorConcernsFitForWork: '#f59e0b',
+    notFitForWork: '#ef4444'
+  };
+
+  const renderChart = () => {
+    const mobileHeight = 300; // Increased height for mobile
+    const chartHeight = isMobile ? mobileHeight : height;
+    
+    console.log('TrendChart - renderChart called:', {
+      isMobile,
+      chartHeight,
+      dataLength: processedData?.length || 0,
+      isLoading,
+      data: processedData
+    });
+    
+    if (isLoading) {
+      return (
+        <Box
+          sx={{
+            height: chartHeight,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: '#fafafa',
+            borderRadius: 2,
+            animation: 'pulse 2s infinite',
+            gap: 2
+          }}
+        >
+          <Box sx={{ 
+            width: 60, 
+            height: 60, 
+            borderRadius: '50%', 
+            backgroundColor: '#f5f5f5',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            animation: 'spin 1s linear infinite'
+          }}>
+            <ShowChart sx={{ fontSize: 30, color: '#6366f1' }} />
+          </Box>
+          <Typography sx={{ 
+            color: '#737373', 
+            fontSize: { xs: '0.875rem', md: '1rem' },
+            fontWeight: 500
+          }}>
+            Loading chart data...
+          </Typography>
+        </Box>
+      );
+    }
+
+    if (!processedData || processedData.length === 0) {
+      console.log('TrendChart - No data available');
+      return (
+        <Box
+          sx={{
+            height: chartHeight,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: '#fafafa',
+            borderRadius: 2,
+            gap: 2
+          }}
+        >
+          <Box sx={{ 
+            width: 80, 
+            height: 80, 
+            borderRadius: '50%', 
+            backgroundColor: '#f5f5f5',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}>
+            <ShowChart sx={{ fontSize: 40, color: '#a3a3a3' }} />
+          </Box>
+          <Typography sx={{ color: '#737373', fontSize: { xs: '0.875rem', md: '1rem' }, fontWeight: 500 }}>
+            No data available for this period
+          </Typography>
+        </Box>
+      );
+    }
+
+    // Calculate dynamic width for mobile to ensure all data is visible
+    const dataLength = processedData.length;
+    const minWidthPerPoint = 80; // Increased width per data point for better visibility
+    const calculatedWidth = isMobile && dataLength > 4 ? dataLength * minWidthPerPoint : '100%';
+    
+    // Adjust margins for mobile to ensure chart is visible
+    const chartMargin = isMobile 
+      ? { top: 10, right: 20, left: 10, bottom: 50 } // Better margins for mobile
+      : { top: 10, right: 30, left: 0, bottom: 0 };
+
+    const chartContent = chartType === 'area' ? (
+        <ResponsiveContainer width={calculatedWidth as any} height={chartHeight} key={`area-${chartKey}`}>
+          <AreaChart 
+            data={processedData} 
+            margin={chartMargin}
+          >
+            <defs>
+              <linearGradient id="fitGradient" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="#10b981" stopOpacity={0.8}/>
+                <stop offset="95%" stopColor="#10b981" stopOpacity={0.1}/>
+              </linearGradient>
+              <linearGradient id="minorGradient" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.8}/>
+                <stop offset="95%" stopColor="#f59e0b" stopOpacity={0.1}/>
+              </linearGradient>
+              <linearGradient id="notFitGradient" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="#ef4444" stopOpacity={0.8}/>
+                <stop offset="95%" stopColor="#ef4444" stopOpacity={0.1}/>
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="#e5e5e5" />
+            <XAxis 
+              dataKey="date" 
+              axisLine={false}
+              tickLine={false}
+              tick={{ 
+                fontSize: isMobile ? 10 : 12, 
+                fill: '#737373',
+                width: isMobile ? 40 : 'auto',
+                dy: isMobile ? 15 : 0
+              }}
+              angle={isMobile ? -45 : 0}
+              textAnchor={isMobile ? 'end' : 'middle'}
+              height={isMobile ? 100 : 30}
+              interval={0}
+              minTickGap={5}
+            />
+            <YAxis 
+              axisLine={false}
+              tickLine={false}
+              tick={{ fontSize: isMobile ? 10 : 12, fill: '#737373' }}
+              width={isMobile ? 40 : 60}
+              tickCount={5}
+            />
+            <RechartsTooltip content={<CustomTooltip />} />
+            <Area
+              type="monotone"
+              dataKey="fitForWork"
+              name="Fit for Work"
+              stackId="1"
+              stroke={chartColors.fitForWork}
+              strokeWidth={2}
+              fillOpacity={1}
+              fill="url(#fitGradient)"
+            />
+            <Area
+              type="monotone"
+              dataKey="minorConcernsFitForWork"
+              name="Minor Concerns"
+              stackId="1"
+              stroke={chartColors.minorConcernsFitForWork}
+              strokeWidth={2}
+              fillOpacity={1}
+              fill="url(#minorGradient)"
+            />
+            <Area
+              type="monotone"
+              dataKey="notFitForWork"
+              name="Not Fit"
+              stackId="1"
+              stroke={chartColors.notFitForWork}
+              strokeWidth={2}
+              fillOpacity={1}
+              fill="url(#notFitGradient)"
+            />
+          </AreaChart>
+        </ResponsiveContainer>
+    ) : (
+        <ResponsiveContainer width={calculatedWidth as any} height={chartHeight} key={`line-${chartKey}`}>
+          <RechartsLineChart data={processedData} margin={chartMargin}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#e5e5e5" />
+            <XAxis 
+              dataKey="date" 
+              axisLine={false}
+              tickLine={false}
+              tick={{ 
+                fontSize: isMobile ? 10 : 12, 
+                fill: '#737373',
+                width: isMobile ? 40 : 'auto',
+                dy: isMobile ? 15 : 0
+              }}
+              angle={isMobile ? -45 : 0}
+              textAnchor={isMobile ? 'end' : 'middle'}
+              height={isMobile ? 100 : 30}
+              interval={0}
+              minTickGap={5}
+            />
+            <YAxis 
+              axisLine={false}
+              tickLine={false}
+              tick={{ fontSize: isMobile ? 10 : 12, fill: '#737373' }}
+              width={isMobile ? 40 : 60}
+              tickCount={5}
+            />
+            <RechartsTooltip content={<CustomTooltip />} />
+            <RechartsLine
+              type="monotone"
+              dataKey="fitForWork"
+              name="Fit for Work"
+              stroke={chartColors.fitForWork}
+              strokeWidth={isMobile ? 2 : 3}
+              dot={{ fill: chartColors.fitForWork, strokeWidth: 2, r: isMobile ? 3 : 4 }}
+              activeDot={{ r: isMobile ? 5 : 6, stroke: chartColors.fitForWork, strokeWidth: 2 }}
+            />
+            <RechartsLine
+              type="monotone"
+              dataKey="minorConcernsFitForWork"
+              name="Minor Concerns"
+              stroke={chartColors.minorConcernsFitForWork}
+              strokeWidth={isMobile ? 2 : 3}
+              dot={{ fill: chartColors.minorConcernsFitForWork, strokeWidth: 2, r: isMobile ? 3 : 4 }}
+              activeDot={{ r: isMobile ? 5 : 6, stroke: chartColors.minorConcernsFitForWork, strokeWidth: 2 }}
+            />
+            <RechartsLine
+              type="monotone"
+              dataKey="notFitForWork"
+              name="Not Fit"
+              stroke={chartColors.notFitForWork}
+              strokeWidth={isMobile ? 2 : 3}
+              dot={{ fill: chartColors.notFitForWork, strokeWidth: 2, r: isMobile ? 3 : 4 }}
+              activeDot={{ r: isMobile ? 5 : 6, stroke: chartColors.notFitForWork, strokeWidth: 2 }}
+            />
+          </RechartsLineChart>
+        </ResponsiveContainer>
+    );
+
+    // Wrap in scrollable container for mobile when there are many data points
+    if (isMobile && dataLength > 4) {
+      return (
+        <Box sx={{ 
+          overflowX: 'auto',
+          overflowY: 'hidden',
+          width: '100%',
+          height: chartHeight, // Ensure the container has a height
+          WebkitOverflowScrolling: 'touch', // Smooth scrolling on iOS
+          '&::-webkit-scrollbar': {
+            height: '6px',
+          },
+          '&::-webkit-scrollbar-track': {
+            backgroundColor: '#f1f1f1',
+            borderRadius: '10px',
+          },
+          '&::-webkit-scrollbar-thumb': {
+            backgroundColor: '#888',
+            borderRadius: '10px',
+            '&:hover': {
+              backgroundColor: '#555',
+            },
+          },
+        }}>
+          {chartContent}
+        </Box>
+      );
+    }
+
+    return chartContent;
+  };
+
+  return (
+    <>
+      <style>{`
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.7; }
+        }
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+      `}</style>
+      <Card
+        sx={{
+          borderRadius: { xs: '16px', md: 3 },
+          boxShadow: '0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.02)',
+          border: '1px solid #e5e5e5',
+          height: '100%',
+          backgroundColor: '#ffffff',
+          overflow: 'visible', // Important for chart visibility
+          '& .recharts-wrapper': {
+            // Fix for recharts container
+            overflow: 'visible !important'
+          }
+        }}
+      >
+        <CardContent sx={{ 
+          p: { xs: 2, md: 3 },
+          overflow: 'visible' // Important for chart visibility
+        }}>
+          {/* Header with title */}
+          <Box sx={{ mb: { xs: 2, md: 3 } }}>
+            <Typography
+              variant="h6"
+              sx={{
+                fontWeight: 700,
+                fontSize: { xs: '1rem', md: '1.25rem' },
+                color: '#171717',
+                mb: 2
+              }}
+            >
+              {title}
+            </Typography>
+            
+            {/* Controls - Stacked on mobile */}
+            <Box sx={{ 
+              display: 'flex', 
+              flexDirection: { xs: 'column', md: 'row' },
+              gap: { xs: 1.5, md: 2 },
+              alignItems: { xs: 'stretch', md: 'center' }
+            }}>
+              {/* Chart type toggle */}
+              <ButtonGroup size="small" variant="outlined" fullWidth sx={{ display: { xs: 'flex', md: 'inline-flex' } }}>
+                <Button
+                  onClick={() => setChartType('area')}
+                  sx={{
+                    backgroundColor: chartType === 'area' ? '#6366f1' : 'transparent',
+                    color: chartType === 'area' ? 'white' : '#737373',
+                    borderRadius: '10px',
+                    px: { xs: 1.5, md: 2 },
+                    py: 0.75,
+                    fontSize: { xs: '0.75rem', md: '0.8125rem' },
+                    fontWeight: 600,
+                    borderColor: '#e5e5e5',
+                    flex: { xs: 1, md: 'initial' },
+                    '&:hover': {
+                      backgroundColor: chartType === 'area' ? '#4f46e5' : '#f5f5f5',
+                      borderColor: chartType === 'area' ? '#4f46e5' : '#d4d4d4'
+                    }
+                  }}
+                >
+                  <Timeline sx={{ fontSize: { xs: 14, md: 16 }, mr: 0.5 }} />
+                  Area
+                </Button>
+                <Button
+                  onClick={() => setChartType('line')}
+                  sx={{
+                    backgroundColor: chartType === 'line' ? '#6366f1' : 'transparent',
+                    color: chartType === 'line' ? 'white' : '#737373',
+                    borderRadius: '10px',
+                    px: { xs: 1.5, md: 2 },
+                    py: 0.75,
+                    fontSize: { xs: '0.75rem', md: '0.8125rem' },
+                    fontWeight: 600,
+                    borderColor: '#e5e5e5',
+                    flex: { xs: 1, md: 'initial' },
+                    '&:hover': {
+                      backgroundColor: chartType === 'line' ? '#4f46e5' : '#f5f5f5',
+                      borderColor: chartType === 'line' ? '#4f46e5' : '#d4d4d4'
+                    }
+                  }}
+                >
+                  <ShowChart sx={{ fontSize: { xs: 14, md: 16 }, mr: 0.5 }} />
+                  Line
+                </Button>
+              </ButtonGroup>
+
+              {/* Time period toggle */}
+              <ButtonGroup size="small" variant="outlined" fullWidth sx={{ display: { xs: 'flex', md: 'inline-flex' } }}>
+                {(['week', 'month', 'year'] as TimePeriod[]).map((period) => (
+                  <Button
+                    key={period}
+                    onClick={() => setTimePeriod(period)}
+                    sx={{
+                      backgroundColor: timePeriod === period ? '#6366f1' : 'transparent',
+                      color: timePeriod === period ? 'white' : '#737373',
+                      borderRadius: '10px',
+                      px: { xs: 1.5, md: 2 },
+                      py: 0.75,
+                      fontSize: { xs: '0.75rem', md: '0.8125rem' },
+                      fontWeight: 600,
+                      textTransform: 'capitalize',
+                      borderColor: '#e5e5e5',
+                      flex: { xs: 1, md: 'initial' },
+                      '&:hover': {
+                        backgroundColor: timePeriod === period ? '#4f46e5' : '#f5f5f5',
+                        borderColor: timePeriod === period ? '#4f46e5' : '#d4d4d4'
+                      }
+                    }}
+                  >
+                    {period}
+                  </Button>
+                ))}
+              </ButtonGroup>
+            </Box>
+          </Box>
+
+          {/* Chart legend */}
+          <Box sx={{ 
+            display: 'flex', 
+            flexDirection: { xs: 'column', sm: 'row' },
+            gap: { xs: 1, sm: 3 }, 
+            mb: { xs: 2, md: 2 }, 
+            justifyContent: { xs: 'flex-start', sm: 'center' }
+          }}>
+            {Object.entries({
+              fitForWork: 'Fit for Work',
+              minorConcernsFitForWork: 'Minor Concerns',
+              notFitForWork: 'Not Fit'
+            }).map(([key, label]) => (
+              <Box key={key} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Box
+                  sx={{
+                    width: 12,
+                    height: 12,
+                    borderRadius: '50%',
+                    backgroundColor: chartColors[key as keyof typeof chartColors]
+                  }}
+                />
+                <Typography
+                  sx={{
+                    fontSize: { xs: '0.75rem', md: '0.8125rem' },
+                    color: '#737373',
+                    fontWeight: 500,
+                  }}
+                >
+                  {label}
+                </Typography>
+              </Box>
+            ))}
+          </Box>
+
+          {/* Chart */}
+          <Box sx={{ 
+            mt: { xs: 2, md: 2 }, 
+            height: { xs: 300, md: height },
+            width: '100%',
+            overflow: 'visible'
+          }}>
+            {renderChart()}
+          </Box>
+        </CardContent>
+      </Card>
+    </>
+  );
+};
 
 // Custom gradient plugin
 const gradientPlugin = {
@@ -81,9 +695,13 @@ interface AnalyticsData {
         total: number;
         completed: number;
         pending: number;
+        overdue: number;
+        cancelled: number;
         notStarted?: number;
         completedPercentage: number;
         pendingPercentage: number;
+        overduePercentage: number;
+        cancelledPercentage: number;
         notStartedPercentage: number;
         byStatus: any[];
         monthlyAssessments: any[];
@@ -93,6 +711,7 @@ interface AnalyticsData {
         total: number;
       };
     loginStats: {
+      totalLogins: number;
       todayLogins: number;
       weeklyLogins: number;
       monthlyLogins: number;
@@ -323,6 +942,11 @@ const TeamAnalytics: React.FC = () => {
 
   // Fetch data when work readiness date range changes
   useEffect(() => {
+    console.log('🔄 Work Readiness useEffect triggered:', {
+      workReadinessDateRange,
+      workReadinessStartDate: workReadinessStartDate?.toISOString().split('T')[0],
+      workReadinessEndDate: workReadinessEndDate?.toISOString().split('T')[0]
+    });
     setWorkReadinessChartLoading(true);
     fetchAnalyticsData('workReadiness').finally(() => {
       setWorkReadinessChartLoading(false);
@@ -432,6 +1056,12 @@ const TeamAnalytics: React.FC = () => {
             startDate: workReadinessStartDate?.toISOString(),
             endDate: workReadinessEndDate?.toISOString()
           });
+          console.log('📊 TeamAnalytics: Date objects:', {
+            workReadinessStartDate,
+            workReadinessEndDate,
+            startDateType: typeof workReadinessStartDate,
+            endDateType: typeof workReadinessEndDate
+          });
           
           const workReadinessData = await SupabaseAPI.getWorkReadinessStats(
             user.id, 
@@ -510,6 +1140,16 @@ const TeamAnalytics: React.FC = () => {
               fitForWork: item.fitForWork,
               total: item.total
             })));
+            
+            // Additional debugging for chart rendering
+            const trendDataArray = trendData.analytics.readinessTrendData as TrendDataItem[];
+            console.log('🔍 TeamAnalytics: Data validation for chart:', {
+              hasData: trendDataArray.length > 0,
+              firstItem: trendDataArray[0],
+              lastItem: trendDataArray[trendDataArray.length - 1],
+              allDates: trendDataArray.map(item => item.date),
+              allTotals: trendDataArray.map(item => item.total)
+            });
           } else {
             console.log('📊 TeamAnalytics: No trend data received');
           }
@@ -543,9 +1183,13 @@ const TeamAnalytics: React.FC = () => {
             total: 0,
             completed: 0,
             pending: 0,
+            overdue: 0,
+            cancelled: 0,
             notStarted: 0,
             completedPercentage: 0,
             pendingPercentage: 0,
+            overduePercentage: 0,
+            cancelledPercentage: 0,
             notStartedPercentage: 0,
             byStatus: [],
             monthlyAssessments: []
@@ -555,6 +1199,7 @@ const TeamAnalytics: React.FC = () => {
             total: 0
           },
           loginStats: {
+            totalLogins: 0,
             todayLogins: 0,
             weeklyLogins: 0,
             monthlyLogins: 0,
@@ -1200,10 +1845,10 @@ const TeamAnalytics: React.FC = () => {
                   </Box>
                   <Box sx={{ textAlign: 'center' }}>
                     <Typography sx={{ fontSize: '0.75rem', fontWeight: '600', color: COLORS.error.main, mb: 0.25 }}>
-                      Not Started
+                      Overdue
                     </Typography>
                     <Typography sx={{ fontSize: '1.25rem', fontWeight: '700', color: COLORS.error.main }}>
-                      {analyticsData.analytics.workReadinessStats.notStarted || ((analyticsData.analytics.workReadinessStats.total || 0) - ((analyticsData.analytics.workReadinessStats.completed || 0) + (analyticsData.analytics.workReadinessStats.pending || 0)))}
+                      {analyticsData.analytics.workReadinessStats.overdue || 0}
                     </Typography>
                   </Box>
                 </Box>
@@ -1211,12 +1856,9 @@ const TeamAnalytics: React.FC = () => {
                     {(() => {
                       const completed = analyticsData.analytics.workReadinessStats.completed || 0;
                       const pending = analyticsData.analytics.workReadinessStats.pending || 0;
-                      const notStarted = analyticsData.analytics.workReadinessStats.notStarted || 
-                        ((analyticsData.analytics.workReadinessStats.total || 0) - 
-                         ((analyticsData.analytics.workReadinessStats.completed || 0) + 
-                          (analyticsData.analytics.workReadinessStats.pending || 0)));
+                      const overdue = analyticsData.analytics.workReadinessStats.overdue || 0;
                       
-                      const total = completed + pending + notStarted;
+                      const total = completed + pending + overdue;
                       
                       // If no data, show empty state
                       if (total === 0) {
@@ -1244,7 +1886,7 @@ const TeamAnalytics: React.FC = () => {
                               </svg>
                             </Box>
                             <Typography sx={{ fontSize: '0.875rem', fontWeight: '600', textAlign: 'center' }}>
-                              No data for selected period
+                              No assignments for selected period
                             </Typography>
                           </Box>
                         );
@@ -1253,9 +1895,9 @@ const TeamAnalytics: React.FC = () => {
                       return (
                         <Pie
                           data={{
-                            labels: ['Completed', 'Pending', 'Not Started'],
+                            labels: ['Completed', 'Pending', 'Overdue'],
                             datasets: [{
-                              data: [completed, pending, notStarted],
+                              data: [completed, pending, overdue],
                               backgroundColor: [
                                 COLORS.success.main,
                                 COLORS.warning.main,
@@ -1499,62 +2141,6 @@ const TeamAnalytics: React.FC = () => {
               </div>
             </Box>
 
-            {/* Team Performance Bar Chart */}
-            <div style={{
-              backgroundColor: 'rgba(255, 255, 255, 0.9)',
-              backdropFilter: 'blur(10px)',
-              borderRadius: window.innerWidth <= 768 ? '0.5rem' : '1rem',
-              padding: window.innerWidth <= 768 ? '0.75rem' : '2rem',
-              boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
-              border: '1px solid rgba(255, 255, 255, 0.2)',
-              marginBottom: window.innerWidth <= 768 ? '0.75rem' : '2rem'
-            }}>
-              <h3 style={{ 
-                fontSize: window.innerWidth <= 768 ? '1rem' : '1.25rem', 
-                fontWeight: '600', 
-                color: '#1f2937',
-                marginBottom: window.innerWidth <= 768 ? '0.75rem' : '1.5rem',
-                textAlign: 'center'
-              }}>
-                Team Performance Overview
-              </h3>
-              <div style={{ height: window.innerWidth <= 768 ? '200px' : '300px', position: 'relative' }}>
-                <Bar
-                  data={{
-                    labels: analyticsData.analytics.teamPerformance.map((member: any) => 
-                      member.memberName || member.workerName || 'Unknown'
-                    ).slice(0, 5),
-                    datasets: [{
-                      label: 'Activity Level',
-                      data: analyticsData.analytics.teamPerformance.map((member: any) => 
-                        member.activityLevel || 0
-                      ).slice(0, 5),
-                      backgroundColor: 'rgba(59, 130, 246, 0.8)',
-                      borderColor: 'rgba(59, 130, 246, 1)',
-                      borderWidth: 1
-                    }]
-                  }}
-                  options={{
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                      legend: {
-                        display: false
-                      }
-                    },
-                    scales: {
-                      y: {
-                        beginAtZero: true,
-                        max: 100,
-                        ticks: {
-                          callback: (value) => `${value}%`
-                        }
-                      }
-                    }
-                  }}
-                />
-              </div>
-            </div>
 
             {/* Work Readiness Activity Chart */}
             <div style={{
@@ -2054,13 +2640,24 @@ const TeamAnalytics: React.FC = () => {
             }}>
               <TrendChart
                 title={`Emissions Trend - Work Readiness Analytics ${analyticsData?.analytics?.readinessTrendData?.length > 0 ? `(${analyticsData.analytics.readinessTrendData.length} data points)` : '(No data yet)'}`}
-                data={analyticsData?.analytics?.readinessTrendData?.length > 0 ? analyticsData.analytics.readinessTrendData.map((item: TrendDataItem) => ({
-                  date: item.date,
-                  fitForWork: item.fitForWork,
-                  minorConcernsFitForWork: item.minorConcernsFitForWork,
-                  notFitForWork: item.notFitForWork,
-                  total: item.total
-                })) : []}
+                data={(() => {
+                  const chartData = analyticsData?.analytics?.readinessTrendData?.length > 0 ? analyticsData.analytics.readinessTrendData.map((item: TrendDataItem) => ({
+                    date: item.date,
+                    fitForWork: item.fitForWork,
+                    minorConcernsFitForWork: item.minorConcernsFitForWork,
+                    notFitForWork: item.notFitForWork,
+                    total: item.total
+                  })) : [];
+                  
+                  console.log('🔍 Work Readiness Chart Data:', {
+                    rawData: analyticsData?.analytics?.readinessTrendData,
+                    processedData: chartData,
+                    dataLength: chartData.length,
+                    sampleItem: chartData[0]
+                  });
+                  
+                  return chartData;
+                })()}
                 isLoading={readinessChartLoading}
                 height={400}
                 externalTimePeriod={readinessDateRange === 'custom' ? 'week' : readinessDateRange as 'week' | 'month' | 'year'}
@@ -2103,192 +2700,8 @@ const TeamAnalytics: React.FC = () => {
               </div>
             </div>
 
-            {/* Charts Section - Full Width */}
-            <div style={{ 
-              display: window.innerWidth <= 768 ? 'flex' : 'grid', 
-              flexDirection: window.innerWidth <= 768 ? 'column' : 'row',
-              gridTemplateColumns: '2fr 1fr', 
-              gap: window.innerWidth <= 768 ? '3rem' : '1.5rem',
-              marginBottom: window.innerWidth <= 768 ? '3rem' : '2rem'
-            }}>
-              {/* Team Performance Table - Takes 2/3 of space */}
-              <div style={{
-                backgroundColor: 'rgba(255, 255, 255, 0.9)',
-                backdropFilter: 'blur(10px)',
-                borderRadius: window.innerWidth <= 768 ? '1rem' : '1rem',
-                boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
-                border: '1px solid rgba(255, 255, 255, 0.2)',
-                overflow: 'hidden'
-              }}>
-                <div style={{ 
-                  padding: window.innerWidth <= 768 ? '1.5rem' : '1.5rem', 
-                  borderBottom: '1px solid rgba(229, 231, 235, 0.5)' 
-                }}>
-                  <h3 style={{ 
-                    fontSize: window.innerWidth <= 768 ? '1rem' : '1.25rem', 
-                    fontWeight: '600', 
-                    color: '#1f2937',
-                    margin: '0'
-                  }}>
-                    Team Performance Overview
-                  </h3>
-                </div>
-                <div style={{ overflowX: 'auto', maxHeight: '500px' }}>
-                  <table style={{ 
-                    width: '100%', 
-                    borderCollapse: 'collapse',
-                    minWidth: '600px'
-                  }}>
-                    <thead style={{ backgroundColor: 'rgba(249, 250, 251, 0.8)', position: 'sticky', top: 0 }}>
-                      <tr>
-                        <th style={{ 
-                          padding: '1rem 1.5rem', 
-                          textAlign: 'left', 
-                          fontSize: '0.875rem', 
-                          fontWeight: '600', 
-                          color: '#374151', 
-                          textTransform: 'uppercase', 
-                          letterSpacing: '0.05em',
-                          borderBottom: '1px solid rgba(229, 231, 235, 0.5)'
-                        }}>
-                        Team Member
-                      </th>
-                        <th style={{ 
-                          padding: '1rem 1.5rem', 
-                          textAlign: 'left', 
-                          fontSize: '0.875rem', 
-                          fontWeight: '600', 
-                          color: '#374151', 
-                          textTransform: 'uppercase', 
-                          letterSpacing: '0.05em',
-                          borderBottom: '1px solid rgba(229, 231, 235, 0.5)'
-                        }}>
-                          Work Readiness Status
-                      </th>
-                        <th style={{ 
-                          padding: '1rem 1.5rem', 
-                          textAlign: 'left', 
-                          fontSize: '0.875rem', 
-                          fontWeight: '600', 
-                          color: '#374151', 
-                          textTransform: 'uppercase', 
-                          letterSpacing: '0.05em',
-                          borderBottom: '1px solid rgba(229, 231, 235, 0.5)'
-                        }}>
-                          Last Login
-                      </th>
-                        <th style={{ 
-                          padding: '1rem 1.5rem', 
-                          textAlign: 'left', 
-                          fontSize: '0.875rem', 
-                          fontWeight: '600', 
-                          color: '#374151', 
-                          textTransform: 'uppercase', 
-                          letterSpacing: '0.05em',
-                          borderBottom: '1px solid rgba(229, 231, 235, 0.5)'
-                        }}>
-                          Activity Level
-                      </th>
-                    </tr>
-                  </thead>
-                    <tbody>
-                      {analyticsData.analytics.teamPerformance && analyticsData.analytics.teamPerformance.length > 0 ? (
-                        analyticsData.analytics.teamPerformance.map((member: any, index: number) => (
-                          <tr key={member.memberId || index} style={{ 
-                            borderBottom: '1px solid rgba(229, 231, 235, 0.3)',
-                            backgroundColor: index % 2 === 0 ? 'rgba(255, 255, 255, 0.5)' : 'rgba(249, 250, 251, 0.3)'
-                          }}>
-                            <td style={{ 
-                              padding: '1.25rem 1.5rem', 
-                              fontSize: '0.875rem', 
-                              fontWeight: '500', 
-                              color: '#1f2937'
-                            }}>
-                              {member.memberName || member.workerName || 'Unknown Member'}
-                        </td>
-                            <td style={{ padding: '1.25rem 1.5rem' }}>
-                              <div style={{ display: 'flex', alignItems: 'center' }}>
-                                <div style={{ 
-                                  width: '10px', 
-                                  height: '10px', 
-                                  borderRadius: '50%', 
-                                  backgroundColor: member.workReadinessStatus === 'Completed' ? '#22c55e' : 
-                                                 member.workReadinessStatus === 'In Progress' ? '#f59e0b' : 
-                                                 member.workReadinessStatus === 'Pending' ? '#3b82f6' : '#6b7280',
-                                  marginRight: '0.75rem'
-                                }}></div>
-                                <span style={{ 
-                                  fontSize: '0.875rem', 
-                                  color: member.workReadinessStatus === 'Completed' ? '#059669' : 
-                                         member.workReadinessStatus === 'In Progress' ? '#d97706' : 
-                                         member.workReadinessStatus === 'Pending' ? '#2563eb' : '#6b7280',
-                                  textTransform: 'capitalize',
-                                  fontWeight: '500'
-                                }}>
-                                  {member.workReadinessStatus || 'Not Started'}
-                                </span>
-                              </div>
-                        </td>
-                            <td style={{ 
-                              padding: '1.25rem 1.5rem', 
-                              fontSize: '0.875rem', 
-                              color: '#6b7280',
-                              fontWeight: '500'
-                            }}>
-                              {member.lastLogin ? new Date(member.lastLogin).toLocaleDateString() : 'Never'}
-                        </td>
-                            <td style={{ padding: '1.25rem 1.5rem' }}>
-                              <div style={{ display: 'flex', alignItems: 'center' }}>
-                                <div style={{ 
-                                  width: '80px', 
-                                  backgroundColor: 'rgba(229, 231, 235, 0.5)', 
-                                  borderRadius: '9999px', 
-                                  height: '10px', 
-                                  marginRight: '0.75rem',
-                                  overflow: 'hidden'
-                                }}>
-                                  <div 
-                                    style={{ 
-                                      backgroundColor: member.activityLevel >= 70 ? '#22c55e' : 
-                                                      member.activityLevel >= 40 ? '#f59e0b' : '#ef4444', 
-                                      height: '100%', 
-                                      borderRadius: '9999px',
-                                      width: `${member.activityLevel || 0}%`,
-                                      transition: 'width 0.3s ease'
-                                    }}
-                              ></div>
-                            </div>
-                                <span style={{ 
-                                  fontSize: '0.875rem', 
-                                  color: member.activityLevel >= 70 ? '#059669' : 
-                                         member.activityLevel >= 40 ? '#d97706' : '#dc2626',
-                                  fontWeight: '600'
-                                }}>
-                                  {member.activityLevel || 0}%
-                                </span>
-                          </div>
-                        </td>
-                      </tr>
-                        ))
-                      ) : (
-                        <tr>
-                          <td colSpan={4} style={{ 
-                            padding: '3rem 1.5rem', 
-                            textAlign: 'center', 
-                            color: '#6b7280',
-                            fontSize: '1rem',
-                            fontWeight: '500'
-                          }}>
-                            No team performance data available
-                          </td>
-                        </tr>
-                      )}
-                  </tbody>
-                </table>
-                </div>
-              </div>
 
-              {/* Work Readiness Progress Chart - Takes 1/3 of space */}
+            {/* Work Readiness Progress Chart - Full Width */}
               <div style={{
                 backgroundColor: 'rgba(255, 255, 255, 0.9)',
                 backdropFilter: 'blur(10px)',
@@ -2296,7 +2709,8 @@ const TeamAnalytics: React.FC = () => {
                 padding: window.innerWidth <= 768 ? '1.5rem' : '1.5rem',
                 boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
                 border: '1px solid rgba(255, 255, 255, 0.2)',
-                height: 'fit-content'
+              height: 'fit-content',
+              marginBottom: window.innerWidth <= 768 ? '3rem' : '2rem'
               }}>
                 <h3 style={{ 
                   fontSize: window.innerWidth <= 768 ? '1rem' : '1.25rem', 
@@ -2403,7 +2817,6 @@ const TeamAnalytics: React.FC = () => {
                           (analyticsData.analytics.workReadinessStats.completed / analyticsData.analytics.workReadinessStats.total) * 100 : 0}%`,
                         transition: 'width 0.5s ease'
                       }}></div>
-                    </div>
                   </div>
                 </div>
               </div>
@@ -2443,7 +2856,7 @@ const TeamAnalytics: React.FC = () => {
                   flex: window.innerWidth <= 768 ? 'none' : '1'
                 }}>
                   <div style={{ fontSize: '3rem', fontWeight: '700', color: '#3b82f6', marginBottom: '1rem' }}>
-                    {analyticsData.analytics.loginStats.todayLogins}
+                    {analyticsData?.analytics?.loginStats?.todayLogins || 0}
                   </div>
                   <div style={{ fontSize: '1rem', color: '#6b7280', fontWeight: '600' }}>
                     Today's Logins
@@ -2460,7 +2873,7 @@ const TeamAnalytics: React.FC = () => {
                   flex: window.innerWidth <= 768 ? 'none' : '1'
                 }}>
                   <div style={{ fontSize: '3rem', fontWeight: '700', color: '#22c55e', marginBottom: '1rem' }}>
-                    {analyticsData.analytics.loginStats.weeklyLogins}
+                    {analyticsData?.analytics?.loginStats?.weeklyLogins || 0}
                   </div>
                   <div style={{ fontSize: '1rem', color: '#6b7280', fontWeight: '600' }}>
                     This Week
@@ -2475,7 +2888,7 @@ const TeamAnalytics: React.FC = () => {
                   border: '2px solid rgba(147, 51, 234, 0.2)'
                 }}>
                   <div style={{ fontSize: '3rem', fontWeight: '700', color: '#9333ea', marginBottom: '1rem' }}>
-                    {analyticsData.analytics.loginStats.monthlyLogins}
+                    {analyticsData?.analytics?.loginStats?.monthlyLogins || 0}
                   </div>
                   <div style={{ fontSize: '1rem', color: '#6b7280', fontWeight: '600' }}>
                     This Month
@@ -2560,7 +2973,10 @@ const TeamAnalytics: React.FC = () => {
                 {['week', 'month', 'year', 'custom'].map((range) => (
                   <button
                     key={range}
-                    onClick={() => setWorkReadinessDateRange(range as any)}
+                    onClick={() => {
+                      console.log('🔄 Date range button clicked:', range);
+                      setWorkReadinessDateRange(range as any);
+                    }}
                     style={{
                       padding: window.innerWidth <= 768 ? '0.25rem 0.5rem' : '0.5rem 1rem',
                       borderRadius: '0.5rem',
@@ -2669,12 +3085,21 @@ const TeamAnalytics: React.FC = () => {
                 {(() => {
                   const completed = analyticsData.analytics.workReadinessStats.completed || 0;
                   const pending = analyticsData.analytics.workReadinessStats.pending || 0;
-                  const notStarted = analyticsData.analytics.workReadinessStats.notStarted || 
-                    ((analyticsData.analytics.workReadinessStats.total || 0) - 
-                     ((analyticsData.analytics.workReadinessStats.completed || 0) + 
-                      (analyticsData.analytics.workReadinessStats.pending || 0)));
+                  const overdue = analyticsData.analytics.workReadinessStats.overdue || 0;
+                  const cancelled = analyticsData.analytics.workReadinessStats.cancelled || 0;
                   
-                  const total = completed + pending + notStarted;
+                  const total = completed + pending + overdue + cancelled;
+                  
+                  console.log('📊 Pie Chart Data:', {
+                    completed,
+                    pending,
+                    overdue,
+                    cancelled,
+                    total,
+                    dateRange: workReadinessDateRange,
+                    startDate: workReadinessStartDate?.toISOString().split('T')[0],
+                    endDate: workReadinessEndDate?.toISOString().split('T')[0]
+                  });
                   
                   // If no data, show empty state
                   if (total === 0) {
@@ -2714,18 +3139,20 @@ const TeamAnalytics: React.FC = () => {
                   return (
                     <Pie
                       data={{
-                        labels: ['Completed', 'Pending', 'Not Started'],
+                        labels: ['Completed', 'Pending', 'Overdue', 'Cancelled'],
                         datasets: [{
-                          data: [completed, pending, notStarted],
+                          data: [completed, pending, overdue, cancelled],
                           backgroundColor: [
                             'rgba(34, 197, 94, 0.8)', // Green for completed
                             'rgba(245, 158, 11, 0.8)', // Orange for pending
-                            'rgba(239, 68, 68, 0.8)' // Red for not started
+                            'rgba(239, 68, 68, 0.8)', // Red for overdue
+                            'rgba(107, 114, 128, 0.8)' // Gray for cancelled
                           ],
                           borderColor: [
                             'rgba(34, 197, 94, 1)',
                             'rgba(245, 158, 11, 1)',
-                            'rgba(239, 68, 68, 1)' // Red border for not started
+                            'rgba(239, 68, 68, 1)', // Red border for overdue
+                            'rgba(107, 114, 128, 1)' // Gray border for cancelled
                           ],
                           borderWidth: 2,
                           hoverOffset: 8
@@ -2816,12 +3243,26 @@ const TeamAnalytics: React.FC = () => {
                   borderRadius: '0.5rem',
                   border: '1px solid #fecaca'
                 }}>
-                  <div style={{ fontSize: '0.875rem', color: '#991b1b', fontWeight: '600' }}>Not Started</div>
+                  <div style={{ fontSize: '0.875rem', color: '#991b1b', fontWeight: '600' }}>Overdue</div>
                   <div style={{ fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem', color: '#991b1b', fontWeight: '700' }}>
-                    {analyticsData.analytics.workReadinessStats.notStarted || 
-                     ((analyticsData.analytics.workReadinessStats.total || 0) - 
-                      ((analyticsData.analytics.workReadinessStats.completed || 0) + 
-                       (analyticsData.analytics.workReadinessStats.pending || 0)))}
+                    {analyticsData.analytics.workReadinessStats.overdue || 0}
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: '#991b1b', fontWeight: '500' }}>
+                    {analyticsData.analytics.workReadinessStats.overduePercentage || 0}%
+                  </div>
+                </div>
+                <div style={{
+                  backgroundColor: '#f9fafb',
+                  padding: '1rem',
+                  borderRadius: '0.5rem',
+                  border: '1px solid #d1d5db'
+                }}>
+                  <div style={{ fontSize: '0.875rem', color: '#6b7280', fontWeight: '600' }}>Cancelled</div>
+                  <div style={{ fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem', color: '#6b7280', fontWeight: '700' }}>
+                    {analyticsData.analytics.workReadinessStats.cancelled || 0}
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: '#6b7280', fontWeight: '500' }}>
+                    {analyticsData.analytics.workReadinessStats.cancelledPercentage || 0}%
                   </div>
                 </div>
               </div>
@@ -3064,7 +3505,8 @@ const TeamAnalytics: React.FC = () => {
                   const monthlyLogins = analyticsData.analytics.loginStats.monthlyLogins || 0;
                   const dailyBreakdown = analyticsData.analytics.loginStats.dailyBreakdown || [];
                   
-                  const total = todayLogins + weeklyLogins + monthlyLogins;
+                  // Use totalLogins or check if any data exists
+                  const total = analyticsData.analytics.loginStats.totalLogins || 0;
                   
                   // If no data, show empty state
                   if (total === 0) {

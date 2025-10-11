@@ -671,6 +671,13 @@ const TaskManagementBoard: React.FC = () => {
   }
 
   if (error) {
+    // Check if it's a "case not found" error
+    if (error.includes('not found') || error.includes('Failed to load case details')) {
+      // Use navigate instead of NotFound component
+      navigate('/not-found');
+      return null;
+    }
+    
     return (
       <Box p={3}>
         <Typography color="error">{error}</Typography>

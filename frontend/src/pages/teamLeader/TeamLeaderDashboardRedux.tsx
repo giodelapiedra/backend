@@ -33,7 +33,7 @@ import {
   Timeline
 } from '@mui/icons-material';
 import StatCard from '../../components/StatCard';
-import TrendChart from '../../components/TrendChart';
+// TrendChart moved inline to TeamAnalytics.tsx
 import RecentActivityItem from '../../components/RecentActivityItem';
 import TeamKPIDashboard from '../../components/TeamKPIDashboard';
 import MonthlyAssignmentTracking from '../../components/MonthlyAssignmentTracking';

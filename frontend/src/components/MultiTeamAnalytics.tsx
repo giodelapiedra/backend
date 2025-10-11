@@ -1,4 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, memo } from 'react';
+import { DateRangeHandler } from '../utils/dateRangeHandler';
+import { KPI_WEIGHTS, HEALTH_SCORE_WEIGHTS, READINESS_SCORES } from '../utils/kpiConstants';
+import { validateTeamMetrics, validateDateRange } from '../utils/metricsValidator';
 import {
   Box,
   Card,
@@ -34,9 +37,7 @@ import {
   DialogActions,
   Button,
   TextField,
-  Pagination,
-  ToggleButtonGroup,
-  ToggleButton
+  Pagination
 } from '@mui/material';
 import { useTheme, useMediaQuery } from '@mui/material';
 import {
@@ -59,8 +60,7 @@ import {
   Visibility,
   Close,
   Refresh,
-  CalendarToday,
-  DateRange as DateRangeIcon
+  CalendarToday
 } from '@mui/icons-material';
 import { dataClient } from '../lib/supabase';
 import PerformanceLineChart from './PerformanceLineChart';
@@ -137,7 +137,7 @@ interface TeamLeaderPerformance {
   trendDirection: 'up' | 'down' | 'stable';
 }
 
-const MultiTeamAnalytics: React.FC = () => {
+const MultiTeamAnalytics: React.FC = memo(() => {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const [loading, setLoading] = useState(false);
@@ -161,7 +161,7 @@ const MultiTeamAnalytics: React.FC = () => {
     const phtTime = new Date(now.getTime() + (phtOffset * 60 * 1000));
     return phtTime.toISOString().split('T')[0];
   });
-  const [dateRangeMode, setDateRangeMode] = useState<'single' | 'range'>('single');
+  const [dateRangeMode, setDateRangeMode] = useState<'single' | 'range' | 'month'>('range');
   const [startDate, setStartDate] = useState<string>(() => {
     // Get today's date in PHT
     const now = new Date();
@@ -189,16 +189,20 @@ const MultiTeamAnalytics: React.FC = () => {
   
   // Manual refresh function
   const handleManualRefresh = () => {
-    console.log('🔄 Manual refresh triggered');
-    const cacheKey = dateRangeMode === 'range' 
-      ? `range_${startDate}_${endDate}`
-      : `data_${selectedDate}`;
-    cacheRef.current.delete(cacheKey);
-    console.log('🗑️ Cache cleared for key:', cacheKey);
+    console.log('🔄 Manual refresh triggered - CLEARING ALL CACHE');
+    // Clear ALL cache to ensure fresh data
+    cacheRef.current.clear();
+    console.log('🗑️ All cache cleared');
     fetchMultiTeamData();
   };
 
   useEffect(() => {
+    console.log('🔄 Date changed, fetching new data...', { 
+      dateRangeMode, 
+      startDate, 
+      endDate, 
+      selectedDate 
+    });
     const timer = setTimeout(() => {
       fetchMultiTeamData();
     }, 250); // debounce to reduce query spam
@@ -219,7 +223,7 @@ const MultiTeamAnalytics: React.FC = () => {
     return () => clearInterval(refreshInterval);
   }, [selectedDate, dateRangeMode, startDate, endDate]);
 
-  const fetchMultiTeamData = async () => {
+  const fetchMultiTeamData = useCallback(async () => {
     setLoading(true);
     setError(null);
     
@@ -277,6 +281,24 @@ const MultiTeamAnalytics: React.FC = () => {
         // Range mode: Use user-selected range
         queryStartDate = startDate;
         queryEndDate = endDate;
+      } else if (dateRangeMode === 'month') {
+        // Month mode: Get all data for the selected month
+        const yearMonth = selectedDate.substring(0, 7); // YYYY-MM
+        const year = parseInt(yearMonth.split('-')[0]);
+        const month = parseInt(yearMonth.split('-')[1]) - 1; // JS months are 0-indexed
+        
+        // First day of month
+        const startDateObj = new Date(year, month, 1);
+        startDateObj.setHours(0, 0, 0, 0);
+        
+        // Last day of month
+        const endDateObj = new Date(year, month + 1, 0);
+        endDateObj.setHours(23, 59, 59, 999);
+        
+        queryStartDate = startDateObj.toISOString().split('T')[0];
+        queryEndDate = endDateObj.toISOString().split('T')[0];
+        
+        console.log(`📅 Month mode: ${yearMonth} - from ${queryStartDate} to ${queryEndDate}`);
       } else {
         // Single date mode: Get 30 days before selected date for comprehensive KPI
         const endDateObj = new Date(selectedDate);
@@ -290,14 +312,33 @@ const MultiTeamAnalytics: React.FC = () => {
         queryEndDate = selectedDate;
       }
       
-      console.log('📅 Date range for queries:', { queryStartDate, queryEndDate, selectedDate });
+      console.log('📅 Date range for queries:', { 
+        queryStartDate, 
+        queryEndDate, 
+        selectedDate,
+        dateRangeMode,
+        startDate,
+        endDate 
+      });
+      
+      // ⏰ IMPORTANT: Convert PHT dates to UTC for database queries (PHT is UTC+8)
+      // Using centralized DateRangeHandler for consistent timezone conversion
+      const dateHandler = new DateRangeHandler(queryStartDate, queryEndDate);
+      const { startDateUTC, endDateUTC } = dateHandler.toUTC();
+      
+      console.log('🌏 PHT to UTC conversion:', {
+        phtStart: `${queryStartDate}T00:00:00+08:00`,
+        utcStart: startDateUTC,
+        phtEnd: `${queryEndDate}T23:59:59+08:00`,
+        utcEnd: endDateUTC
+      });
       
       // Get work readiness for the date range
       const wrPromise = dataClient
         .from('work_readiness')
         .select('id, worker_id, readiness_level, submitted_at')
-        .gte('submitted_at', `${queryStartDate}T00:00:00.000Z`)
-        .lte('submitted_at', `${queryEndDate}T23:59:59.999Z`);
+        .gte('submitted_at', startDateUTC)
+        .lte('submitted_at', endDateUTC);
 
       // Fetch assignments for the date range (to include overdue ones)
       const aPromise = dataClient
@@ -306,24 +347,26 @@ const MultiTeamAnalytics: React.FC = () => {
         .gte('assigned_date', queryStartDate)
         .lte('assigned_date', queryEndDate);
         
-      console.log('🔍 Database query filters:', {
-        workReadiness: `submitted_at >= ${queryStartDate}T00:00:00.000Z AND submitted_at <= ${queryEndDate}T23:59:59.999Z`,
-        assignments: `assigned_date >= ${queryStartDate} AND assigned_date <= ${queryEndDate}`
+      console.log('🔍 Database query filters (PHT converted to UTC):', {
+        workReadiness: `submitted_at >= ${startDateUTC} AND submitted_at <= ${endDateUTC}`,
+        assignments: `assigned_date >= ${queryStartDate} AND assigned_date <= ${queryEndDate}`,
+        cases: `created_at >= ${startDateUTC} AND created_at <= ${endDateUTC}`,
+        unselectedWorkers: `created_at >= ${startDateUTC} AND created_at <= ${endDateUTC}`
       });
 
       // Fetch cases within period (for active case counts)
       const cPromise = dataClient
         .from('cases')
         .select('id, worker_id, status, created_at')
-        .gte('created_at', `${queryStartDate}T00:00:00.000Z`)
-        .lte('created_at', `${queryEndDate}T23:59:59.999Z`);
+        .gte('created_at', startDateUTC)
+        .lte('created_at', endDateUTC);
 
       // Fetch unselected workers data (with valid reasons - these should be excluded from KPI penalties)
       const uPromise = dataClient
         .from('unselected_workers')
         .select('id, worker_id, team_leader_id, reason, notes, created_at')
-        .gte('created_at', `${queryStartDate}T00:00:00.000Z`)
-        .lte('created_at', `${queryEndDate}T23:59:59.999Z`);
+        .gte('created_at', startDateUTC)
+        .lte('created_at', endDateUTC);
 
       const [
         { data: teamLeaders, error: leadersError },
@@ -375,6 +418,15 @@ const MultiTeamAnalytics: React.FC = () => {
         cases: cases?.length || 0,
         unselectedWorkers: unselectedWorkers?.length || 0
       });
+      
+      // Show sample assignment dates from database
+      if (assignments && assignments.length > 0) {
+        console.log('🔍 Sample assignment dates from database:');
+        const uniqueDates = Array.from(new Set(assignments.map((a: any) => a.assigned_date))).sort();
+        console.log('   All unique dates:', uniqueDates);
+        console.log('   Date range we want:', `${startDate} to ${endDate}`);
+        console.log('   Total assignments fetched:', assignments.length);
+      }
 
       const processedTeamPerformance = processTeamPerformance(
         teamLeaders || [],
@@ -432,9 +484,9 @@ const MultiTeamAnalytics: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedDate, dateRangeMode, startDate, endDate]);
 
-  const generateStrategicInsights = (
+  const generateStrategicInsights = useCallback((
     teams: TeamPerformance[],
     leaders: TeamLeaderPerformance[],
     metrics: MultiTeamMetrics | null
@@ -514,11 +566,11 @@ const MultiTeamAnalytics: React.FC = () => {
     }
 
     return out;
-  };
+  }, []);
 
   // No period filter; daily filter only
 
-  const processTeamPerformance = (
+  const processTeamPerformance = useCallback((
     teamLeaders: any[],
     workers: any[],
     workReadiness: any[],
@@ -540,58 +592,115 @@ const MultiTeamAnalytics: React.FC = () => {
       );
       const teamUnselected = unselectedWorkers.filter((u: any) => u.team_leader_id === leader.id);
 
-      // Daily-based metrics
+      // Get metrics based on date range mode
       const today = selectedDate; // already YYYY-MM-DD
-      const assignmentsToday = teamAssignments.filter((a: any) => a.assigned_date && a.assigned_date.startsWith(today));
+      
+      // IMPORTANT FIX: Use proper date filtering based on dateRangeMode
+      let filteredAssignments;
+      if (dateRangeMode === 'range') {
+        // For date range mode - use all assignments within the selected date range
+        // Normalize dates to YYYY-MM-DD format for proper comparison
+        filteredAssignments = teamAssignments.filter((a: any) => {
+          if (!a.assigned_date) return false;
+          // Extract date part only (YYYY-MM-DD) to handle both date and datetime formats
+          const assignedDate = a.assigned_date.split('T')[0];
+          return assignedDate >= startDate && assignedDate <= endDate;
+        });
+        
+        console.log(`🔍 Team ${leader.first_name} ${leader.last_name}:`);
+        console.log(`   📅 Date range: ${startDate} to ${endDate}`);
+        console.log(`   📊 Total team assignments: ${teamAssignments.length}`);
+        console.log(`   ✅ Filtered assignments in range: ${filteredAssignments.length}`);
+        
+        // Debug: Show sample assignment dates
+        if (teamAssignments.length > 0) {
+          const sampleDates = teamAssignments.slice(0, 5).map(a => ({
+            date: a.assigned_date,
+            normalized: a.assigned_date ? a.assigned_date.split('T')[0] : 'null',
+            inRange: a.assigned_date ? (a.assigned_date.split('T')[0] >= startDate && a.assigned_date.split('T')[0] <= endDate) : false
+          }));
+          console.log(`   📋 Sample assignment dates:`, sampleDates);
+        }
+      } else if (dateRangeMode === 'month') {
+        // For month mode - get all assignments in the current month
+        const yearMonth = today.substring(0, 7); // Get YYYY-MM part
+        filteredAssignments = teamAssignments.filter((a: any) => 
+          a.assigned_date && a.assigned_date.startsWith(yearMonth)
+        );
+        console.log(`🔍 Using month mode: ${yearMonth}`);
+      } else {
+        // For day mode (default) - only get assignments for the selected day
+        filteredAssignments = teamAssignments.filter((a: any) => 
+          a.assigned_date && a.assigned_date === today
+        );
+        console.log(`🔍 Using day mode: ${today}`);
+      }
       
       // CRITICAL FIX: Exclude cancelled assignments from all calculations
-      const validAssignmentsToday = assignmentsToday.filter((a: any) => a.status !== 'cancelled');
-      const assignedWorkerIdsToday = new Set(validAssignmentsToday.map((a: any) => a.worker_id));
-      const unselectedWorkerIdsToday = new Set(teamUnselected.map((u: any) => u.worker_id));
+      const validAssignments = filteredAssignments.filter((a: any) => a.status !== 'cancelled');
+      const assignedWorkerIds = new Set(validAssignments.map((a: any) => a.worker_id));
+      const unselectedWorkerIds = new Set(teamUnselected.map((u: any) => u.worker_id));
 
-      // Assigned today (excluding unselected with reasons AND cancelled assignments)
-      const assignedTodayCount = Array.from(assignedWorkerIdsToday).filter((id: any) => !unselectedWorkerIdsToday.has(id)).length;
+      // IMPORTANT: For date range mode, count TOTAL ASSIGNMENTS not unique workers
+      // This ensures we count all assignments across all days in the range
+      const assignedTodayCount = validAssignments.filter((a: any) => 
+        !unselectedWorkerIds.has(a.worker_id)
+      ).length;
 
-      // Completed today = completed assignments among those assigned today (excluding cancelled)
-      const completedToday = validAssignmentsToday.filter((a: any) => a.status === 'completed').length;
+      // Completed count = completed assignments among those assigned (excluding cancelled)
+      const completedToday = validAssignments.filter((a: any) => 
+        a.status === 'completed' && !unselectedWorkerIds.has(a.worker_id)
+      ).length;
 
       // Compliance today = completedToday / assignedTodayCount (cancelled assignments excluded)
       const completionRate = assignedTodayCount > 0 ? (completedToday / assignedTodayCount) * 100 : 0;
 
-      const cancelledToday = assignmentsToday.filter((a: any) => a.status === 'cancelled').length;
+      const cancelledToday = filteredAssignments.filter((a: any) => a.status === 'cancelled').length;
       
       console.log(`🔍 Team ${leader.team || 'Unassigned'} (${leader.first_name} ${leader.last_name}):`, {
         today,
-        totalAssignmentsToday: assignmentsToday.length,
-        validAssignmentsToday: validAssignmentsToday.length,
-        cancelledAssignmentsToday: cancelledToday,
-        assignmentsTodayData: assignmentsToday.map(a => ({
+        dateRangeMode,
+        dateRange: `${startDate} to ${endDate}`,
+        totalFilteredAssignments: filteredAssignments.length,
+        validFilteredAssignments: validAssignments.length,
+        cancelledAssignments: cancelledToday,
+        uniqueWorkers: assignedWorkerIds.size,
+        totalAssignmentsCount: assignedTodayCount,
+        completedAssignments: completedToday,
+        completionRate: completionRate.toFixed(1) + '%',
+        sampleAssignments: filteredAssignments.slice(0, 3).map(a => ({
+          date: a.assigned_date,
           worker_id: a.worker_id,
-          status: a.status,
-          assigned_date: a.assigned_date,
-          completed_at: a.completed_at
-        })),
-        assignedWorkerIdsToday: Array.from(assignedWorkerIdsToday),
-        unselectedWorkerIdsToday: Array.from(unselectedWorkerIdsToday),
-        assignedTodayCount,
-        completedToday,
-        completionRate: completionRate.toFixed(1) + '%'
+          status: a.status
+        }))
       });
 
+      // For dashboard display - total assignments for the filtered period
       const todayAssignments = assignedTodayCount;
 
       // Activity today includes assignments created today and readiness submissions today
+      // Note: readinessToday is always based on the selected date regardless of dateRangeMode
       const readinessToday = teamReadiness.filter((wr: any) => typeof wr.submitted_at === 'string' && wr.submitted_at.startsWith(today)).length;
       const activityTodayCount = todayAssignments + readinessToday;
 
       // Calculate unassigned workers (total workers - assigned workers - unselected workers)
       const unassignedWorkers = teamWorkers.filter(w => 
-        !assignedWorkerIdsToday.has(w.id) && !unselectedWorkerIdsToday.has(w.id)
+        !assignedWorkerIds.has(w.id) && !unselectedWorkerIds.has(w.id)
       ).length;
 
       const readinessScores = teamReadiness.map((wr: any) => {
-        const level = wr.readiness_level;
-        return level === 'fit' ? 100 : level === 'minor' ? 75 : level === 'not_fit' ? 25 : 0;
+        const level = wr.readiness_level || 'unknown';
+        // Use constants instead of magic numbers
+        switch (level.toLowerCase()) {
+          case 'fit':
+            return READINESS_SCORES.FIT;
+          case 'minor':
+            return READINESS_SCORES.MINOR;
+          case 'not_fit':
+            return READINESS_SCORES.NOT_FIT;
+          default:
+            return READINESS_SCORES.UNKNOWN;
+        }
       });
       
       // ✅ USE BACKEND KPI DATA FOR HEALTH SCORE
@@ -669,9 +778,9 @@ const MultiTeamAnalytics: React.FC = () => {
         lastUpdated: new Date().toISOString()
       };
     });
-  };
+  }, [dateRangeMode, startDate, endDate, selectedDate]);
 
-  const calculateMultiTeamMetrics = (teamPerformance: TeamPerformance[]): MultiTeamMetrics => {
+  const calculateMultiTeamMetrics = useCallback((teamPerformance: TeamPerformance[]): MultiTeamMetrics => {
     const totalTeams = teamPerformance.length;
     const totalWorkers = teamPerformance.reduce((sum, team) => sum + team.workerCount, 0);
     const totalTeamLeaders = totalTeams;
@@ -723,9 +832,9 @@ const MultiTeamAnalytics: React.FC = () => {
       topPerformingTeam,
       needsAttentionTeam
     };
-  };
+  }, []);
 
-  const calculateTeamLeaderPerformance = (
+  const calculateTeamLeaderPerformance = useCallback((
     teamLeaders: any[],
     workers: any[],
     workReadiness: any[],
@@ -901,7 +1010,7 @@ const MultiTeamAnalytics: React.FC = () => {
         trendDirection
       };
     });
-  };
+  }, []);
 
 
   const getTrendIcon = (trend: string) => {
@@ -974,146 +1083,63 @@ const MultiTeamAnalytics: React.FC = () => {
             flexDirection: 'column',
             gap: 2
           }}>
-            {/* Date Mode Toggle */}
-            <ToggleButtonGroup
-              value={dateRangeMode}
-              exclusive
-              onChange={(e, newMode) => {
-                if (newMode !== null) {
-                  setDateRangeMode(newMode);
-                  // Reset to today when switching modes (PHT)
-                  if (newMode === 'single') {
-                    const now = new Date();
-                    const phtOffset = 8 * 60; // 8 hours in minutes
-                    const phtTime = new Date(now.getTime() + (phtOffset * 60 * 1000));
-                    setSelectedDate(phtTime.toISOString().split('T')[0]);
-                  } else {
-                    const now = new Date();
-                    const phtOffset = 8 * 60; // 8 hours in minutes
-                    const phtTime = new Date(now.getTime() + (phtOffset * 60 * 1000));
-                    const today = phtTime.toISOString().split('T')[0];
-                    setStartDate(today);
-                    setEndDate(today);
-                  }
-                }
-              }}
-              size="small"
-              sx={{
-                '& .MuiToggleButton-root': {
-                  textTransform: 'none',
-                  fontSize: '0.813rem',
-                  fontWeight: 500,
-                  px: 2,
-                  py: 0.75,
-                  border: '1px solid #e5e7eb',
-                  color: '#6b7280',
-                  '&.Mui-selected': {
-                    bgcolor: '#eef2ff',
-                    color: '#6366f1',
-                    borderColor: '#c7d2fe',
-                    '&:hover': {
-                      bgcolor: '#e0e7ff'
-                    }
-                  },
-                  '&:hover': {
-                    bgcolor: '#f9fafb'
-                  }
-                }
-              }}
-            >
-              <ToggleButton value="single">
-                <CalendarToday sx={{ fontSize: 16, mr: 0.75 }} />
-                Single Date
-              </ToggleButton>
-              <ToggleButton value="range">
-                <DateRangeIcon sx={{ fontSize: 16, mr: 0.75 }} />
-                Date Range
-              </ToggleButton>
-            </ToggleButtonGroup>
-
-            {/* Date Inputs */}
+            {/* Date Range Inputs */}
             <Box sx={{ 
               display: 'flex', 
               alignItems: 'center', 
               gap: 1.5,
               flexWrap: 'wrap'
             }}>
-              {dateRangeMode === 'single' ? (
-          <TextField
-            type="date"
-            size="small"
-                  label="Date"
-            value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)}
-            InputLabelProps={{ shrink: true }}
-            sx={{
-                    minWidth: { xs: '100%', sm: 180 },
-                    '& .MuiOutlinedInput-root': {
-                      bgcolor: 'white',
-                      fontSize: '0.875rem',
-                      '& fieldset': { borderColor: '#e5e7eb' },
-                      '&:hover fieldset': { borderColor: '#d1d5db' }
-              }
-            }}
-          />
-              ) : (
-                <>
-                  <TextField
-                    type="date"
-                    size="small"
-                    label="Start Date"
-                    value={startDate}
-                    onChange={(e) => setStartDate(e.target.value)}
-                    InputLabelProps={{ shrink: true }}
-                    sx={{
-                      minWidth: { xs: '100%', sm: 160 },
-                      '& .MuiOutlinedInput-root': {
-                        bgcolor: 'white',
-                        fontSize: '0.875rem',
-                        '& fieldset': { borderColor: '#e5e7eb' },
-                        '&:hover fieldset': { borderColor: '#d1d5db' }
-                      }
-                    }}
-                  />
-                  <Typography sx={{ color: '#9ca3af', fontSize: '0.875rem', display: { xs: 'none', sm: 'block' } }}>
-                    to
-                  </Typography>
-                  <TextField
-                    type="date"
-                    size="small"
-                    label="End Date"
-                    value={endDate}
-                    onChange={(e) => setEndDate(e.target.value)}
-                    InputLabelProps={{ shrink: true }}
-                    inputProps={{ min: startDate }}
-                    sx={{
-                      minWidth: { xs: '100%', sm: 160 },
-                      '& .MuiOutlinedInput-root': {
-                        bgcolor: 'white',
-                        fontSize: '0.875rem',
-                        '& fieldset': { borderColor: '#e5e7eb' },
-                        '&:hover fieldset': { borderColor: '#d1d5db' }
-                      }
-                    }}
-                  />
-                </>
-              )}
+              <TextField
+                type="date"
+                size="small"
+                label="Start Date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                InputLabelProps={{ shrink: true }}
+                sx={{
+                  minWidth: { xs: '100%', sm: 160 },
+                  '& .MuiOutlinedInput-root': {
+                    bgcolor: 'white',
+                    fontSize: '0.875rem',
+                    '& fieldset': { borderColor: '#e5e7eb' },
+                    '&:hover fieldset': { borderColor: '#d1d5db' }
+                  }
+                }}
+              />
+              <Typography sx={{ color: '#9ca3af', fontSize: '0.875rem', display: { xs: 'none', sm: 'block' } }}>
+                to
+              </Typography>
+              <TextField
+                type="date"
+                size="small"
+                label="End Date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                InputLabelProps={{ shrink: true }}
+                inputProps={{ min: startDate }}
+                sx={{
+                  minWidth: { xs: '100%', sm: 160 },
+                  '& .MuiOutlinedInput-root': {
+                    bgcolor: 'white',
+                    fontSize: '0.875rem',
+                    '& fieldset': { borderColor: '#e5e7eb' },
+                    '&:hover fieldset': { borderColor: '#d1d5db' }
+                  }
+                }}
+              />
               
           <Button 
             variant="outlined" 
                 size="small"
                 onClick={() => {
-                  // Get today's date in PHT
+                  // Get today's date in PHT and set as date range
                   const now = new Date();
                   const phtOffset = 8 * 60; // 8 hours in minutes
                   const phtTime = new Date(now.getTime() + (phtOffset * 60 * 1000));
                   const today = phtTime.toISOString().split('T')[0];
-                  if (dateRangeMode === 'single') {
-                    setSelectedDate(today);
-                  } else {
-                    setStartDate(today);
-                    setEndDate(today);
-                  }
+                  setStartDate(today);
+                  setEndDate(today);
                 }}
             sx={{
                   minWidth: { xs: '100%', sm: 'auto' },
@@ -3146,6 +3172,9 @@ const MultiTeamAnalytics: React.FC = () => {
     </Box>
     </LayoutWithSidebar>
   );
-};
+});
+
+// Add display name for better debugging
+MultiTeamAnalytics.displayName = 'MultiTeamAnalytics';
 
 export default MultiTeamAnalytics;

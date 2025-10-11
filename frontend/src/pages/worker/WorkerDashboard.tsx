@@ -99,6 +99,8 @@ const WorkerDashboard: React.FC = memo(() => {
   const [showCycleWelcome, setShowCycleWelcome] = useState(false);
   const [cycleWelcomeMessage, setCycleWelcomeMessage] = useState('');
   const [currentAssignment, setCurrentAssignment] = useState<any>(null);
+  const [hasCompletedExercisesToday, setHasCompletedExercisesToday] = useState(false);
+  const [exerciseCompletionTime, setExerciseCompletionTime] = useState<string | null>(null);
 
   // Helper function to get PH time date string (UTC+8)
   const getPHToday = () => {
@@ -141,6 +143,16 @@ const WorkerDashboard: React.FC = memo(() => {
     
     fetchWorkerData();
     checkTodaySubmission();
+    checkExerciseCompletion();
+    
+    // Refresh exercise completion status when page becomes visible
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        checkExerciseCompletion();
+      }
+    };
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     
     // Handle login cycle for workers
     if (user?.role === 'worker') {
@@ -149,6 +161,11 @@ const WorkerDashboard: React.FC = memo(() => {
     } else {
       console.log('❌ Not a worker, skipping login cycle');
     }
+    
+    // Cleanup
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, [fetchWorkerData, user?.id, user?.role]);
 
   const handleLoginCycle = async () => {
@@ -296,6 +313,74 @@ const WorkerDashboard: React.FC = memo(() => {
       setTodaySubmission(null);
     }
   };
+
+  const checkExerciseCompletion = useCallback(async () => {
+    try {
+      if (!user?.id) return;
+      
+      // Check if worker has completed their rehabilitation exercises today
+      const { data: plans, error } = await dataClient
+        .from('rehabilitation_plans')
+        .select('id, daily_completions, exercises')
+        .eq('worker_id', user.id)
+        .eq('status', 'active')
+        .limit(1);
+
+      if (error || !plans || plans.length === 0) {
+        setHasCompletedExercisesToday(false);
+        setExerciseCompletionTime(null);
+        return;
+      }
+
+      const plan = plans[0];
+      const now = new Date();
+      const currentHour = now.getHours();
+      
+      // Determine which date to check (using 6:00 AM cutoff)
+      let checkDate: string;
+      if (currentHour < 6) {
+        const yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+        checkDate = yesterday.toISOString().split('T')[0];
+      } else {
+        checkDate = now.toISOString().split('T')[0];
+      }
+
+      const dailyCompletions = plan.daily_completions || [];
+      const todayCompletion = dailyCompletions.find((dc: any) => dc.date === checkDate);
+
+      if (todayCompletion && todayCompletion.exercises) {
+        const totalExercises = plan.exercises ? plan.exercises.length : 0;
+        const completedExercises = todayCompletion.exercises.filter((e: any) => e.status === 'completed');
+        
+        // Check if all exercises are completed
+        if (totalExercises > 0 && completedExercises.length === totalExercises) {
+          setHasCompletedExercisesToday(true);
+          
+          // Get the completion time from the last completed exercise
+          const lastCompleted = completedExercises[completedExercises.length - 1];
+          if (lastCompleted && lastCompleted.completedAt) {
+            const completionDate = new Date(lastCompleted.completedAt);
+            setExerciseCompletionTime(completionDate.toLocaleTimeString('en-US', {
+              hour: 'numeric',
+              minute: '2-digit',
+              hour12: true
+            }));
+          }
+        } else {
+          setHasCompletedExercisesToday(false);
+          setExerciseCompletionTime(null);
+        }
+      } else {
+        setHasCompletedExercisesToday(false);
+        setExerciseCompletionTime(null);
+      }
+    } catch (error) {
+      console.error('Error checking exercise completion:', error);
+      setHasCompletedExercisesToday(false);
+      setExerciseCompletionTime(null);
+    }
+  }, [user?.id]);
 
   // Add CSS for animations
   useEffect(() => {
@@ -1318,23 +1403,49 @@ const WorkerDashboard: React.FC = memo(() => {
                 sx={{ 
                   borderRadius: 3,
                   boxShadow: '0 4px 20px rgba(0, 0, 0, 0.08)',
-                  backgroundColor: 'white',
-                  cursor: 'pointer',
+                  backgroundColor: hasCompletedExercisesToday ? '#f0fdf4' : 'white',
+                  cursor: hasCompletedExercisesToday ? 'not-allowed' : 'pointer',
                   transition: 'all 0.3s ease',
-                  '&:hover': {
+                  opacity: hasCompletedExercisesToday ? 0.8 : 1,
+                  '&:hover': hasCompletedExercisesToday ? {} : {
                     transform: 'translateY(-2px)',
                     boxShadow: '0 8px 30px rgba(0, 0, 0, 0.12)',
                   }
                 }}
-                onClick={handleRehabPlanClick}
+                onClick={hasCompletedExercisesToday ? undefined : handleRehabPlanClick}
               >
                 <CardContent sx={{ textAlign: 'center', py: 4 }}>
                   <Box sx={{ mb: 2 }}>
-                    <PlayArrow sx={{ fontSize: 48, color: '#1e293b' }} />
+                    {hasCompletedExercisesToday ? (
+                      <CheckCircle sx={{ fontSize: 48, color: '#10b981' }} />
+                    ) : (
+                      <PlayArrow sx={{ fontSize: 48, color: '#1e293b' }} />
+                    )}
                   </Box>
-                  <Typography variant="h5" sx={{ fontWeight: 600, color: '#1e293b' }}>
-                    Recovery Exercises
+                  <Typography variant="h5" sx={{ fontWeight: 600, color: hasCompletedExercisesToday ? '#10b981' : '#1e293b' }}>
+                    {hasCompletedExercisesToday ? 'Exercises Completed Today' : 'Recovery Exercises'}
                   </Typography>
+                  {hasCompletedExercisesToday && (
+                    <Box sx={{ mt: 2 }}>
+                      <Typography variant="body2" sx={{ color: '#059669', fontWeight: 500, mb: 1 }}>
+                        ✅ You completed your exercises at {exerciseCompletionTime || 'Unknown time'}
+                      </Typography>
+                      <Typography variant="caption" sx={{ color: '#6b7280' }}>
+                        Next session available at {(() => {
+                          const now = new Date();
+                          const currentHour = now.getHours();
+                          
+                          // If before 6:00 AM, available later today at 6:00 AM
+                          if (currentHour < 6) {
+                            return 'today at 6:00 AM';
+                          } else {
+                            // Otherwise, available tomorrow at 6:00 AM
+                            return 'tomorrow at 6:00 AM';
+                          }
+                        })()}
+                      </Typography>
+                    </Box>
+                  )}
                 </CardContent>
               </Card>
             </Grid>

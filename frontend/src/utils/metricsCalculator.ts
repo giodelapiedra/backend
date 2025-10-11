@@ -21,9 +21,21 @@ export interface MonthlyMetrics {
   completionRate: number;
   onTimeRate: number;
   averageResponseTime: number;
+  qualityScore: number;
+  totalMembers: number;
+  teamHealthScore: number;
+  highRiskReports: number;
+  caseClosures: number;
+  onTimeSubmissions: number;
+  monthOverMonthChange: {
+    completionRate: number;
+    onTimeRate: number;
+    teamHealth: number;
+    responseTime: number;
+  };
 }
 
-export const calculateMonthlyMetrics = (assignments: AssignmentData[]): MonthlyMetrics => {
+export const calculateMonthlyMetrics = (assignments: AssignmentData[], unselectedWorkers: any[] = []): MonthlyMetrics => {
   const totalAssignments = assignments.length;
   const completedAssignments = assignments.filter(a => a.status === 'completed').length;
   const overdueSubmissions = assignments.filter(a => a.status === 'overdue').length;
@@ -54,6 +66,22 @@ export const calculateMonthlyMetrics = (assignments: AssignmentData[]): MonthlyM
   
   const averageResponseTime = completedWithTime.length > 0 ? totalResponseTime / completedWithTime.length : 0;
   
+  // Calculate quality score based on completion rate and on-time rate
+  const qualityScore = Math.round((completionRate * 0.6) + (onTimeRate * 0.4));
+  
+  // Get unique team members from assignments
+  const uniqueWorkers = new Set(assignments.map(a => a.worker?.id).filter(Boolean));
+  const totalMembers = uniqueWorkers.size;
+  
+  // Calculate team health score based on completion and on-time rates
+  const teamHealthScore = Math.round((completionRate * 0.5) + (onTimeRate * 0.3) + (Math.max(0, 100 - (overdueSubmissions / totalAssignments) * 100) * 0.2));
+  
+  // High risk reports (overdue assignments)
+  const highRiskReports = overdueSubmissions;
+  
+  // Case closures (completed assignments)
+  const caseClosures = completedAssignments;
+  
   return {
     totalAssignments,
     completedAssignments,
@@ -61,6 +89,18 @@ export const calculateMonthlyMetrics = (assignments: AssignmentData[]): MonthlyM
     notStartedAssignments,
     completionRate,
     onTimeRate,
-    averageResponseTime
+    averageResponseTime,
+    qualityScore,
+    totalMembers,
+    teamHealthScore,
+    highRiskReports,
+    caseClosures,
+    onTimeSubmissions,
+    monthOverMonthChange: {
+      completionRate: 0,
+      onTimeRate: 0,
+      teamHealth: 0,
+      responseTime: 0
+    }
   };
 };

@@ -36,6 +36,7 @@ import {
   IconButton,
 } from '@mui/material';
 import { useAuth } from '../contexts/AuthContext.supabase';
+import NotFound from './NotFound';
 import {
   ArrowBack,
   Assignment,
@@ -881,22 +882,7 @@ const CaseDetails: React.FC = () => {
   }
 
   if (!caseData) {
-    return (
-      <LayoutWithSidebar>
-        <Box sx={{ p: 3 }}>
-          <Alert severity="warning" sx={{ mb: 3 }}>
-            Case not found
-          </Alert>
-          <Button
-            variant="outlined"
-            startIcon={<ArrowBack />}
-            onClick={() => navigate('/cases')}
-          >
-            Back to Cases
-          </Button>
-        </Box>
-      </LayoutWithSidebar>
-    );
+    return <NotFound />;
   }
 
   return (

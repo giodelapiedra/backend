@@ -28,28 +28,6 @@ export class CaseAssignmentService {
 
       const caseNumber = caseData.case_number || `CASE-${caseData.id.slice(-6)}`;
       
-      // Get worker details
-      const { data: workerData } = await dataClient
-        .from('users')
-        .select('first_name, last_name')
-        .eq('id', caseData.worker_id)
-        .single();
-
-      const workerName = workerData 
-        ? `${workerData.first_name} ${workerData.last_name}`
-        : 'Unknown Worker';
-
-      // Get case manager details
-      const { data: caseManagerData } = await dataClient
-        .from('users')
-        .select('first_name, last_name')
-        .eq('id', assignmentData.caseManagerId)
-        .single();
-
-      const caseManagerName = caseManagerData 
-        ? `${caseManagerData.first_name} ${caseManagerData.last_name}`
-        : 'Case Manager';
-
       // Send notification to the assigned clinician
       await NotificationService.sendCaseAssignmentNotification(
         assignmentData.clinicianId,

@@ -57,10 +57,6 @@ import {
   Timeline,
   Refresh,
   CalendarToday,
-  Cached,
-  AutoAwesome,
-  Psychology,
-  Speed,
 } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext.supabase';
 import LayoutWithSidebar from '../../components/LayoutWithSidebar';
@@ -163,9 +159,6 @@ const CaseManagerDashboardRedux: React.FC = () => {
   const [notifications, setNotifications] = React.useState<any[]>([]);
   const [unreadNotificationCount, setUnreadNotificationCount] = React.useState(0);
   
-  // Smart cache clear modal state
-  const [smartCacheModal, setSmartCacheModal] = React.useState(false);
-  const [selectedClinicianForCache, setSelectedClinicianForCache] = React.useState<Clinician | null>(null);
   
   // Assignment confirmation modal state
   const [assignmentConfirmationModal, setAssignmentConfirmationModal] = React.useState(false);
@@ -200,7 +193,8 @@ const CaseManagerDashboardRedux: React.FC = () => {
     page: currentPage,
     limit: pageSize,
     search: searchTerm,
-    status: statusFilter
+    status: statusFilter,
+    caseManagerId: user?.id
   });
 
   // Get all cases for accurate stats (same as Site Supervisor)
@@ -208,7 +202,7 @@ const CaseManagerDashboardRedux: React.FC = () => {
     data: allCasesData,
     isLoading: allCasesLoading,
     error: allCasesError
-  } = useGetCasesQuery({});
+  } = useGetCasesQuery({ includeAll: true });
 
   const {
     data: incidentsData,
@@ -223,6 +217,18 @@ const CaseManagerDashboardRedux: React.FC = () => {
   const cases = casesData?.cases || [];
   const allCases = allCasesData?.cases || []; // All cases for accurate stats
   const incidents = incidentsData?.incidents || [];
+  
+  // Debug: Log cases for "Assign Clinician" dialog
+  console.log('=== ASSIGN CLINICIAN DEBUG ===');
+  console.log('Total cases fetched:', cases.length);
+  console.log('User ID:', user?.id);
+  console.log('Cases without clinician:', cases.filter(c => !c.clinician_id).length);
+  console.log('Cases without clinician (details):', cases.filter(c => !c.clinician_id).map(c => ({
+    case_number: c.case_number,
+    case_manager_id: c.case_manager_id,
+    clinician_id: c.clinician_id,
+    status: c.status
+  })));
   const pagination = casesData?.pagination || { page: 1, limit: 10, total: 0, totalPages: 0 };
 
   // Calculate stats (use all cases for accurate count, same as Site Supervisor)
@@ -427,61 +433,6 @@ const CaseManagerDashboardRedux: React.FC = () => {
     }
   }, []);
 
-  // Smart cache clear for specific clinician
-  const smartCacheClearForClinician = useCallback(async (clinician: Clinician) => {
-    try {
-      console.log('SMART CACHE CLEAR FOR CLINICIAN:', clinician.first_name, clinician.last_name);
-      
-      // Clear all browser cache first
-      await clearAllBrowserCache();
-      
-      // Clear all Redux caches and refetch
-      dispatch(casesApi.util.resetApiState());
-      dispatch(incidentsApi.util.resetApiState());
-      refetchCases();
-      refetchIncidents();
-      
-      // Invalidate clinician cases cache to force immediate update
-      dispatch(casesApi.util.invalidateTags([
-        { type: 'Case', id: `clinician-${clinician.id}` },
-        { type: 'Case', id: 'LIST' }
-      ]));
-      
-      // Trigger global cache clear event for clinician
-      const globalCacheClearEvent = new CustomEvent('globalCacheClear', {
-        detail: { 
-          clinicianId: clinician.id,
-          clinicianName: `${clinician.first_name} ${clinician.last_name}`,
-          timestamp: Date.now(),
-          triggeredBy: 'case_manager',
-          triggeredByUser: user?.email || 'Unknown'
-        }
-      });
-      console.log('CASE MANAGER: Dispatching globalCacheClear event:', globalCacheClearEvent.detail);
-      window.dispatchEvent(globalCacheClearEvent);
-      
-      // Also trigger clinician-specific refresh event
-      const clinicianRefreshEvent = new CustomEvent('clinicianDataRefresh', {
-        detail: { 
-          clinicianId: clinician.id,
-          timestamp: Date.now(),
-          cacheCleared: true,
-          triggeredBy: 'case_manager'
-        }
-      });
-      console.log('CASE MANAGER: Dispatching clinicianDataRefresh event:', clinicianRefreshEvent.detail);
-      window.dispatchEvent(clinicianRefreshEvent);
-      
-      // Show success message
-      dispatch(setSuccessMessage(`Smart cache cleared for Dr. ${clinician.first_name} ${clinician.last_name}! Their dashboard will refresh automatically.`));
-      setTimeout(() => dispatch(clearMessages()), 5000);
-      
-      console.log('Smart cache clear completed for clinician:', clinician.id);
-    } catch (error) {
-      console.error('Error in smart cache clear for clinician:', error);
-      dispatch(setError('Failed to clear cache for clinician. Please try again.'));
-    }
-  }, [clearAllBrowserCache, dispatch, refetchCases, refetchIncidents, user?.email]);
 
   // Fetch new data when real-time events occur
   const fetchNewData = useCallback(async () => {
@@ -750,17 +701,22 @@ const CaseManagerDashboardRedux: React.FC = () => {
         notes: ''
       });
       
-      // AUTOMATIC SMART CACHE CLEAR FOR ASSIGNED CLINICIAN
-      console.log('AUTOMATIC SMART CACHE CLEAR FOR ASSIGNED CLINICIAN...');
-      console.log('ASSIGNMENT CONFIRMED: Triggering immediate data refresh for:', assignmentToConfirm.clinician.first_name, assignmentToConfirm.clinician.last_name);
-      console.log('ASSIGNMENT CONFIRMED: Clinician ID:', assignmentToConfirm.clinician.id);
-      await smartCacheClearForClinician(assignmentToConfirm.clinician);
+      // Trigger clinician dashboard refresh
+      console.log('Triggering clinician dashboard refresh...');
+      const clinicianRefreshEvent = new CustomEvent('clinicianDataRefresh', {
+        detail: { 
+          clinicianId: assignmentToConfirm.clinician.id,
+          timestamp: Date.now(),
+          triggeredBy: 'case_manager'
+        }
+      });
+      window.dispatchEvent(clinicianRefreshEvent);
       
     } catch (error) {
       console.error('Error in handleConfirmedAssignment:', error);
       dispatch(setError('An error occurred while assigning the case'));
     }
-  }, [assignmentToConfirm, user, dispatch, smartCacheClearForClinician]);
+  }, [assignmentToConfirm, user, dispatch]);
 
   const handleCaseStatusUpdate = useCallback(async (caseId: string, newStatus: string) => {
     try {
@@ -1067,25 +1023,6 @@ const CaseManagerDashboardRedux: React.FC = () => {
                     Manual Refresh
                   </Button>
 
-                  <Button
-                    variant="contained"
-                    startIcon={<AutoAwesome />}
-                    onClick={() => setSmartCacheModal(true)}
-                    sx={{
-                      background: 'linear-gradient(135deg, #5ba3d6 0%, #4f94cd 100%)',
-                      color: 'white',
-                      fontWeight: 'medium',
-                      borderRadius: 2,
-                      '&:hover': {
-                        background: 'linear-gradient(135deg, #4f94cd 0%, #2d5a87 100%)',
-                        transform: 'translateY(-1px)'
-                      },
-                      boxShadow: '0 4px 15px rgba(91, 163, 214, 0.4)',
-                      transition: 'all 0.2s ease'
-                    }}
-                  >
-                    Smart Clear Cache
-                  </Button>
                 </Box>
               </Box>
             </Box>
@@ -1174,7 +1111,7 @@ const CaseManagerDashboardRedux: React.FC = () => {
                           >
                             <Visibility />
                           </IconButton>
-                          {caseItem.status === 'new' && !caseItem.clinician_id && (
+                          {!caseItem.clinician_id && (
                             <IconButton
                               size="small"
                               onClick={() => {
@@ -1375,11 +1312,17 @@ const CaseManagerDashboardRedux: React.FC = () => {
                   onChange={(e) => setAssignmentForm(prev => ({ ...prev, case: e.target.value }))}
                   label="Case"
                 >
-                  {cases.filter(c => c.status === 'new' && !c.clinician_id && c.case_manager_id === user?.id).map((caseItem) => (
-                    <MenuItem key={caseItem.id} value={caseItem.id}>
-                      {caseItem.case_number} - {caseItem.worker?.first_name} {caseItem.worker?.last_name}
+                  {cases.filter(c => !c.clinician_id).length === 0 ? (
+                    <MenuItem disabled>
+                      No unassigned cases available
                     </MenuItem>
-                  ))}
+                  ) : (
+                    cases.filter(c => !c.clinician_id).map((caseItem) => (
+                      <MenuItem key={caseItem.id} value={caseItem.id}>
+                        {caseItem.case_number} - {caseItem.worker?.first_name} {caseItem.worker?.last_name} ({caseItem.status})
+                      </MenuItem>
+                    ))
+                  )}
                 </Select>
               </FormControl>
 
@@ -1607,7 +1550,7 @@ const CaseManagerDashboardRedux: React.FC = () => {
                     border: '1px solid rgba(255, 255, 255, 0.2)',
                   }}>
                     <Typography variant="subtitle2" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <AutoAwesome sx={{ fontSize: 18 }} />
+                      <CheckCircle sx={{ fontSize: 18, color: '#4caf50' }} />
                       What happens next?
                     </Typography>
                     <Box sx={{ mt: 1 }}>
@@ -1674,204 +1617,6 @@ const CaseManagerDashboardRedux: React.FC = () => {
           </DialogActions>
         </Dialog>
 
-        {/* Smart Cache Clear Modal */}
-        <Dialog
-          open={smartCacheModal}
-          onClose={() => {
-            setSmartCacheModal(false);
-            setSelectedClinicianForCache(null);
-          }}
-          maxWidth="md"
-          fullWidth
-          PaperProps={{
-            sx: {
-              borderRadius: 3,
-              background: 'linear-gradient(135deg, #5ba3d6 0%, #2d5a87 100%)',
-              color: 'white',
-              boxShadow: '0 8px 32px rgba(91, 163, 214, 0.4)'
-            }
-          }}
-        >
-          <DialogTitle sx={{ 
-            textAlign: 'center', 
-            pb: 1,
-            background: 'rgba(255, 255, 255, 0.1)',
-            backdropFilter: 'blur(10px)',
-          }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1 }}>
-              <AutoAwesome sx={{ fontSize: 28 }} />
-              <Typography variant="h5" component="div" sx={{ fontWeight: 'bold' }}>
-                Smart Cache Clear
-              </Typography>
-            </Box>
-            <Typography variant="body2" sx={{ mt: 1, opacity: 0.9 }}>
-              Select a clinician to clear their dashboard cache and force real-time data refresh
-            </Typography>
-          </DialogTitle>
-          
-          <DialogContent sx={{ pt: 3 }}>
-            <Box sx={{ 
-              background: 'rgba(255, 255, 255, 0.1)', 
-              borderRadius: 2, 
-              p: 3,
-              backdropFilter: 'blur(10px)',
-            }}>
-              <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Psychology sx={{ fontSize: 20 }} />
-                Available Clinicians
-              </Typography>
-              
-              <Typography variant="body2" sx={{ mb: 3, opacity: 0.9 }}>
-                Choose a clinician to trigger smart cache clearing. This will:
-              </Typography>
-              
-              <Box sx={{ mb: 3 }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                  <CheckCircle sx={{ fontSize: 16, color: '#4caf50' }} />
-                  <Typography variant="body2">Clear all browser cache for the selected clinician</Typography>
-                </Box>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                  <CheckCircle sx={{ fontSize: 16, color: '#4caf50' }} />
-                  <Typography variant="body2">Force refresh their dashboard data in real-time</Typography>
-                </Box>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                  <CheckCircle sx={{ fontSize: 16, color: '#4caf50' }} />
-                  <Typography variant="body2">Update case counts and notifications instantly</Typography>
-                </Box>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <CheckCircle sx={{ fontSize: 16, color: '#4caf50' }} />
-                  <Typography variant="body2">Ensure data consistency across all dashboards</Typography>
-                </Box>
-              </Box>
-
-              <FormControl fullWidth>
-                <InputLabel sx={{ color: 'white' }}>Select Clinician</InputLabel>
-                <Select
-                  value={selectedClinicianForCache?.id || ''}
-                  onChange={(e) => {
-                    const clinician = clinicians.find(c => c.id === e.target.value);
-                    setSelectedClinicianForCache(clinician || null);
-                  }}
-                  label="Select Clinician"
-                  sx={{
-                    color: 'white',
-                    '& .MuiOutlinedInput-notchedOutline': {
-                      borderColor: 'rgba(255, 255, 255, 0.3)',
-                    },
-                    '&:hover .MuiOutlinedInput-notchedOutline': {
-                      borderColor: 'rgba(255, 255, 255, 0.5)',
-                    },
-                    '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
-                      borderColor: 'white',
-                    },
-                    '& .MuiSvgIcon-root': {
-                      color: 'white',
-                    },
-                  }}
-                >
-                  {clinicians.map((clinician) => (
-                    <MenuItem key={clinician.id} value={clinician.id}>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, width: '100%' }}>
-                        <Avatar sx={{ 
-                          width: 32, 
-                          height: 32, 
-                          background: 'linear-gradient(45deg, #4caf50, #8bc34a)',
-                          fontSize: 14,
-                        }}>
-                          {clinician.first_name[0]}{clinician.last_name[0]}
-                        </Avatar>
-                        <Box sx={{ flex: 1 }}>
-                          <Typography variant="body1" sx={{ fontWeight: 'medium' }}>
-                            Dr. {clinician.first_name} {clinician.last_name}
-                          </Typography>
-                          <Typography variant="caption" sx={{ opacity: 0.8 }}>
-                            {clinician.specialty || 'General Practice'} • {clinician.is_available ? 'Available' : 'Busy'}
-                          </Typography>
-                        </Box>
-                        <Chip
-                          label={clinician.is_available ? 'Available' : 'Busy'}
-                          size="small"
-                          color={clinician.is_available ? 'success' : 'warning'}
-                          variant="outlined"
-                        />
-                      </Box>
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-
-              {selectedClinicianForCache && (
-                <Box sx={{ 
-                  mt: 3, 
-                  p: 2, 
-                  background: 'rgba(255, 255, 255, 0.1)', 
-                  borderRadius: 2,
-                  border: '1px solid rgba(255, 255, 255, 0.2)',
-                }}>
-                  <Typography variant="subtitle2" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <Speed sx={{ fontSize: 18 }} />
-                    Cache Clear Preview
-                  </Typography>
-                  <Typography variant="body2" sx={{ opacity: 0.9 }}>
-                    Ready to clear cache for <strong>Dr. {selectedClinicianForCache.first_name} {selectedClinicianForCache.last_name}</strong>
-                  </Typography>
-                  <Typography variant="caption" sx={{ opacity: 0.7, display: 'block', mt: 1 }}>
-                    This action will immediately refresh their dashboard and sync all case data.
-                  </Typography>
-                </Box>
-              )}
-            </Box>
-          </DialogContent>
-          
-          <DialogActions sx={{ 
-            p: 3, 
-            background: 'rgba(255, 255, 255, 0.1)',
-            backdropFilter: 'blur(10px)',
-          }}>
-            <Button 
-              onClick={() => {
-                setSmartCacheModal(false);
-                setSelectedClinicianForCache(null);
-              }}
-              sx={{ 
-                color: 'white', 
-                borderColor: 'rgba(255, 255, 255, 0.3)',
-                '&:hover': {
-                  borderColor: 'rgba(255, 255, 255, 0.5)',
-                  background: 'rgba(255, 255, 255, 0.1)',
-                }
-              }}
-              variant="outlined"
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={async () => {
-                if (selectedClinicianForCache) {
-                  await smartCacheClearForClinician(selectedClinicianForCache);
-                  setSmartCacheModal(false);
-                  setSelectedClinicianForCache(null);
-                }
-              }}
-              disabled={!selectedClinicianForCache}
-              variant="contained"
-              startIcon={<Cached />}
-              sx={{
-                background: 'linear-gradient(45deg, #4caf50 0%, #8bc34a 100%)',
-                '&:hover': {
-                  background: 'linear-gradient(45deg, #45a049 0%, #7cb342 100%)',
-                },
-                '&:disabled': {
-                  background: 'rgba(255, 255, 255, 0.2)',
-                  color: 'rgba(255, 255, 255, 0.5)',
-                },
-                boxShadow: '0 4px 15px rgba(76, 175, 80, 0.4)',
-              }}
-            >
-              Clear Cache & Refresh
-            </Button>
-          </DialogActions>
-        </Dialog>
       </Box>
     </LayoutWithSidebar>
   );

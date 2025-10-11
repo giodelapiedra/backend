@@ -28,6 +28,10 @@ interface AssignmentCancellationResponse extends BaseAPIResponse {
   message: string;
 }
 
+interface OverdueMarkingResponse extends BaseAPIResponse {
+  count: number;
+}
+
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001/api';
 
 const apiClient = axios.create({
@@ -115,10 +119,17 @@ export class BackendAssignmentAPI {
     );
   }
 
-  static async getAssignments(date?: Date, status?: string): Promise<AssignmentResponse> {
+  static async getAssignments(date?: Date, status?: string, startDate?: Date, endDate?: Date): Promise<AssignmentResponse> {
     const params: any = {};
     if (date) params.date = date.toISOString().split('T')[0];
+    if (startDate && endDate) {
+      params.startDate = startDate.toISOString().split('T')[0];
+      params.endDate = endDate.toISOString().split('T')[0];
+    }
     if (status) params.status = status;
+    
+    // Add cache busting parameter
+    params._t = Date.now();
 
     return request(() => apiClient.get('/work-readiness-assignments', { params }), 'Failed to fetch assignments');
   }
@@ -162,10 +173,6 @@ export class BackendAssignmentAPI {
     return request(() => apiClient.get('/work-readiness-assignments/stats', { params }), 'Failed to fetch stats');
   }
 
-  static async markOverdueAssignments(): Promise<BaseAPIResponse> {
-    return request(() => apiClient.post('/work-readiness-assignments/mark-overdue'), 'Failed to mark overdue');
-  }
-
   static async canSubmitWorkReadiness(): Promise<CanSubmitResponse> {
     return request(() => apiClient.get('/work-readiness-assignments/can-submit'), 'Failed to check submission eligibility');
   }
@@ -179,5 +186,9 @@ export class BackendAssignmentAPI {
 
   static async closeUnselectedWorkerCase(unselectedWorkerId: string): Promise<BaseAPIResponse> {
     return request(() => apiClient.patch(`/work-readiness-assignments/unselected/${unselectedWorkerId}/close`), 'Failed to close case');
+  }
+
+  static async markOverdueAssignments(): Promise<OverdueMarkingResponse> {
+    return request(() => apiClient.post('/work-readiness-assignments/mark-overdue'), 'Failed to mark overdue assignments');
   }
 }

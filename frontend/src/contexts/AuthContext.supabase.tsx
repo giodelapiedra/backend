@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { authClient, dataClient } from '../lib/supabase';
+import { SupabaseAPI } from '../utils/supabaseApi';
 
 // Authentication logging functions - simplified version
 const logAuthenticationEvent = async (
@@ -304,16 +305,28 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       
       console.log('Login successful');
       
-      // Log authentication event manually
+      // Log authentication event to database
       if (data.user) {
         try {
-          await logAuthenticationEvent(
+          // Get user info for logging
+          const userName = `${data.user.user_metadata?.first_name || ''} ${data.user.user_metadata?.last_name || ''}`.trim() || email;
+          const userRole = data.user.user_metadata?.role || 'worker';
+          
+          // Get IP address and user agent
+          const ipAddress = '127.0.0.1'; // Default for localhost
+          const userAgent = navigator.userAgent;
+          
+          // Log to authentication_logs table
+          await SupabaseAPI.logLoginActivity(
             data.user.id,
             email,
-            'login',
-            true,
-            data.session ? 'session-' + data.session.expires_at : null
+            userName,
+            userRole,
+            ipAddress,
+            userAgent
           );
+          
+          console.log('✅ Login activity logged to database');
         } catch (logError) {
           console.warn('Failed to log authentication event:', logError);
           // Don't fail login if logging fails

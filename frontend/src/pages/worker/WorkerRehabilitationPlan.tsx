@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import {
   Box,
   Typography,
@@ -39,6 +39,8 @@ import {
 import LayoutWithSidebar from '../../components/LayoutWithSidebar';
 import api from '../../utils/api';
 import { useAuth } from '../../contexts/AuthContext.supabase';
+import { dataClient } from '../../lib/supabase';
+import NotFound from '../NotFound';
 
 type ExerciseStatus = 'completed' | 'skipped' | 'not_started';
 
@@ -50,12 +52,17 @@ interface Exercise {
   category: string;
   difficulty: string;
   instructions: string;
+  repetitions?: string;
+  videoUrl?: string | null;
+  order?: number;
+  isRequired?: boolean;
   completion?: {
     status: ExerciseStatus;
     completedAt?: string;
     skippedReason?: string;
     skippedNotes?: string;
     duration?: number;
+    notes?: string | null;
   };
 }
 
@@ -63,7 +70,8 @@ interface RehabilitationPlan {
   _id: string;
   planName: string;
   planDescription: string;
-  status: 'active' | 'inactive' | 'completed';
+  duration?: number; // Number of days the plan should last
+  status: 'active' | 'inactive' | 'completed' | 'paused' | 'cancelled';
   case: {
     _id: string;
     caseNumber: string;
@@ -133,6 +141,7 @@ const LoadingOverlay: React.FC<{ message?: string }> = ({ message }) => (
 const WorkerRehabilitationPlan: React.FC = (): JSX.Element => {
   const { user } = useAuth();
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const [plan, setPlan] = useState<RehabilitationPlan | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -140,6 +149,7 @@ const WorkerRehabilitationPlan: React.FC = (): JSX.Element => {
   const [skipDialog, setSkipDialog] = useState(false);
   const [skipConfirmDialog, setSkipConfirmDialog] = useState(false);
   const [painDialog, setPainDialog] = useState(false);
+  const [completionDialog, setCompletionDialog] = useState(false);
   const [selectedExercise, setSelectedExercise] = useState<Exercise | null>(null);
   const [skipReason, setSkipReason] = useState('');
   const [skipNotes, setSkipNotes] = useState('');
@@ -153,6 +163,12 @@ const WorkerRehabilitationPlan: React.FC = (): JSX.Element => {
 
   // Initialize loading state
   const [isInitialLoad, setIsInitialLoad] = useState(true);
+
+  // Carousel state - show one exercise at a time
+  const [currentExerciseIndex, setCurrentExerciseIndex] = useState(0);
+  
+  // Track if today's exercises are completed
+  const [isTodayCompleted, setIsTodayCompleted] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -271,124 +287,159 @@ const WorkerRehabilitationPlan: React.FC = (): JSX.Element => {
     };
   }, [timerInterval]);
 
+  // Redirect to dashboard if today's exercises are completed (on page load)
+  useEffect(() => {
+    // Only redirect if:
+    // 1. Not in initial load (data has been fetched)
+    // 2. Today's exercises are completed
+    // 3. Not showing the completion dialog (to allow user to see it first)
+    if (!isInitialLoad && isTodayCompleted && !completionDialog) {
+      navigate('/worker');
+    }
+  }, [isTodayCompleted, isInitialLoad, completionDialog, navigate]);
+
   const fetchRehabilitationPlan = async () => {
     try {
       setLoading(true);
-      console.log('Fetching rehabilitation plan, ID from URL:', id);
+      console.log('Fetching rehabilitation plan from Supabase, user ID:', user?.id);
       
-      // If ID is provided in the URL, fetch that specific plan
-      if (id) {
-        try {
-          console.log('Fetching specific plan with ID:', id);
-          // Get today's exercises for this specific plan
-          // Skip API call - using Supabase auth
-          console.log('Rehabilitation plan fetch skipped - using Supabase auth');
-          const todayResponse = { 
-            data: { 
-              exercises: [],
-              plan: { 
-                _id: id, 
-                planName: 'Sample Plan',
-                planDescription: 'Sample plan description',
-                status: 'active' as const,
-                case: { _id: '1', caseNumber: 'CASE-001', status: 'active' },
-                worker: { _id: '1', firstName: 'John', lastName: 'Doe', email: 'john@example.com' },
-                exercises: [],
-                progressStats: { totalDays: 0, completedDays: 0, skippedDays: 0, consecutiveCompletedDays: 0, consecutiveSkippedDays: 0 }
-              },
-              progressStats: { totalDays: 0, completedDays: 0, skippedDays: 0, consecutiveCompletedDays: 0, consecutiveSkippedDays: 0 }
-            } 
-          };
-          
-          // The API returns { plan: {...}, exercises: [...], progressStats: {...} }
-          // We need to merge this data into a single plan object
-          const planData = {
-            ...todayResponse.data.plan,
-            exercises: todayResponse.data.exercises,
-            progressStats: todayResponse.data.progressStats
-          };
-          console.log('Setting plan data for specific plan:', planData);
-          setPlan(planData);
-        } catch (planError) {
-          console.error("Error fetching specific plan:", planError);
-          setError('Failed to load the specified rehabilitation plan');
-        }
-      } else {
-        // If no ID provided, get all plans and use the active one
-        console.log('No ID provided, fetching all plans');
-        // Skip API call - using Supabase auth
-        console.log('Rehabilitation plans fetch skipped - using Supabase auth');
-        const response = { 
-          data: { 
-            plans: [
-              { 
-                _id: '1', 
-                planName: 'Sample Plan',
-                planDescription: 'Sample plan description',
-                status: 'active' as const,
-                case: { _id: '1', caseNumber: 'CASE-001', status: 'active' },
-                worker: { _id: '1', firstName: 'John', lastName: 'Doe', email: 'john@example.com' },
-                exercises: [],
-                progressStats: { totalDays: 0, completedDays: 0, skippedDays: 0, consecutiveCompletedDays: 0, consecutiveSkippedDays: 0 }
-              }
-            ] 
-          } 
-        };
-        
-        if (response.data.plans && response.data.plans.length > 0) {
-          console.log('Found', response.data.plans.length, 'plans');
-          
-          // First try to find an active plan
-          const activePlan = response.data.plans.find((p: RehabilitationPlan) => p.status === 'active');
-          console.log('Active plan found:', activePlan ? 'Yes' : 'No', activePlan ? `(ID: ${activePlan._id})` : '');
-          
-          // If no active plan, use the most recent plan
-          const planToUse = activePlan || response.data.plans[0];
-          
-          if (planToUse) {
-            // Get today's exercises for this plan
-            console.log('Fetching exercises for plan ID:', planToUse._id, 'Status:', planToUse.status);
-            // Skip API call - using Supabase auth
-            console.log('Rehabilitation plan exercises fetch skipped - using Supabase auth');
-            const todayResponse = { 
-              data: { 
-                exercises: [],
-                plan: { 
-                  _id: planToUse._id, 
-                  planName: planToUse.planName,
-                  planDescription: planToUse.planDescription,
-                  status: planToUse.status,
-                  case: planToUse.case,
-                  worker: planToUse.worker,
-                  exercises: [],
-                  progressStats: planToUse.progressStats
-                },
-                progressStats: planToUse.progressStats
-              } 
-            };
-            
-            // The API returns { plan: {...}, exercises: [...], progressStats: {...} }
-            // We need to merge this data into a single plan object
-            const planData = {
-              ...todayResponse.data.plan,
-              exercises: todayResponse.data.exercises
-            };
-            console.log('Setting plan data:', planData);
-            setPlan(planData);
-          } else {
-            console.log('No plans found among', response.data.plans.length, 'plans');
-            console.log('Plan statuses:', response.data.plans.map((p: RehabilitationPlan) => p.status).join(', '));
-            setError('No rehabilitation plan found');
-          }
-        } else {
-          console.log('No plans returned from API');
-          setError('No rehabilitation plan assigned');
-        }
+      // Fetch rehabilitation plans from Supabase for current worker
+      const { data: plans, error } = await dataClient
+        .from('rehabilitation_plans')
+        .select(`
+          *,
+          case:cases!case_id(id, case_number, status),
+          worker:users!worker_id(id, first_name, last_name, email),
+          clinician:users!clinician_id(id, first_name, last_name, email)
+        `)
+        .eq('worker_id', user?.id)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Supabase error:', error);
+        throw error;
       }
+
+      console.log('Fetched plans from Supabase:', plans);
+
+      if (!plans || plans.length === 0) {
+        setError('No rehabilitation plan assigned yet');
+        return;
+      }
+
+      // If ID is provided in URL, use that specific plan
+      let selectedPlan = id 
+        ? plans.find((p: any) => p.id === id)
+        : plans.find((p: any) => p.status === 'active') || plans[0];
+
+      if (!selectedPlan) {
+        setError('Rehabilitation plan not found');
+        return;
+      }
+
+      console.log('Selected plan:', selectedPlan);
+
+      // Check today's completion status (using 6:00 AM as cutoff)
+      const now = new Date();
+      const currentHour = now.getHours();
+      
+      // If before 6:00 AM, use yesterday's date for checking completion
+      let checkDate: string;
+      if (currentHour < 6) {
+        const yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+        checkDate = yesterday.toISOString().split('T')[0];
+      } else {
+        checkDate = now.toISOString().split('T')[0];
+      }
+      
+      const dailyCompletions = selectedPlan.daily_completions || [];
+      const todayCompletion = dailyCompletions.find((dc: any) => dc.date === checkDate);
+      
+      // Transform Supabase data to match expected format
+      const exercises = Array.isArray(selectedPlan.exercises) 
+        ? selectedPlan.exercises.map((ex: any, index: number) => {
+            const exerciseId = `${selectedPlan.id}-ex-${index}`;
+            
+            // Check if this exercise was completed today
+            const completedToday = todayCompletion?.exercises?.find(
+              (e: any) => e.exerciseId === exerciseId && e.status === 'completed'
+            );
+            
+            return {
+              _id: exerciseId,
+              name: ex.name || '',
+              description: ex.instructions || '',
+              duration: 15, // Default 15 minutes
+              instructions: ex.instructions || '',
+              repetitions: ex.repetitions || '10 reps',
+              videoUrl: ex.videoUrl || null,
+              category: 'other',
+              difficulty: 'easy',
+              isRequired: true,
+              order: ex.order || index,
+              completion: completedToday ? {
+                status: 'completed' as ExerciseStatus,
+                completedAt: completedToday.completedAt,
+                notes: completedToday.painNotes
+              } : {
+                status: 'not_started' as ExerciseStatus,
+                completedAt: null,
+                notes: null
+              }
+            };
+          })
+        : [];
+      
+      // Check if all exercises are completed today
+      const allCompleted = exercises.length > 0 && exercises.every(
+        (ex: Exercise) => ex.completion?.status === 'completed'
+      );
+      setIsTodayCompleted(allCompleted);
+
+      // Calculate completed days
+      const completedDaysCount = dailyCompletions.filter((dc: any) => {
+        const dayExercises = dc.exercises || [];
+        const totalExercises = exercises.length;
+        const completedExercises = dayExercises.filter((e: any) => e.status === 'completed').length;
+        return totalExercises > 0 && completedExercises === totalExercises;
+      }).length;
+
+      const duration = selectedPlan.duration || 7;
+
+      const planData: RehabilitationPlan = {
+        _id: selectedPlan.id,
+        planName: selectedPlan.plan_name || 'Recovery Plan',
+        planDescription: selectedPlan.plan_description || 'Daily recovery exercises',
+        duration: duration,
+        status: selectedPlan.status as 'active' | 'inactive' | 'completed' | 'paused' | 'cancelled',
+        case: {
+          _id: selectedPlan.case?.id || '',
+          caseNumber: selectedPlan.case?.case_number || 'N/A',
+          status: selectedPlan.case?.status || 'unknown'
+        },
+        worker: {
+          _id: selectedPlan.worker?.id || '',
+          firstName: selectedPlan.worker?.first_name || '',
+          lastName: selectedPlan.worker?.last_name || '',
+          email: selectedPlan.worker?.email || ''
+        },
+        exercises,
+        progressStats: {
+          totalDays: duration,
+          completedDays: completedDaysCount,
+          skippedDays: 0,
+          consecutiveCompletedDays: 0,
+          consecutiveSkippedDays: 0
+        }
+      };
+
+      console.log('Transformed plan data:', planData);
+      setPlan(planData);
+      setError(null);
     } catch (err: any) {
-      console.error('Error in fetchRehabilitationPlan:', err);
-      console.error('Error details:', err.response?.data);
-      setError(err.response?.data?.message || 'Failed to fetch rehabilitation plan');
+      console.error('Error fetching rehabilitation plan:', err);
+      setError(err.message || 'Failed to fetch rehabilitation plan');
     } finally {
       setLoading(false);
     }
@@ -471,9 +522,93 @@ const WorkerRehabilitationPlan: React.FC = (): JSX.Element => {
       
       setLoading(true);
       
-      // Make the API call with pain data
-      // Skip API call - using Supabase auth
-      console.log('Exercise completion skipped - using Supabase auth');
+      // Get current date for today's completion (using 6:00 AM as cutoff)
+      const now = new Date();
+      const currentHour = now.getHours();
+      
+      let today: string;
+      if (currentHour < 6) {
+        // If before 6:00 AM, save to yesterday's date
+        const yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+        today = yesterday.toISOString().split('T')[0];
+      } else {
+        today = now.toISOString().split('T')[0];
+      }
+      
+      // Fetch current plan data
+      const { data: currentPlan, error: fetchError } = await dataClient
+        .from('rehabilitation_plans')
+        .select('daily_completions, exercises')
+        .eq('id', plan._id)
+        .single();
+
+      if (fetchError) {
+        console.error('Error fetching current plan:', fetchError);
+        throw fetchError;
+      }
+
+      // Get existing daily completions or initialize
+      const dailyCompletions = currentPlan?.daily_completions || [];
+      
+      // Find today's completion record or create new one
+      let todayCompletion = dailyCompletions.find((dc: any) => dc.date === today);
+      
+      if (!todayCompletion) {
+        todayCompletion = {
+          date: today,
+          exercises: []
+        };
+        dailyCompletions.push(todayCompletion);
+      }
+
+      // Add completed exercise with pain data
+      const exerciseCompletion = {
+        exerciseId: selectedExercise._id,
+        exerciseName: selectedExercise.name,
+        completedAt: new Date().toISOString(),
+        painLevel: painLevel,
+        painNotes: painNotes || '',
+        status: 'completed'
+      };
+
+      // Check if exercise already completed today
+      const existingIndex = todayCompletion.exercises.findIndex(
+        (e: any) => e.exerciseId === selectedExercise._id
+      );
+
+      if (existingIndex >= 0) {
+        todayCompletion.exercises[existingIndex] = exerciseCompletion;
+      } else {
+        todayCompletion.exercises.push(exerciseCompletion);
+      }
+
+      // Calculate progress
+      const totalExercises = plan.exercises.length;
+      const completedToday = todayCompletion.exercises.filter((e: any) => e.status === 'completed').length;
+      const progressPercentage = Math.round((completedToday / totalExercises) * 100);
+
+      // Update progress_stats
+      const progressStats = {
+        lastCompletedDate: today,
+        totalExercises: totalExercises,
+        completedExercises: completedToday,
+        progressPercentage: progressPercentage
+      };
+
+      // Update Supabase
+      const { error: updateError } = await dataClient
+        .from('rehabilitation_plans')
+        .update({
+          daily_completions: dailyCompletions,
+          progress_stats: progressStats
+        })
+        .eq('id', plan._id);
+
+      if (updateError) {
+        console.error('Error updating plan:', updateError);
+        throw updateError;
+      }
       
       // Remove the timer for this exercise
       const updatedTimers = exerciseTimers.filter(t => t.exerciseId !== selectedExercise._id);
@@ -486,14 +621,20 @@ const WorkerRehabilitationPlan: React.FC = (): JSX.Element => {
       setPainLevel(null);
       setPainNotes('');
       
-      setSuccessMessage('Exercise marked as completed! Great job!');
-      setTimeout(() => setSuccessMessage(''), 3000);
+      // Check if all exercises are completed
+      if (progressPercentage === 100) {
+        setIsTodayCompleted(true);
+        setCompletionDialog(true);
+      } else {
+        setSuccessMessage(`Exercise completed! Progress: ${progressPercentage}% 🎉`);
+        setTimeout(() => setSuccessMessage(''), 3000);
+      }
       
       // Refresh the plan data
       await fetchRehabilitationPlan();
     } catch (err: any) {
       console.error('Error submitting exercise completion:', err);
-      setError(err.response?.data?.message || 'Failed to complete exercise');
+      setError(err.message || 'Failed to complete exercise');
     } finally {
       setCompletingExercise(null);
       setLoading(false);
@@ -507,35 +648,98 @@ const WorkerRehabilitationPlan: React.FC = (): JSX.Element => {
       // Set loading state
       setLoading(true);
       
+      // Get current date (using 6:00 AM as cutoff)
+      const now = new Date();
+      const currentHour = now.getHours();
+      
+      let today: string;
+      if (currentHour < 6) {
+        // If before 6:00 AM, save to yesterday's date
+        const yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+        today = yesterday.toISOString().split('T')[0];
+      } else {
+        today = now.toISOString().split('T')[0];
+      }
+      
+      // Fetch current plan data
+      const { data: currentPlan, error: fetchError } = await dataClient
+        .from('rehabilitation_plans')
+        .select('daily_completions, exercises')
+        .eq('id', plan._id)
+        .single();
+
+      if (fetchError) {
+        console.error('Error fetching current plan:', fetchError);
+        throw fetchError;
+      }
+
+      // Get existing daily completions or initialize
+      const dailyCompletions = currentPlan?.daily_completions || [];
+      
+      // Find today's completion record or create new one
+      let todayCompletion = dailyCompletions.find((dc: any) => dc.date === today);
+      
+      if (!todayCompletion) {
+        todayCompletion = {
+          date: today,
+          exercises: []
+        };
+        dailyCompletions.push(todayCompletion);
+      }
+
+      // Add skipped exercise
+      const exerciseSkip = {
+        exerciseId: selectedExercise._id,
+        exerciseName: selectedExercise.name,
+        skippedAt: new Date().toISOString(),
+        skipReason: skipReason,
+        skipNotes: skipNotes || '',
+        status: 'skipped'
+      };
+
+      // Check if exercise already recorded today
+      const existingIndex = todayCompletion.exercises.findIndex(
+        (e: any) => e.exerciseId === selectedExercise._id
+      );
+
+      if (existingIndex >= 0) {
+        todayCompletion.exercises[existingIndex] = exerciseSkip;
+      } else {
+        todayCompletion.exercises.push(exerciseSkip);
+      }
+
+      // Calculate progress (skipped exercises don't count as completed)
+      const totalExercises = plan.exercises.length;
+      const completedToday = todayCompletion.exercises.filter((e: any) => e.status === 'completed').length;
+      const progressPercentage = Math.round((completedToday / totalExercises) * 100);
+
+      // Update progress_stats
+      const progressStats = {
+        lastCompletedDate: today,
+        totalExercises: totalExercises,
+        completedExercises: completedToday,
+        progressPercentage: progressPercentage
+      };
+
+      // Update Supabase
+      const { error: updateError } = await dataClient
+        .from('rehabilitation_plans')
+        .update({
+          daily_completions: dailyCompletions,
+          progress_stats: progressStats
+        })
+        .eq('id', plan._id);
+
+      if (updateError) {
+        console.error('Error updating plan:', updateError);
+        throw updateError;
+      }
+      
       // Remove any active timer for this exercise
       const updatedTimers = exerciseTimers.filter(t => t.exerciseId !== selectedExercise._id);
       setExerciseTimers(updatedTimers);
       saveTimersToLocalStorage(updatedTimers);
-      
-      // Immediately update the UI to show the exercise as skipped
-      const skippedExerciseId = selectedExercise._id;
-      
-      // Update local state immediately for better UX
-      setPlan(prevPlan => {
-        if (!prevPlan) return null;
-        
-        return {
-          ...prevPlan,
-          exercises: prevPlan.exercises.map(ex => 
-            ex._id === skippedExerciseId
-              ? {
-                  ...ex,
-                  completion: {
-                    status: 'skipped' as ExerciseStatus,
-                    skippedReason: skipReason,
-                    skippedNotes: skipNotes || '',
-                    skippedAt: new Date().toISOString()
-                  }
-                }
-              : ex
-          )
-        };
-      });
       
       // Reset all dialogs and form state immediately
       setSkipDialog(false);
@@ -547,17 +751,13 @@ const WorkerRehabilitationPlan: React.FC = (): JSX.Element => {
       setSuccessMessage('Exercise marked as skipped. Remember to communicate any concerns with your clinician.');
       setTimeout(() => setSuccessMessage(''), 3000);
       
-      // Make API call after UI updates
-      // Skip API call - using Supabase auth
-      console.log('Exercise skip skipped - using Supabase auth');
-      
       // Refresh the plan data in the background to ensure consistency with server
       fetchRehabilitationPlan().catch(error => {
         console.error('Error refreshing plan data:', error);
       });
     } catch (err: any) {
       console.error('Error skipping exercise:', err);
-      setError(err.response?.data?.message || 'Failed to skip exercise');
+      setError(err.message || 'Failed to skip exercise');
       
       // Refresh the plan to revert any optimistic updates if there was an error
       fetchRehabilitationPlan().catch(error => {
@@ -671,6 +871,11 @@ const WorkerRehabilitationPlan: React.FC = (): JSX.Element => {
   }
 
   if (error) {
+    // Check if it's an "exercise not found" error
+    if (error.includes('Exercise not found') || error.includes('not found')) {
+      return <NotFound />;
+    }
+    
     return (
       <LayoutWithSidebar>
         <Box sx={{ p: 3 }}>
@@ -723,355 +928,386 @@ const WorkerRehabilitationPlan: React.FC = (): JSX.Element => {
       {/* Show loading overlay for non-initial loading states */}
       {loading && !isInitialLoad && <LoadingOverlay message="Updating..." />}
       
-      <Box sx={{ p: { xs: 2, md: 3 } }}>
-        {/* Header */}
-        <Box sx={{ mb: 4 }}>
-          <Typography variant="h4" component="h1" gutterBottom sx={{ fontWeight: 700, color: '#333' }}>
-            Today's Recovery Plan
+      <Box sx={{ 
+        maxWidth: '800px',
+        margin: '0 auto',
+        p: { xs: 2, sm: 3, md: 4 },
+        minHeight: '100vh'
+      }}>
+        {/* Header - Clean and Simple */}
+        <Box sx={{ mb: { xs: 3, md: 4 }, textAlign: 'center' }}>
+          <Typography 
+            variant="h3" 
+            component="h1" 
+            gutterBottom 
+            sx={{ 
+              fontWeight: 700, 
+              color: '#1e293b',
+              fontSize: { xs: '1.75rem', sm: '2.5rem', md: '3rem' }
+            }}
+          >
+            {plan?.planName || 'Today\'s Recovery Plan'}
           </Typography>
-          <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
-            {plan?.planDescription || 'No description available'}
+          <Typography 
+            variant="body1" 
+            color="text.secondary" 
+            sx={{ 
+              fontSize: { xs: '0.875rem', sm: '1rem' },
+              px: { xs: 2, sm: 0 },
+              mb: 2
+            }}
+          >
+            {plan?.planDescription || 'Daily recovery exercises and activities'}
           </Typography>
-          
-          {/* Progress */}
-          <Box sx={{ mb: 2 }}>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-              <Typography variant="body2" color="text.secondary">
-                Progress: {completedExercises}/{totalExercises} Complete
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                {Math.round(progressPercentage)}%
-              </Typography>
-            </Box>
-            <LinearProgress 
-              variant="determinate" 
-              value={progressPercentage} 
-              sx={{ height: 8, borderRadius: 4 }}
-            />
+          <Box sx={{ 
+            display: 'inline-flex', 
+            alignItems: 'center', 
+            gap: 1, 
+            px: 3, 
+            py: 1.5, 
+            bgcolor: '#f0fdf4', 
+            border: '2px solid #10b981',
+            borderRadius: 3,
+            boxShadow: '0 2px 8px rgba(16, 185, 129, 0.15)'
+          }}>
+            <CheckCircle sx={{ color: '#10b981', fontSize: 24 }} />
+            <Typography 
+              variant="h6" 
+              sx={{ 
+                fontWeight: 700, 
+                color: '#065f46',
+                fontSize: { xs: '1rem', sm: '1.125rem' }
+              }}
+            >
+              Day {plan?.progressStats?.completedDays || 0} of {plan?.progressStats?.totalDays || plan?.duration || 7}
+            </Typography>
           </Box>
-
-          {/* Case Info */}
-          <Card sx={{ mb: 3 }}>
-            <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                <Avatar sx={{ bgcolor: 'primary.main' }}>
-                  <Assignment />
-                </Avatar>
-                <Box>
-                  <Typography variant="h6">
-                    Case: {plan?.case?.caseNumber || 'N/A'}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Status: {plan?.case?.status || 'N/A'}
-                  </Typography>
-                </Box>
-              </Box>
-            </CardContent>
-          </Card>
         </Box>
 
-        {/* Success Message */}
-        {successMessage && (
-          <Alert severity="success" sx={{ mb: 3 }}>
-            {successMessage}
-          </Alert>
-        )}
+        {/* Single Exercise Card View (Carousel) */}
+        {plan?.exercises && plan.exercises.length > 0 && (
+          <Box>
+            {/* Progress Bar - Like Reference Image */}
+            <Box sx={{ mb: 2 }}>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>
+                  Progress
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600 }}>
+                  {currentExerciseIndex + 1} of {plan.exercises.length}
+                </Typography>
+              </Box>
+              <Box sx={{ 
+                width: '100%', 
+                height: 8, 
+                backgroundColor: '#e5e7eb', 
+                borderRadius: 10,
+                overflow: 'hidden'
+              }}>
+                <Box sx={{ 
+                  width: `${((currentExerciseIndex + 1) / plan.exercises.length) * 100}%`,
+                  height: '100%',
+                  backgroundColor: '#10b981',
+                  transition: 'width 0.3s ease'
+                }} />
+              </Box>
+            </Box>
 
-        {/* Exercises List */}
-        <Card sx={{ mb: 3 }}>
-          <CardContent>
-            <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <FitnessCenter />
-              Today's Exercises
-            </Typography>
-            
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-              {plan?.exercises?.map((exercise, index) => (
+            {/* Exercise Card - Mobile Optimized */}
+            {plan.exercises && plan.exercises[currentExerciseIndex] && plan.exercises.map((exercise, index) => index === currentExerciseIndex && (
                 <Card 
                   key={exercise._id} 
                   sx={{ 
-                    p: 2, 
-                    borderRadius: 2,
-                    border: '1px solid #e0e0e0',
+                    p: { xs: 2.5, sm: 3, md: 4 }, 
+                    borderRadius: { xs: 2, md: 3 },
+                    border: '2px solid #10b981',
+                    boxShadow: { 
+                      xs: '0 2px 12px rgba(16, 185, 129, 0.1)',
+                      md: '0 4px 20px rgba(16, 185, 129, 0.15)'
+                    },
+                    minHeight: { xs: 'auto', md: '500px' },
+                    display: 'flex',
+                    flexDirection: 'column',
+                    position: 'relative'
+                  }}
+                >
+                  {/* Exercise Number Badge - Responsive */}
+                  <Box sx={{ 
+                    position: 'absolute', 
+                    top: { xs: 12, md: 20 }, 
+                    right: { xs: 12, md: 20 },
+                    width: { xs: 40, md: 48 },
+                    height: { xs: 40, md: 48 },
+                    borderRadius: '50%',
+                    backgroundColor: '#d1fae5',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontWeight: 700,
+                    fontSize: { xs: '1rem', md: '1.25rem' },
+                    color: '#10b981',
+                    boxShadow: '0 2px 8px rgba(16, 185, 129, 0.2)'
+                  }}>
+                    {currentExerciseIndex + 1}
+                  </Box>
+
+                  {/* Exercise Name & Reps - Mobile Responsive */}
+                  <Box sx={{ mb: { xs: 2, md: 3 }, pr: { xs: 6, md: 7 } }}>
+                    <Typography 
+                      variant="h3" 
+                      sx={{ 
+                        fontWeight: 700, 
+                        mb: 1, 
+                        color: '#1e293b',
+                        fontSize: { xs: '1.5rem', sm: '2rem', md: '2.5rem' },
+                        lineHeight: 1.2
+                      }}
+                    >
+                      {exercise.name}
+                    </Typography>
+                    <Typography 
+                      variant="h6" 
+                      sx={{ 
+                        fontWeight: 600,
+                        color: '#10b981',
+                        fontSize: { xs: '1rem', sm: '1.125rem', md: '1.25rem' }
+                      }}
+                    >
+                      {exercise.repetitions}
+                    </Typography>
+                  </Box>
+
+                  {/* Video Player or Placeholder - Mobile Responsive */}
+                  {exercise.videoUrl && exercise.videoUrl.trim() !== '' ? (
+                    <Box sx={{ 
+                      mb: { xs: 2, md: 3 }, 
+                      borderRadius: 2, 
+                      overflow: 'hidden',
+                      position: 'relative',
+                      paddingTop: '56.25%', // 16:9 aspect ratio
+                      backgroundColor: '#000'
+                    }}>
+                      <iframe
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          width: '100%',
+                          height: '100%',
+                          border: 'none',
+                          borderRadius: '8px'
+                        }}
+                        src={(() => {
+                          const url = exercise.videoUrl || '';
+                          if (url.includes('youtube.com') || url.includes('youtu.be')) {
+                            return url.replace('watch?v=', 'embed/').replace('youtu.be/', 'youtube.com/embed/');
+                          }
+                          return url;
+                        })()}
+                        title={exercise.name}
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                        allowFullScreen
+                      />
+                    </Box>
+                  ) : (
+                    <Box sx={{ 
+                      backgroundColor: '#f1f5f9',
+                      borderRadius: 2,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      mb: { xs: 2, md: 3 },
+                      minHeight: { xs: 150, sm: 180, md: 200 },
+                      cursor: 'pointer',
+                      transition: 'all 0.2s',
+                      '&:hover': {
+                        backgroundColor: '#e2e8f0'
+                      }
+                    }}>
+                      <PlayArrow sx={{ 
+                        fontSize: { xs: 48, md: 64 }, 
+                        color: '#64748b', 
+                        mb: 1 
+                      }} />
+                      <Typography 
+                        variant="body2" 
+                        color="text.secondary"
+                        sx={{ fontSize: { xs: '0.875rem', md: '1rem' } }}
+                      >
+                        Tap to play voiceover
+                      </Typography>
+                    </Box>
+                  )}
+
+                  {/* Instructions - Mobile Responsive */}
+                  <Typography 
+                    variant="body1" 
+                    sx={{ 
+                      mb: { xs: 2, md: 3 }, 
+                      color: '#1e293b', 
+                      lineHeight: 1.6,
+                      fontSize: { xs: '0.9375rem', sm: '1rem' }
+                    }}
+                  >
+                    {exercise.instructions}
+                  </Typography>
+
+                  {/* Play Voiceover Button - Inside Card */}
+                  <Button
+                    variant="outlined"
+                    fullWidth
+                    startIcon={<PlayArrow />}
+                    sx={{ 
+                      py: 1.5,
+                      borderColor: '#d1d5db',
+                      color: '#6b7280',
+                      fontWeight: 500,
+                      '&:hover': {
+                        borderColor: '#9ca3af',
+                        backgroundColor: '#f9fafb'
+                      }
+                    }}
+                  >
+                    Play Voiceover
+                  </Button>
+
+                </Card>
+              ))}
+
+            {/* Navigation Buttons - Mobile Optimized */}
+            <Box sx={{ 
+              display: 'flex', 
+              justifyContent: 'space-between', 
+              mt: { xs: 2, md: 3 }, 
+              gap: { xs: 1.5, md: 2 }
+            }}>
+              {/* Previous Button - Only show if not first exercise */}
+              {currentExerciseIndex > 0 ? (
+                <Button
+                  variant="outlined"
+                  onClick={() => setCurrentExerciseIndex(prev => prev - 1)}
+                  sx={{ 
+                    flex: 1,
+                    py: { xs: 1.25, md: 1.5 },
+                    fontSize: { xs: '0.9375rem', md: '1rem' },
+                    fontWeight: 600,
+                    borderColor: '#cbd5e1',
+                    color: '#64748b',
+                    borderWidth: 2,
                     '&:hover': {
-                      boxShadow: 2
+                      borderColor: '#94a3b8',
+                      backgroundColor: '#f8fafc',
+                      borderWidth: 2
                     }
                   }}
                 >
-                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                      <Box sx={{
-                        width: 24,
-                        height: 24,
-                        borderRadius: '50%',
-                        border: '2px solid #e0e0e0',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        backgroundColor: exercise.completion?.status === 'completed' ? '#4caf50' : 'transparent'
-                      }}>
-                        {exercise.completion?.status === 'completed' && (
-                          <CheckCircle sx={{ color: 'white', fontSize: 16 }} />
-                        )}
-                      </Box>
-                      <Box>
-                        <Typography variant="h6" sx={{ fontWeight: 600 }}>
-                          {exercise.name}
-                        </Typography>
-                        <Typography variant="body2" color="text.secondary">
-                          {exercise.description}
-                        </Typography>
-                      </Box>
-                    </Box>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                        <Timer fontSize="small" color="action" />
-                        <Typography variant="body2" color="text.secondary">
-                          {exercise.duration} min
-                        </Typography>
-                      </Box>
-                      {/* Show exercise controls only if not completed or skipped */}
-                      {(exercise.completion?.status === 'not_started' || !exercise.completion?.status) && (
-                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                          {/* Timer display */}
-                          {exerciseTimers.some(timer => timer.exerciseId === exercise._id) && (
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                              <Timer color="action" />
-                              <Typography variant="body2" color="text.secondary">
-                                {(() => {
-                                  const timer = exerciseTimers.find(t => t.exerciseId === exercise._id);
-                                  if (!timer) return '00:00';
-                                  const minutes = Math.floor(timer.remaining / 60);
-                                  const seconds = timer.remaining % 60;
-                                  return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-                                })()}
-                              </Typography>
-                              <LinearProgress 
-                                variant="determinate" 
-                                value={(() => {
-                                  const timer = exerciseTimers.find(t => t.exerciseId === exercise._id);
-                                  if (!timer) return 0;
-                                  return ((timer.duration - timer.remaining) / timer.duration) * 100;
-                                })()}
-                                sx={{ flexGrow: 1, height: 8, borderRadius: 4 }}
-                              />
-                            </Box>
-                          )}
-                          
-                          <Box sx={{ display: 'flex', gap: 1 }}>
-                            {/* Show Start button if no timer exists */}
-                            {!exerciseTimers.some(timer => timer.exerciseId === exercise._id) && (
-                              <Button
-                                variant="contained"
-                                color="primary"
-                                size="small"
-                                startIcon={<PlayArrow />}
-                                onClick={() => handleStartExercise(exercise._id)}
-                              >
-                                Start
-                              </Button>
-                            )}
-                            
-                            {/* Show Done button only if timer exists and has completed */}
-                            {exerciseTimers.some(timer => 
-                              timer.exerciseId === exercise._id && 
-                              timer.remaining === 0
-                            ) && (
-                              <Button
-                                variant="contained"
-                                color="success"
-                                size="small"
-                                startIcon={<CheckCircle />}
-                                onClick={() => handleCompleteExercise(exercise._id)}
-                                disabled={completingExercise === exercise._id}
-                              >
-                                Done
-                              </Button>
-                            )}
-                            
-                            {/* Show Skip button only if exercise is not completed and not skipped */}
-                            {(!exercise.completion?.status || exercise.completion.status === 'not_started') && (
-                              <Button
-                                variant="outlined"
-                                color="warning"
-                                size="small"
-                                startIcon={<SkipNext />}
-                                onClick={() => openSkipDialog(exercise)}
-                                disabled={loading}
-                                sx={{
-                                  '&:hover': {
-                                    backgroundColor: 'warning.light',
-                                    color: 'warning.contrastText',
-                                    borderColor: 'warning.main'
-                                  }
-                                }}
-                              >
-                                Skip
-                              </Button>
-                            )}
-                          </Box>
-                        </Box>
-                      )}
-                      {exercise.completion?.status === 'skipped' && (
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                          <Chip 
-                            label="Skipped" 
-                            color="warning" 
-                            size="small"
-                            icon={<SkipNext />}
-                            sx={{ 
-                              '& .MuiChip-icon': { 
-                                fontSize: '1.2rem',
-                                marginLeft: '4px'
-                              }
-                            }}
-                          />
-                          <Typography variant="caption" color="text.secondary">
-                            {exercise.completion.skippedReason}
-                          </Typography>
-                        </Box>
-                      )}
-                      {exercise.completion?.status === 'completed' && (
-                        <Chip label="Completed" color="success" size="small" />
-                      )}
-                      {exercise.completion?.status === 'skipped' && (
-                        <Chip label="Skipped" color="warning" size="small" />
-                      )}
-                    </Box>
-                  </Box>
-                </Card>
-              ))}
+                  Previous
+                </Button>
+              ) : (
+                <Box sx={{ flex: 1 }} />
+              )}
+              
+              {/* Show "Next Exercise" if not last, "Complete" if last exercise */}
+              {currentExerciseIndex < (plan?.exercises?.length || 1) - 1 ? (
+                <Button
+                  variant="contained"
+                  onClick={() => setCurrentExerciseIndex(prev => prev + 1)}
+                  sx={{ 
+                    flex: 1,
+                    py: { xs: 1.25, md: 1.5 },
+                    fontSize: { xs: '0.9375rem', md: '1rem' },
+                    fontWeight: 600,
+                    backgroundColor: '#10b981',
+                    boxShadow: '0 2px 8px rgba(16, 185, 129, 0.25)',
+                    '&:hover': {
+                      backgroundColor: '#059669',
+                      boxShadow: '0 4px 12px rgba(16, 185, 129, 0.3)'
+                    },
+                    '&:active': {
+                      transform: 'scale(0.98)'
+                    }
+                  }}
+                >
+                  Next Exercise
+                </Button>
+              ) : (
+                <Button
+                  variant="contained"
+                  onClick={() => {
+                    const currentExercise = plan?.exercises[currentExerciseIndex];
+                    if (currentExercise) {
+                      handleCompleteExercise(currentExercise._id);
+                    }
+                  }}
+                  disabled={completingExercise !== null || isTodayCompleted}
+                  sx={{ 
+                    flex: 1,
+                    py: { xs: 1.25, md: 1.5 },
+                    fontSize: { xs: '0.9375rem', md: '1rem' },
+                    fontWeight: 600,
+                    backgroundColor: '#10b981',
+                    boxShadow: '0 2px 8px rgba(16, 185, 129, 0.25)',
+                    '&:hover': {
+                      backgroundColor: '#059669',
+                      boxShadow: '0 4px 12px rgba(16, 185, 129, 0.3)'
+                    },
+                    '&:active': {
+                      transform: 'scale(0.98)'
+                    },
+                    '&:disabled': {
+                      backgroundColor: '#cbd5e0',
+                      color: '#718096'
+                    }
+                  }}
+                >
+                  {isTodayCompleted ? 'Completed Today' : (completingExercise ? 'Completing...' : 'Complete')}
+                </Button>
+              )}
             </Box>
-          </CardContent>
-        </Card>
-
-        {/* Complete All Button */}
-        {completedExercises < totalExercises && !hasSkippedExercises() && (
-          <Box sx={{ textAlign: 'center', mb: 3 }}>
-            <Button
-              variant="contained"
-              size="large"
-              startIcon={<CheckCircle />}
-              onClick={handleCompleteAll}
-              disabled={hasActiveTimers() || hasSkippedExercises()}
-              sx={{ 
-                px: 4, 
-                py: 1.5,
-                position: 'relative',
-                '&.Mui-disabled': {
-                  bgcolor: 'grey.300',
-                }
-              }}
-            >
-              All Done
-              {hasActiveTimers() && (
-                <Box 
-                  component="span" 
-                  sx={{ 
-                    position: 'absolute', 
-                    top: -10, 
-                    right: -10, 
-                    bgcolor: 'warning.main',
-                    color: 'warning.contrastText',
-                    borderRadius: '50%',
-                    width: 22,
-                    height: 22,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '0.75rem',
-                    fontWeight: 'bold'
-                  }}
-                >
-                  <Timer fontSize="small" />
-                </Box>
-              )}
-              {hasSkippedExercises() && (
-                <Box 
-                  component="span" 
-                  sx={{ 
-                    position: 'absolute', 
-                    top: -10, 
-                    right: -10, 
-                    bgcolor: 'warning.main',
-                    color: 'warning.contrastText',
-                    borderRadius: '50%',
-                    width: 22,
-                    height: 22,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '0.75rem',
-                    fontWeight: 'bold'
-                  }}
-                >
-                  <SkipNext fontSize="small" />
-                </Box>
-              )}
-            </Button>
-            {hasActiveTimers() && (
-              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-                Please wait for all exercise timers to complete
-              </Typography>
-            )}
-            {hasSkippedExercises() && (
-              <Typography variant="caption" color="warning.main" sx={{ display: 'block', mt: 1 }}>
-                Cannot complete all exercises when some are skipped
-              </Typography>
-            )}
           </Box>
         )}
 
-        {/* Progress Stats */}
-        <Card>
-          <CardContent>
-            <Typography variant="h6" gutterBottom>
-              Progress Statistics
-            </Typography>
-            <Grid container spacing={2}>
-              <Grid item xs={6} sm={3}>
-                <Box sx={{ textAlign: 'center' }}>
-                  <Typography variant="h4" color="primary.main">
-                    {plan?.progressStats?.completedDays || 0}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Days Completed
-                  </Typography>
-                </Box>
-              </Grid>
-              <Grid item xs={6} sm={3}>
-                <Box sx={{ textAlign: 'center' }}>
-                  <Typography variant="h4" color="success.main">
-                    {plan?.progressStats?.consecutiveCompletedDays || 0}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Consecutive Days
-                  </Typography>
-                </Box>
-              </Grid>
-              <Grid item xs={6} sm={3}>
-                <Box sx={{ textAlign: 'center' }}>
-                  <Typography variant="h4" color="warning.main">
-                    {plan?.progressStats?.skippedDays || 0}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Days Skipped
-                  </Typography>
-                </Box>
-              </Grid>
-              <Grid item xs={6} sm={3}>
-                <Box sx={{ textAlign: 'center' }}>
-                  <Typography variant="h4" color="info.main">
-                    {plan?.progressStats?.totalDays || 0}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Total Days
-                  </Typography>
-                </Box>
-              </Grid>
-            </Grid>
-          </CardContent>
-        </Card>
+        {/* Completion Message - Mobile Responsive */}
+        {currentExerciseIndex === (plan?.exercises?.length || 1) - 1 && 
+         completedExercises === totalExercises && (
+          <Box sx={{ 
+            textAlign: 'center', 
+            mb: { xs: 2, md: 3 }, 
+            mt: { xs: 3, md: 4 } 
+          }}>
+            <Card sx={{ 
+              p: { xs: 3, md: 4 }, 
+              backgroundColor: '#d1fae5',
+              border: '2px solid #10b981',
+              borderRadius: { xs: 2, md: 3 }
+            }}>
+              <CheckCircle sx={{ 
+                fontSize: { xs: 48, md: 64 }, 
+                color: '#10b981', 
+                mb: { xs: 1.5, md: 2 } 
+              }} />
+              <Typography 
+                variant="h4" 
+                sx={{ 
+                  fontWeight: 700, 
+                  color: '#065f46', 
+                  mb: 1,
+                  fontSize: { xs: '1.5rem', sm: '1.75rem', md: '2rem' }
+                }}
+              >
+                🎉 All Done!
+              </Typography>
+              <Typography 
+                variant="body1" 
+                color="text.secondary"
+                sx={{ fontSize: { xs: '0.9375rem', md: '1rem' } }}
+              >
+                Great job! You've completed all exercises for today.
+              </Typography>
+            </Card>
+          </Box>
+        )}
 
         {/* Skip Exercise Dialog */}
         <Dialog 
@@ -1277,6 +1513,91 @@ const WorkerRehabilitationPlan: React.FC = (): JSX.Element => {
               startIcon={loading && <CircularProgress size={20} color="inherit" />}
             >
               {loading ? 'Submitting...' : 'Submit'}
+            </Button>
+          </DialogActions>
+        </Dialog>
+
+        {/* Completion Dialog */}
+        <Dialog
+          open={completionDialog}
+          onClose={() => {}}
+          maxWidth="sm"
+          fullWidth
+          PaperProps={{
+            sx: {
+              borderRadius: 3,
+              boxShadow: '0 8px 32px rgba(0,0,0,0.12)'
+            }
+          }}
+        >
+          <DialogTitle sx={{ pb: 2 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              <Box sx={{ 
+                width: 56, 
+                height: 56, 
+                borderRadius: 2, 
+                bgcolor: 'rgba(16, 185, 129, 0.1)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}>
+                <CheckCircle sx={{ fontSize: 32, color: '#10b981' }} />
+              </Box>
+              <Box>
+                <Typography variant="h6" sx={{ fontWeight: 600, color: '#2d3748' }}>
+                  🎉 All Exercises Completed!
+                </Typography>
+                <Typography variant="body2" sx={{ color: '#718096', mt: 0.5 }}>
+                  Congratulations on finishing today's session
+                </Typography>
+              </Box>
+            </Box>
+          </DialogTitle>
+          <DialogContent sx={{ pb: 3 }}>
+            <Alert severity="success" sx={{ mb: 3, borderRadius: 2 }}>
+              Excellent work! You've completed all your exercises for today.
+            </Alert>
+
+            <Box sx={{ 
+              p: 3, 
+              bgcolor: '#f0fdf4', 
+              border: '1px solid #86efac',
+              borderRadius: 2,
+              mb: 2
+            }}>
+              <Typography variant="body1" sx={{ color: '#166534', fontWeight: 500, mb: 1 }}>
+                ✅ Your Progress Has Been Saved
+              </Typography>
+              <Typography variant="body2" sx={{ color: '#15803d' }}>
+                Your clinician will be able to review your completed exercises and pain feedback. Come back tomorrow at 6:00 AM for your next session!
+              </Typography>
+            </Box>
+
+            <Typography variant="body2" sx={{ color: '#718096', textAlign: 'center', fontStyle: 'italic' }}>
+              Great job maintaining your recovery routine! 💪
+            </Typography>
+          </DialogContent>
+          <DialogActions sx={{ px: 3, pb: 3 }}>
+            <Button 
+              onClick={() => {
+                setCompletionDialog(false);
+                navigate('/worker');
+              }}
+              variant="contained"
+              fullWidth
+              size="large"
+              sx={{
+                background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                color: 'white',
+                py: 1.5,
+                fontSize: '1rem',
+                fontWeight: 600,
+                '&:hover': {
+                  background: 'linear-gradient(135deg, #059669 0%, #047857 100%)'
+                }
+              }}
+            >
+              Go to Dashboard
             </Button>
           </DialogActions>
         </Dialog>

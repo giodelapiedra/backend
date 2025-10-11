@@ -1,8 +1,4 @@
 import axios from 'axios';
-import Cookies from 'js-cookie';
-
-// CSRF token storage
-let csrfToken: string | null = null;
 
 // Create axios instance with base configuration
 // DISABLED: Using Supabase instead of backend API

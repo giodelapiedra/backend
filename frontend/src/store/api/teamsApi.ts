@@ -30,7 +30,7 @@ export const teamsApi = createApi({
           
           // Test Supabase connection first
           console.log('Testing Supabase connection...');
-          const { data: testData, error: testError } = await dataClient
+          const { error: testError } = await dataClient
             .from('users')
             .select('id')
             .limit(1);

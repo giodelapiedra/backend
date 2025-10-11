@@ -1,4 +1,5 @@
 import { dataClient, authClient } from '../lib/supabase';
+import { BackendAssignmentAPI } from './backendAssignmentApi';
 
 // Response cache for performance optimization
 const responseCache = new Map<string, { data: any; timestamp: number }>();
@@ -18,6 +19,17 @@ export class SupabaseAPI {
   
   static setCachedData(cacheKey: string, data: any) {
     responseCache.set(cacheKey, { data, timestamp: Date.now() });
+  }
+
+  // Helper function to get auth token
+  static async getAuthToken() {
+    try {
+      const { data: { session } } = await authClient.auth.getSession();
+      return session?.access_token || null;
+    } catch (error) {
+      console.error('Error getting auth token:', error);
+      return null;
+    }
   }
   
   // Cases API
@@ -566,23 +578,44 @@ export class SupabaseAPI {
         console.log(`  ${index + 1}. Worker: ${submission.worker_id}, Status: ${submission.readiness_level}, Time: ${submission.submitted_at}`);
       });
 
-      const total = teamMembers?.length || 0;
-      const completed = todaySubmissions.length;
-      const pending = 0; // Workers who haven't submitted today
+      // Use BackendAssignmentAPI to get accurate assignment data
+      console.log('🔄 getAnalyticsData: Fetching assignments from Backend API...');
+      const assignmentResponse = await BackendAssignmentAPI.getAssignments();
+      const assignmentsData = assignmentResponse.assignments || [];
+      
+      console.log('📊 getAnalyticsData: Assignments from Backend:', assignmentsData.length);
+      console.log('📊 getAnalyticsData: Assignment Status Breakdown:', {
+        completed: assignmentsData.filter(a => a.status === 'completed').length,
+        pending: assignmentsData.filter(a => a.status === 'pending').length,
+        overdue: assignmentsData.filter(a => a.status === 'overdue').length,
+        cancelled: assignmentsData.filter(a => a.status === 'cancelled').length
+      });
+      
+      // Calculate stats based on assignments
+      const total = assignmentsData.length;
+      const completed = assignmentsData.filter(a => a.status === 'completed').length;
+      const pending = assignmentsData.filter(a => a.status === 'pending').length;
+      const overdue = assignmentsData.filter(a => a.status === 'overdue').length;
+      const cancelled = assignmentsData.filter(a => a.status === 'cancelled').length;
       const notStarted = total - completed;
 
       const workReadinessStats = {
-        total: teamMembers?.length || 0,
+        total: total,
         completed,
         pending,
+        overdue,
+        cancelled,
         notStarted,
-        completedPercentage: teamMembers?.length > 0 ? Math.round((completed / teamMembers.length) * 100) : 0,
-        pendingPercentage: teamMembers?.length > 0 ? Math.round((pending / teamMembers.length) * 100) : 0,
-        notStartedPercentage: teamMembers?.length > 0 ? Math.round((notStarted / teamMembers.length) * 100) : 0,
+        completedPercentage: total > 0 ? Math.round((completed / total) * 100) : 0,
+        pendingPercentage: total > 0 ? Math.round((pending / total) * 100) : 0,
+        overduePercentage: total > 0 ? Math.round((overdue / total) * 100) : 0,
+        cancelledPercentage: total > 0 ? Math.round((cancelled / total) * 100) : 0,
+        notStartedPercentage: total > 0 ? Math.round((notStarted / total) * 100) : 0,
         byStatus: [
           { status: 'Completed', count: completed, color: '#22c55e' },
           { status: 'Pending', count: pending, color: '#f59e0b' },
-          { status: 'Not Started', count: notStarted, color: '#6b7280' }
+          { status: 'Overdue', count: overdue, color: '#ef4444' },
+          { status: 'Cancelled', count: cancelled, color: '#6b7280' }
         ],
         monthlyAssessments: []
       };
@@ -773,119 +806,135 @@ export class SupabaseAPI {
   // Get work readiness stats with date filtering
   static async getWorkReadinessStats(teamLeaderId: string, dateRange: string, startDate?: Date, endDate?: Date) {
     try {
-      console.log('🔄 Fetching work readiness stats for team leader:', teamLeaderId);
+      console.log('🔄 Fetching work readiness stats from BACKEND API for team leader:', teamLeaderId);
       console.log('📅 Filter parameters:', { 
         dateRange, 
         startDate: startDate?.toISOString(), 
         endDate: endDate?.toISOString() 
       });
       
-      // Get team leader info
-      const { data: teamLeader, error: leaderError } = await dataClient
-        .from('users')
-        .select('*')
-        .eq('id', teamLeaderId)
-        .single();
-      
-      if (leaderError) throw leaderError;
-      
-      // Get team members from all managed teams
-      const managedTeams = teamLeader.managed_teams || [];
-      if (teamLeader.team && !managedTeams.includes(teamLeader.team)) {
-        managedTeams.push(teamLeader.team);
-      }
-      
-      const { data: teamMembers, error: membersError } = await dataClient
-        .from('users')
-        .select('*')
-        .eq('role', 'worker')
-        .in('team', managedTeams);
-      
-      if (membersError) throw membersError;
-      
-      // Calculate date range
-      let start, end;
+      // Calculate date range for filtering
+      let filterStartDate, filterEndDate;
       const now = new Date();
       
       switch (dateRange) {
         case 'week':
-          start = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-          end = now;
+          filterStartDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+          filterEndDate = new Date(now.getTime() + 24 * 60 * 60 * 1000); // Include today + 1 day buffer
+          console.log('📅 Week filter calculated:', {
+            startDate: filterStartDate.toISOString().split('T')[0],
+            endDate: filterEndDate.toISOString().split('T')[0],
+            daysDiff: Math.ceil((filterEndDate.getTime() - filterStartDate.getTime()) / (1000 * 60 * 60 * 24))
+          });
           break;
         case 'month':
-          start = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-          end = now;
+          filterStartDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+          filterEndDate = new Date(now.getTime() + 24 * 60 * 60 * 1000); // Include today + 1 day buffer
+          console.log('📅 Month filter calculated:', {
+            startDate: filterStartDate.toISOString().split('T')[0],
+            endDate: filterEndDate.toISOString().split('T')[0],
+            daysDiff: Math.ceil((filterEndDate.getTime() - filterStartDate.getTime()) / (1000 * 60 * 60 * 24))
+          });
           break;
         case 'year':
-          start = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
-          end = now;
+          filterStartDate = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
+          filterEndDate = new Date(now.getTime() + 24 * 60 * 60 * 1000); // Include today + 1 day buffer
+          console.log('📅 Year filter calculated:', {
+            startDate: filterStartDate.toISOString().split('T')[0],
+            endDate: filterEndDate.toISOString().split('T')[0],
+            daysDiff: Math.ceil((filterEndDate.getTime() - filterStartDate.getTime()) / (1000 * 60 * 60 * 24))
+          });
           break;
         case 'custom':
           if (startDate && endDate) {
-            start = new Date(startDate);
-            end = new Date(endDate);
-            start.setHours(0, 0, 0, 0);
-            end.setHours(23, 59, 59, 999);
+            filterStartDate = new Date(startDate);
+            filterEndDate = new Date(endDate);
+            filterStartDate.setHours(0, 0, 0, 0);
+            filterEndDate.setHours(23, 59, 59, 999);
           } else {
-            start = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-            end = now;
+            filterStartDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+            filterEndDate = new Date(now.getTime() + 24 * 60 * 60 * 1000); // Include today + 1 day buffer
           }
           break;
         default:
-          start = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-          end = now;
+          filterStartDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+          filterEndDate = new Date(now.getTime() + 24 * 60 * 60 * 1000); // Include today + 1 day buffer
       }
       
-      // Get work readiness data for the date range
-      const teamMemberIds = teamMembers?.map(m => m.id) || [];
-      let workReadinessData: any[] = [];
+      console.log('📅 Date Range for Filtering:', {
+        dateRange,
+        filterStartDate: filterStartDate.toISOString().split('T')[0],
+        filterEndDate: filterEndDate.toISOString().split('T')[0],
+        originalStartDate: startDate?.toISOString().split('T')[0],
+        originalEndDate: endDate?.toISOString().split('T')[0]
+      });
       
-      if (teamMemberIds.length > 0) {
-        const { data: wrData, error: workReadinessError } = await dataClient
-          .from('work_readiness')
-          .select('*')
-          .in('worker_id', teamMemberIds)
-          .gte('submitted_at', start.toISOString())
-          .lte('submitted_at', end.toISOString())
-          .order('submitted_at', { ascending: false });
-
-        if (workReadinessError) {
-          console.error('Error fetching work readiness data:', workReadinessError);
-        } else {
-          workReadinessData = wrData || [];
-        }
-      }
+      // Use BackendAssignmentAPI to get assignments data with date filtering
+      const response = await BackendAssignmentAPI.getAssignments(undefined, undefined, filterStartDate, filterEndDate);
       
-      // Calculate stats
-      const total = teamMembers?.length || 0;
-      const completed = workReadinessData.length;
-      const pending = 0; // Workers who haven't submitted in the date range
-      const notStarted = total - completed;
+      console.log('📊 Backend API Response:', response);
+      console.log('📊 Assignments from Backend:', response.assignments?.length || 0);
+      console.log('📊 Assignment Status Breakdown:', {
+        completed: response.assignments?.filter(a => a.status === 'completed').length || 0,
+        pending: response.assignments?.filter(a => a.status === 'pending').length || 0,
+        overdue: response.assignments?.filter(a => a.status === 'overdue').length || 0,
+        cancelled: response.assignments?.filter(a => a.status === 'cancelled').length || 0
+      });
+      
+      const assignmentsData = response.assignments || [];
+      
+      // Debug assignment details
+      console.log('📊 Assignment Details from Backend:', assignmentsData.map(a => ({
+        id: a.id,
+        status: a.status,
+        assigned_date: a.assigned_date,
+        worker: a.worker?.first_name || 'Unknown'
+      })));
+      
+      // Calculate stats based on assignments
+      const total = assignmentsData.length;
+      const completed = assignmentsData.filter(a => a.status === 'completed').length;
+      const pending = assignmentsData.filter(a => a.status === 'pending').length;
+      const overdue = assignmentsData.filter(a => a.status === 'overdue').length;
+      const cancelled = assignmentsData.filter(a => a.status === 'cancelled').length;
+      const notStarted = total - completed; // Not started = total assignments - completed ones
+      
+      console.log('📊 Calculated Stats from Backend API:');
+      console.log('Total:', total);
+      console.log('Completed:', completed);
+      console.log('Pending:', pending);
+      console.log('Overdue:', overdue);
+      console.log('Not Started:', notStarted);
 
       const workReadinessStats = {
-        total: teamMembers?.length || 0,
+        total: total,
         completed,
         pending,
+        overdue,
+        cancelled,
         notStarted,
-        completedPercentage: teamMembers?.length > 0 ? Math.round((completed / teamMembers.length) * 100) : 0,
-        pendingPercentage: teamMembers?.length > 0 ? Math.round((pending / teamMembers.length) * 100) : 0,
-        notStartedPercentage: teamMembers?.length > 0 ? Math.round((notStarted / teamMembers.length) * 100) : 0,
+        completedPercentage: total > 0 ? Math.round((completed / total) * 100) : 0,
+        pendingPercentage: total > 0 ? Math.round((pending / total) * 100) : 0,
+        overduePercentage: total > 0 ? Math.round((overdue / total) * 100) : 0,
+        cancelledPercentage: total > 0 ? Math.round((cancelled / total) * 100) : 0,
+        notStartedPercentage: total > 0 ? Math.round((notStarted / total) * 100) : 0,
         byStatus: [
           { status: 'Completed', count: completed, color: '#22c55e' },
           { status: 'Pending', count: pending, color: '#f59e0b' },
-          { status: 'Not Started', count: notStarted, color: '#ef4444' }
+          { status: 'Overdue', count: overdue, color: '#ef4444' },
+          { status: 'Cancelled', count: cancelled, color: '#6b7280' }
         ],
         monthlyAssessments: [] // Could be implemented for monthly breakdown
       };
 
       return {
         teamLeader: {
-          id: teamLeader.id,
-          firstName: teamLeader.first_name,
-          lastName: teamLeader.last_name,
-          email: teamLeader.email,
-          team: teamLeader.team,
-          managedTeams: teamLeader.managed_teams || []
+          id: teamLeaderId,
+          firstName: '',
+          lastName: '',
+          email: '',
+          team: '',
+          managedTeams: []
         },
         analytics: {
           workReadinessStats
@@ -1506,103 +1555,61 @@ export class SupabaseAPI {
     try {
       console.log('Creating new user:', userData);
       
-      // Check if email already exists
-      const emailExists = await this.checkEmailExists(userData.email);
-      if (emailExists) {
-        throw new Error('Email already registered. Please use a different email address.');
-      }
+      // Skip email check - let backend handle validation
+      // The backend will check for existing emails and return appropriate error
       
-      // Use environment variables for Supabase configuration
-      const supabaseUrl = process.env.REACT_APP_SUPABASE_URL || 'https://dtcgzgbxhefwhqpeotrl.supabase.co';
-      const supabaseAnonKey = process.env.REACT_APP_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR0Y2d6Z2J4aGVmd2hxcGVvdHJsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTkxNDQ3MTgsImV4cCI6MjA3NDcyMDcxOH0.n557fWuqr8-e900nNhWOfeJTzdnhSzsv5tBW2pNM4gw';
+      // Use backend API instead of direct Supabase Auth
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5001';
       
-      console.log('Creating Supabase Auth user with anon key...');
+      console.log('Creating user via backend API...');
       
-      // Create user using admin API with anon key
-      const response = await fetch(`${supabaseUrl}/auth/v1/admin/users`, {
+      // Get auth token for the request
+      const authToken = await this.getAuthToken();
+      
+      // Create user using backend API
+      const response = await fetch(`${backendUrl}/api/team-leaders/create-user`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${supabaseAnonKey}`,
-          'apikey': supabaseAnonKey,
+          'Authorization': `Bearer ${authToken}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
+          firstName: userData.firstName,
+          lastName: userData.lastName,
           email: userData.email,
           password: userData.password,
-          email_confirm: true, // Auto-confirm email
-          app_metadata: {
-            provider: 'email',
-            providers: ['email']
-          },
-          user_metadata: {
-            first_name: userData.firstName,
-            last_name: userData.lastName,
-            role: 'worker'
-          }
+          phone: userData.phone || '',
+          team: userData.team || ''
         })
       });
 
       if (!response.ok) {
         const errorData = await response.json();
-        console.error('Auth user creation error:', errorData);
+        console.error('Backend user creation error:', errorData);
         
-        if (errorData.msg && errorData.msg.includes('already registered')) {
+        if (errorData.message && errorData.message.includes('already registered')) {
           throw new Error('Email already registered. Please use a different email address.');
         }
-        throw new Error(errorData.msg || 'Failed to create authentication user');
-      }
-
-      const authData = await response.json();
-      console.log('Supabase Auth user created:', authData.id);
-      
-      // Simple hash that fits in VARCHAR(20) - using first 20 chars of SHA-256
-      const hashPassword = async (password: string) => {
-        const encoder = new TextEncoder();
-        const data = encoder.encode(password);
-        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-        const hashArray = Array.from(new Uint8Array(hashBuffer));
-        const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-        return hashHex.substring(0, 20); // Take first 20 characters
-      };
-
-      // Hash the password to fit VARCHAR(20)
-      const passwordHash = await hashPassword(userData.password);
-
-      // Create user profile in users table
-      const profileData = {
-        id: authData.id,
-        first_name: userData.firstName,
-        last_name: userData.lastName,
-        email: userData.email,
-        password_hash: passwordHash,
-        role: 'worker',
-        phone: userData.phone || null,
-        team: userData.team || null,
-        is_active: true,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      };
-
-      console.log('Creating user profile:', profileData);
-
-      // Create user profile in Supabase
-      const { data, error } = await dataClient
-        .from('users')
-        .insert(profileData)
-        .select()
-        .single();
-      
-      if (error) {
-        console.error('Profile creation error:', error);
-        // Handle specific database errors
-        if (error.code === '23505' && error.message.includes('users_email_key')) {
+        
+        // Handle validation errors with detailed messages
+        if (errorData.message === 'Validation failed' && errorData.errors) {
+          const validationErrors = errorData.errors.map((err: any) => err.msg).join(', ');
+          throw new Error(`Validation failed: ${validationErrors}`);
+        }
+        
+        // Handle specific backend error messages
+        if (errorData.error && errorData.error.includes('already been registered')) {
           throw new Error('Email already registered. Please use a different email address.');
         }
-        throw error;
+        
+        throw new Error(errorData.message || errorData.error || 'Failed to create user');
       }
+
+      const result = await response.json();
+      console.log('User created successfully via backend:', result.user.email);
       
-      console.log('User created successfully:', data);
-      return { user: data };
+      // Backend already creates the user in the database, so we just return the result
+      return result;
     } catch (error) {
       console.error('Error creating user:', error);
       throw error;
@@ -1975,6 +1982,287 @@ export class SupabaseAPI {
     } catch (error) {
       console.error('Error fetching team member login activity:', error);
       throw error;
+    }
+  }
+
+  // Unselected Worker Reasons API
+  async getUnselectedWorkerReasons(teamLeaderId: string) {
+    try {
+      const { data, error } = await dataClient
+        .from('unselected_workers')
+        .select('*')
+        .eq('team_leader_id', teamLeaderId);
+      
+      if (error) throw error;
+      return { success: true, data: data || [] };
+    } catch (error) {
+      console.error('Error fetching unselected worker reasons:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  }
+
+  async saveUnselectedWorkerReason(data: {
+    team_leader_id: string;
+    worker_id: string;
+    reason: string;
+    notes?: string;
+  }) {
+    try {
+      console.log('🔍 SupabaseAPI.saveUnselectedWorkerReason called with:', data);
+      
+      // Get auth token
+      const { data: { session } } = await authClient.auth.getSession();
+      if (!session) {
+        throw new Error('No active session');
+      }
+
+      // Try backend API first
+      try {
+        console.log('📤 Calling backend API...');
+        
+        // Get backend URL from environment variables
+        const backendUrl = process.env.REACT_APP_API_URL || 'http://localhost:5001/api';
+        
+        // Call the backend API instead of direct Supabase
+        const response = await fetch(`${backendUrl}/work-readiness-assignments/unselected/save`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`
+          },
+          body: JSON.stringify(data)
+        });
+
+        console.log('📥 Backend API response status:', response.status);
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          console.error('❌ Backend API error:', errorData);
+          throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+        }
+
+        const result = await response.json();
+        console.log('✅ Backend API success:', result);
+        
+        return { success: true, data: result.data };
+      } catch (backendError) {
+        console.warn('⚠️ Backend API failed, falling back to direct Supabase:', backendError);
+        
+        // Fallback to direct Supabase call
+        const upsertData = {
+          team_leader_id: data.team_leader_id,
+          worker_id: data.worker_id,
+          reason: data.reason,
+          notes: data.notes || '',
+          assignment_date: new Date().toISOString().split('T')[0],
+          updated_at: new Date().toISOString()
+        };
+
+        console.log('📤 Using direct Supabase upsert:', upsertData);
+        
+        const { data: result, error } = await dataClient
+          .from('unselected_workers')
+          .upsert(upsertData, {
+            onConflict: 'team_leader_id,worker_id'
+          })
+          .select();
+        
+        if (error) {
+          console.error('❌ Direct Supabase error:', error);
+          throw error;
+        }
+        
+        console.log('✅ Direct Supabase success:', result);
+        return { success: true, data: result };
+      }
+    } catch (error) {
+      console.error('❌ Error saving unselected worker reason:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  }
+
+  /**
+   * Close unselected worker case
+   * @param unselectedWorkerId - ID of the unselected worker case to close
+   * @returns Promise with success/error result
+   */
+  async closeUnselectedWorkerCase(unselectedWorkerId: string) {
+    try {
+      const { data: { session } } = await authClient.auth.getSession();
+      if (!session) {
+        return { success: false, error: 'Not authenticated' };
+      }
+
+      // Try backend API first
+      try {
+        const backendUrl = process.env.REACT_APP_API_URL || 'http://localhost:5001/api';
+        const response = await fetch(`${backendUrl}/work-readiness-assignments/unselected/${unselectedWorkerId}/close`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`
+          }
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const result = await response.json();
+        return { success: true, data: result };
+      } catch (backendError) {
+        console.warn('⚠️ Backend API failed, falling back to direct Supabase:', backendError);
+        
+        // Fallback to direct Supabase call - move to closed table
+        const { data: originalCase, error: fetchError } = await dataClient
+          .from('unselected_workers')
+          .select('*')
+          .eq('id', unselectedWorkerId)
+          .single();
+
+        if (fetchError || !originalCase) {
+          return { success: false, error: 'Case not found' };
+        }
+
+        // Insert into closed table
+        const { data: closedCase, error: insertError } = await dataClient
+          .from('closed_unselected_workers')
+          .insert({
+            original_case_id: unselectedWorkerId,
+            team_leader_id: originalCase.team_leader_id,
+            worker_id: originalCase.worker_id,
+            assignment_date: originalCase.assignment_date,
+            reason: originalCase.reason,
+            notes: originalCase.notes,
+            closed_at: new Date().toISOString(),
+            closed_by: session.user.id
+          })
+          .select()
+          .single();
+
+        if (insertError) {
+          console.error('Database error inserting into closed table:', insertError);
+          return { success: false, error: `Database error: ${insertError.message}` };
+        }
+
+        // Delete from original table
+        const { error: deleteError } = await dataClient
+          .from('unselected_workers')
+          .delete()
+          .eq('id', unselectedWorkerId);
+
+        if (deleteError) {
+          console.error('Database error deleting original case:', deleteError);
+          return { success: false, error: `Database error: ${deleteError.message}` };
+        }
+
+        return { success: true, data: closedCase };
+      }
+    } catch (error) {
+      console.error('Error in closeUnselectedWorkerCase:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  }
+
+  async getClosedUnselectedWorkerCases(workerId: string) {
+    try {
+      const { data: { session } } = await authClient.auth.getSession();
+      if (!session) {
+        return { success: false, error: 'Not authenticated' };
+      }
+
+      // Try backend API first
+      try {
+        const backendUrl = process.env.REACT_APP_API_URL || 'http://localhost:5001/api';
+        const response = await fetch(`${backendUrl}/work-readiness-assignments/unselected/closed/${workerId}`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`
+          }
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const result = await response.json();
+        return { success: true, data: result.data };
+      } catch (backendError) {
+        console.warn('⚠️ Backend API failed, falling back to direct Supabase:', backendError);
+        
+        // Fallback to direct Supabase call
+        const { data, error } = await dataClient
+          .from('closed_unselected_workers')
+          .select('*')
+          .eq('worker_id', workerId)
+          .order('closed_at', { ascending: false });
+
+        if (error) {
+          console.error('Database error in getClosedUnselectedWorkerCases:', error);
+          return { success: false, error: `Database error: ${error.message}` };
+        }
+
+        return { success: true, data };
+      }
+    } catch (error) {
+      console.error('Error in getClosedUnselectedWorkerCases:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  }
+
+  async getAllClosedUnselectedWorkerCases(teamLeaderId: string) {
+    try {
+      const { data: { session } } = await authClient.auth.getSession();
+      if (!session) {
+        return { success: false, error: 'Not authenticated' };
+      }
+
+      // Try backend API first
+      try {
+        const backendUrl = process.env.REACT_APP_API_URL || 'http://localhost:5001/api';
+        const response = await fetch(`${backendUrl}/work-readiness-assignments/unselected/closed-all`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`
+          }
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const result = await response.json();
+        return { success: true, data: result.data };
+      } catch (backendError) {
+        console.warn('⚠️ Backend API failed, falling back to direct Supabase:', backendError);
+        
+        // Fallback to direct Supabase call
+        const { data, error } = await dataClient
+          .from('closed_unselected_workers')
+          .select(`
+            *,
+            worker:worker_id (
+              id,
+              first_name,
+              last_name,
+              email
+            )
+          `)
+          .eq('team_leader_id', teamLeaderId)
+          .order('closed_at', { ascending: false });
+
+        if (error) {
+          console.error('Database error in getAllClosedUnselectedWorkerCases:', error);
+          return { success: false, error: `Database error: ${error.message}` };
+        }
+
+        return { success: true, data };
+      }
+    } catch (error) {
+      console.error('Error in getAllClosedUnselectedWorkerCases:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
     }
   }
 }

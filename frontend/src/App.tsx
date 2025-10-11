@@ -7,6 +7,7 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider } from './contexts/AuthContext.supabase';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import ReduxProvider from './components/ReduxProvider';
+import ErrorBoundary from './components/ErrorBoundary';
 import { queryClient } from './lib/queryClient';
 import './styles/design-system.css';
 import './styles/modern-dashboard.css';
@@ -16,7 +17,7 @@ import AdminDashboard from './pages/admin/AdminDashboard';
 import EnhancedAnalytics from './pages/admin/Analytics';
 import AuthenticationLogs from './pages/admin/AuthenticationLogs';
 import Users from './pages/admin/Users';
-import WorkerDashboard from './pages/worker/WorkerDashboard';
+import WorkerDashboardRedux from './pages/worker/WorkerDashboardRedux';
 import WorkerRehabilitationPlan from './pages/worker/WorkerRehabilitationPlan';
 import ClinicianDashboardRedux from './pages/clinician/ClinicianDashboardRedux';
 import WorkerActivityMonitor from './pages/clinician/WorkerActivityMonitor';
@@ -194,6 +195,7 @@ const LoadingFallback = () => (
 
 function App() {
   return (
+    <ErrorBoundary>
     <QueryClientProvider client={queryClient}>
       <ThemeProvider theme={theme}>
         <CssBaseline />
@@ -239,7 +241,7 @@ function App() {
             
             <Route path="/worker" element={
               <ProtectedRoute allowedRoles={['worker']}>
-                <WorkerDashboard />
+                <WorkerDashboardRedux />
               </ProtectedRoute>
             } />
             
@@ -434,6 +436,7 @@ function App() {
       </AuthProvider>
     </ThemeProvider>
     </QueryClientProvider>
+    </ErrorBoundary>
   );
 }
 
