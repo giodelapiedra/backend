@@ -214,6 +214,10 @@ const getTeamPerformanceComparison = async (req, res) => {
   }
 };
 
+// Simple in-memory cache for performance trends
+const performanceTrendsCache = new Map();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
 /**
  * Get team leader performance trends for line chart
  */
@@ -224,6 +228,25 @@ const getTeamLeaderPerformanceTrends = async (req, res) => {
     // Calculate period start date based on selected date
     const selectedDate = date ? new Date(date) : new Date();
     const periodStart = getTrendPeriodStart(period, selectedDate);
+    
+    // Create cache key
+    const cacheKey = `trends_${period}_${selectedDate.toISOString().split('T')[0]}`;
+    
+    // Check cache first
+    const cached = performanceTrendsCache.get(cacheKey);
+    if (cached && (Date.now() - cached.timestamp) < CACHE_TTL) {
+      console.log('📊 Using cached performance trends data');
+      return res.json({
+        success: true,
+        data: {
+          performanceTrends: cached.data,
+          period,
+          selectedDate: selectedDate.toISOString().split('T')[0],
+          generatedAt: cached.timestamp,
+          cached: true
+        }
+      });
+    }
     
     // Fetch all team leaders
     const { data: teamLeaders, error: leadersError } = await supabase
@@ -259,13 +282,26 @@ const getTeamLeaderPerformanceTrends = async (req, res) => {
     console.log('📊 Team leaders count:', teamLeaders?.length);
     console.log('📊 Workers count:', workers?.length);
     
+    // Cache the result
+    performanceTrendsCache.set(cacheKey, {
+      data: dataPoints,
+      timestamp: Date.now()
+    });
+    
+    // Clean up old cache entries (keep only last 10)
+    if (performanceTrendsCache.size > 10) {
+      const oldestKey = performanceTrendsCache.keys().next().value;
+      performanceTrendsCache.delete(oldestKey);
+    }
+    
     res.json({
       success: true,
       data: {
         performanceTrends: dataPoints,
         period,
         selectedDate: selectedDate.toISOString().split('T')[0],
-        generatedAt: new Date().toISOString()
+        generatedAt: new Date().toISOString(),
+        cached: false
       }
     });
 
@@ -414,34 +450,59 @@ const generatePerformanceDataPoints = async (period, selectedDate, teamLeaders, 
       increment = 7;
   }
 
-  // Generate data points
+  // Calculate date range for all data points
+  const endDate = new Date(baseDate);
+  const startDate = new Date(baseDate);
+  startDate.setDate(startDate.getDate() - ((pointsCount - 1) * increment));
+  
+  const startDateStr = startDate.toISOString().split('T')[0];
+  const endDateStr = endDate.toISOString().split('T')[0];
+  
+  console.log(`📅 Fetching data for period: ${startDateStr} to ${endDateStr} (${pointsCount} points)`);
+
+  // OPTIMIZATION: Fetch all data in 2 queries instead of N*2 queries
+  const [workReadinessResult, assignmentsResult] = await Promise.all([
+    // Fetch all work readiness data for the entire period
+    supabase
+      .from('work_readiness')
+      .select('*, worker:users!work_readiness_worker_id_fkey(id, first_name, last_name, team, team_leader_id)')
+      .gte('submitted_at', `${startDateStr}T00:00:00.000Z`)
+      .lte('submitted_at', `${endDateStr}T23:59:59.999Z`),
+    
+    // Fetch all assignments data for the entire period
+    supabase
+      .from('work_readiness_assignments')
+      .select('*, worker:users!work_readiness_assignments_worker_id_fkey(id, first_name, last_name, team, team_leader_id)')
+      .gte('assigned_date', `${startDateStr}T00:00:00.000Z`)
+      .lte('assigned_date', `${endDateStr}T23:59:59.999Z`)
+  ]);
+
+  const allWorkReadiness = workReadinessResult.data || [];
+  const allAssignments = assignmentsResult.data || [];
+  
+  console.log(`📊 Total data fetched: Work Readiness: ${allWorkReadiness.length}, Assignments: ${allAssignments.length}`);
+
+  // Generate data points using in-memory filtering
   for (let i = pointsCount - 1; i >= 0; i--) {
     const date = new Date(baseDate);
     date.setDate(date.getDate() - (i * increment));
     const dateStr = date.toISOString().split('T')[0];
     
-    // Calculate performance metrics for this date
-    const dayStart = `${dateStr}T00:00:00.000Z`;
-    const dayEnd = `${dateStr}T23:59:59.999Z`;
+    // Filter data for this specific date (in-memory, much faster)
+    const dayWorkReadiness = allWorkReadiness.filter(wr => {
+      const submittedDate = new Date(wr.submitted_at).toISOString().split('T')[0];
+      return submittedDate === dateStr;
+    });
     
-    // Fetch work readiness data for this specific date
-    const { data: workReadiness } = await supabase
-      .from('work_readiness')
-      .select('*, worker:users!work_readiness_worker_id_fkey(id, first_name, last_name, team, team_leader_id)')
-      .gte('submitted_at', dayStart)
-      .lte('submitted_at', dayEnd);
+    const dayAssignments = allAssignments.filter(a => {
+      const assignedDate = new Date(a.assigned_date).toISOString().split('T')[0];
+      return assignedDate === dateStr;
+    });
 
-    // Fetch assignments for this specific date
-    const { data: assignments } = await supabase
-      .from('work_readiness_assignments')
-      .select('*, worker:users!work_readiness_assignments_worker_id_fkey(id, first_name, last_name, team, team_leader_id)')
-      .gte('assigned_date', dayStart)
-      .lte('assigned_date', dayEnd);
-
-    console.log(`📅 Date ${dateStr}: Work Readiness: ${workReadiness?.length || 0}, Assignments: ${assignments?.length || 0}`);
+    console.log(`📅 Date ${dateStr}: Work Readiness: ${dayWorkReadiness.length}, Assignments: ${dayAssignments.length}`);
 
     // Calculate aggregated metrics for all team leaders
-    const metrics = calculateAggregatedMetrics(teamLeaders, workers, workReadiness || [], assignments || []);
+    const metrics = calculateAggregatedMetrics(teamLeaders, workers, dayWorkReadiness, dayAssignments);
     
     dataPoints.push({
       date: dateStr,

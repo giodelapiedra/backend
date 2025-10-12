@@ -46,9 +46,9 @@ export const casesApi = createApi({
       keepUnusedDataFor: 0, // Clear cache immediately
     }),
     getCases: builder.query({
-      queryFn: async (arg: { page?: number; limit?: number; search?: string; status?: string } = {}) => {
+      queryFn: async (arg: { page?: number; limit?: number; search?: string; status?: string; caseManagerId?: string; includeAll?: boolean } = {}) => {
         try {
-          const { page = 1, limit = 10, search = '', status = '' } = arg;
+          const { page = 1, limit = 10, search = '', status = '', caseManagerId, includeAll = false } = arg;
           const offset = (page - 1) * limit;
           
           let query = dataClient
@@ -59,6 +59,11 @@ export const casesApi = createApi({
               case_manager:users!case_manager_id(id, first_name, last_name, email),
               incident:incidents!incident_id(id, severity, incident_type, description, reported_by)
             `, { count: 'exact' });
+          
+          // Apply case manager filter (unless includeAll is true)
+          if (!includeAll && caseManagerId) {
+            query = query.eq('case_manager_id', caseManagerId);
+          }
           
           // Apply search filter
           if (search) {

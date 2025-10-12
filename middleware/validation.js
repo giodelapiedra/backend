@@ -90,26 +90,38 @@ const validateWorkReadinessData = (req, res, next) => {
   if (!assessmentData) {
     errors.push('Assessment data is required');
   } else {
-    const { readinessLevel, fatigueLevel } = assessmentData;
+    // Support both camelCase and snake_case field names
+    const { 
+      readinessLevel, 
+      fatigueLevel, 
+      readiness_level, 
+      fatigue_level 
+    } = assessmentData;
+    
+    // Use snake_case if available, otherwise camelCase
+    const actualReadinessLevel = readiness_level || readinessLevel;
+    const actualFatigueLevel = fatigue_level || fatigueLevel;
     
     // Validate readiness level
     const validReadinessLevels = ['fit', 'minor', 'not_fit'];
-    if (!readinessLevel) {
+    if (!actualReadinessLevel) {
       errors.push('Readiness level is required');
-    } else if (!validReadinessLevels.includes(readinessLevel)) {
+    } else if (!validReadinessLevels.includes(actualReadinessLevel)) {
       errors.push(`Invalid readiness level. Must be one of: ${validReadinessLevels.join(', ')}`);
     }
     
     // Validate fatigue level
-    if (fatigueLevel === undefined || fatigueLevel === null) {
+    if (actualFatigueLevel === undefined || actualFatigueLevel === null) {
       errors.push('Fatigue level is required');
-    } else if (typeof fatigueLevel !== 'number' || fatigueLevel < 1 || fatigueLevel > 10) {
+    } else if (typeof actualFatigueLevel !== 'number' || actualFatigueLevel < 1 || actualFatigueLevel > 10) {
       errors.push('Fatigue level must be a number between 1 and 10');
     }
   }
   
   if (errors.length > 0) {
     // log validation errors via centralized logger if needed
+    console.log('❌ VALIDATION ERRORS:', errors);
+    console.log('❌ REQUEST BODY:', JSON.stringify(req.body, null, 2));
     return res.status(400).json({
       success: false,
       message: 'Validation failed',

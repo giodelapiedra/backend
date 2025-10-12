@@ -76,7 +76,7 @@ const calculateKPI = (consecutiveDays) => {
  * @param {number} overdueAssignments - Number of overdue assignments (optional)
  * @returns {object} KPI score and rating
  */
-const calculateAssignmentKPI = (completedAssignments, totalAssignments, onTimeSubmissions = 0, qualityScore = 0, pendingAssignments = 0, overdueAssignments = 0) => {
+const calculateAssignmentKPI = (completedAssignments, totalAssignments, onTimeSubmissions = 0, qualityScore = 0, pendingAssignments = 0, overdueAssignments = 0, overdueAssignmentsWithDates = [], lateSubmissions = []) => {
   // Input validation
   if (typeof completedAssignments !== 'number' || typeof totalAssignments !== 'number') {
     logger.error('Invalid input types for KPI calculation', {
@@ -111,69 +111,224 @@ const calculateAssignmentKPI = (completedAssignments, totalAssignments, onTimeSu
     };
   }
   
-  // Calculate rates
+  // Calculate rates with late submission penalties
   const completionRate = Math.max(0, Math.min(100, (completedAssignments / totalAssignments) * 100));
-  const onTimeRate = Math.max(0, Math.min(100, (onTimeSubmissions / totalAssignments) * 100));
-  const validatedQualityScore = Math.max(0, Math.min(100, qualityScore));
+  
+  // Calculate on-time rate with late submission penalties
+  // Late submissions should reduce the on-time rate proportionally
+  let onTimeRate = Math.max(0, Math.min(100, (onTimeSubmissions / totalAssignments) * 100));
+  
+  // Apply late submission penalty to on-time rate (reduce by percentage of late submissions)
+  if (lateSubmissions && lateSubmissions.length > 0) {
+    const latePenaltyRate = (lateSubmissions.length / totalAssignments) * 50; // 50% penalty per late submission
+    onTimeRate = Math.max(0, onTimeRate - latePenaltyRate);
+  }
+  
+  // Calculate quality score with late submission penalties
+  let validatedQualityScore = Math.max(0, Math.min(100, qualityScore));
+  
+  // Apply late submission penalty to quality score
+  if (lateSubmissions && lateSubmissions.length > 0) {
+    const latePenaltyQuality = (lateSubmissions.length / totalAssignments) * 20; // 20% penalty per late submission
+    validatedQualityScore = Math.max(0, validatedQualityScore - latePenaltyQuality);
+  }
   
   // Calculate weighted score with bonuses and penalties
   const pendingBonus = Math.min(5, (pendingAssignments / totalAssignments) * 5); // Max 5% bonus for pending
-  const overduePenalty = Math.min(10, (overdueAssignments / totalAssignments) * 10); // Max 10% penalty for overdue
-  const weightedScore = (completionRate * 0.7) + (onTimeRate * 0.2) + (validatedQualityScore * 0.1) + pendingBonus - overduePenalty;
+  
+  // IMPROVED: Shift-based overdue penalty calculation
+  let overduePenalty = 0;
+  if (overdueAssignmentsWithDates && overdueAssignmentsWithDates.length > 0) {
+    const now = new Date();
+    let totalPenalty = 0;
+    
+    overdueAssignmentsWithDates.forEach(assignment => {
+      const dueTime = new Date(assignment.due_time);
+      const overdueDate = new Date(assignment.overdue_date || assignment.updated_at);
+      
+      // Calculate how many shifts have passed since due time
+      const hoursOverdue = Math.floor((now - dueTime) / (1000 * 60 * 60));
+      const shiftsOverdue = Math.floor(hoursOverdue / 8); // Assuming 8-hour shifts
+      
+      let penaltyMultiplier = 1.0; // Full penalty for recent overdue
+      
+      // Shift-based decay: Reduce penalty based on shifts passed
+      if (shiftsOverdue > 30) { // More than 30 shifts (10 days)
+        penaltyMultiplier = 0.1; // 90% reduction for very old overdue
+      } else if (shiftsOverdue > 10) { // More than 10 shifts (3-4 days)
+        penaltyMultiplier = 0.3; // 70% reduction for old overdue
+      } else if (shiftsOverdue > 3) { // More than 3 shifts (1 day)
+        penaltyMultiplier = 0.6; // 40% reduction for moderately old overdue
+      }
+      
+      totalPenalty += penaltyMultiplier;
+    });
+    
+    overduePenalty = Math.min(10, (totalPenalty / totalAssignments) * 10);
+  } else {
+    // Fallback to old calculation if no dates provided
+    overduePenalty = Math.min(10, (overdueAssignments / totalAssignments) * 10);
+  }
+  
+  // IMPROVED: Recovery bonus based on recent assignment completion
+  let recoveryBonus = 0;
+  if (completedAssignments > 0) {
+    // Calculate recent completion rate (last 7 days)
+    const now = new Date();
+    const sevenDaysAgo = new Date(now.getTime() - (7 * 24 * 60 * 60 * 1000));
+    
+    // Count recent completed assignments (last 7 days)
+    let recentCompletions = 0;
+    if (overdueAssignmentsWithDates && overdueAssignmentsWithDates.length > 0) {
+      // Count completed assignments from the last 7 days
+      recentCompletions = overdueAssignmentsWithDates.filter(assignment => {
+        if (assignment.status === 'completed' && assignment.completed_at) {
+          const completedDate = new Date(assignment.completed_at);
+          return completedDate >= sevenDaysAgo;
+        }
+        return false;
+      }).length;
+    }
+    
+    // Calculate recent completion rate
+    const recentCompletionRate = totalAssignments > 0 ? (recentCompletions / totalAssignments) * 100 : 0;
+    
+    // Recovery bonus for recent good performance
+    if (recentCompletionRate > 80) {
+      recoveryBonus = 3; // 3% bonus for excellent recent performance
+    } else if (recentCompletionRate > 60) {
+      recoveryBonus = 2; // 2% bonus for good recent performance
+    } else if (recentCompletionRate > 40) {
+      recoveryBonus = 1; // 1% bonus for improving performance
+    }
+  }
+  
+  // Calculate late rate for weighted scoring
+  const lateRate = lateSubmissions && lateSubmissions.length > 0 
+    ? Math.max(0, Math.min(100, (lateSubmissions.length / totalAssignments) * 100))
+    : 0;
+  
+  // Updated weighted score formula with balanced weights:
+  // • Completion Rate: 50% weight (positive)
+  // • On-Time Rate: 25% weight (positive)
+  // • Late Rate: 15% weight (NEGATIVE - penalty for late submissions)
+  // • Quality Score: 10% weight (positive)
+  // Plus bonuses (pending, recovery) minus penalties (overdue)
+  // FIXED: Late rate is now a PENALTY (negative) instead of a bonus (positive)
+  const weightedScore = (completionRate * 0.5) + (onTimeRate * 0.25) - (lateRate * 0.15) + (validatedQualityScore * 0.1) + pendingBonus - overduePenalty + recoveryBonus;
   
   // Log detailed calculation
-  logger.logBusiness('Assignment KPI Calculation', {
+  logger.logBusiness('Assignment KPI Calculation (Balanced Weights with Late Penalty)', {
     totalAssignments,
     completedAssignments,
     completionRate: Math.round(completionRate * 100) / 100,
     onTimeSubmissions,
     onTimeRate: Math.round(onTimeRate * 100) / 100,
+    lateRate: Math.round(lateRate * 100) / 100,
     qualityScore: Math.round(validatedQualityScore * 100) / 100,
     pendingAssignments,
     pendingBonus: Math.round(pendingBonus * 100) / 100,
     overdueAssignments,
     overduePenalty: Math.round(overduePenalty * 100) / 100,
-    weightedScore: Math.round(weightedScore * 100) / 100
+    recoveryBonus: Math.round(recoveryBonus * 100) / 100,
+    lateSubmissions: lateSubmissions ? lateSubmissions.length : 0,
+    latePenaltyApplied: lateSubmissions && lateSubmissions.length > 0,
+    weightedScore: Math.round(weightedScore * 100) / 100,
+    shiftBasedDecayApplied: overdueAssignmentsWithDates && overdueAssignmentsWithDates.length > 0,
+    weightBreakdown: {
+      completionWeight: '50%',
+      onTimeWeight: '25%', 
+      lateWeight: '15%',
+      qualityWeight: '10%'
+    }
   });
   
-  // Determine rating based on weighted score
-  let rating, color, description;
-  if (weightedScore >= 90) {
+  // Determine rating and letter grade based on weighted score
+  let rating, color, description, letterGrade;
+  if (weightedScore >= 95) {
     rating = 'Excellent';
+    letterGrade = 'A+';
     color = '#10b981';
     description = 'Outstanding performance! Perfect assignment completion and quality.';
+  } else if (weightedScore >= 90) {
+    rating = 'Excellent';
+    letterGrade = 'A';
+    color = '#10b981';
+    description = 'Excellent performance! Perfect assignment completion and quality.';
+  } else if (weightedScore >= 85) {
+    rating = 'Very Good';
+    letterGrade = 'A-';
+    color = '#10b981';
+    description = 'Very good performance! Keep up the excellent work.';
+  } else if (weightedScore >= 80) {
+    rating = 'Good';
+    letterGrade = 'B+';
+    color = '#3b82f6';
+    description = 'Good performance! Keep up the consistency.';
   } else if (weightedScore >= 75) {
     rating = 'Good';
-    color = '#22c55e';
+    letterGrade = 'B';
+    color = '#3b82f6';
     description = 'Good performance! Keep up the consistency.';
-  } else if (weightedScore >= 60) {
+  } else if (weightedScore >= 70) {
+    rating = 'Above Average';
+    letterGrade = 'B-';
+    color = '#3b82f6';
+    description = 'Above average performance. Good progress.';
+  } else if (weightedScore >= 65) {
     rating = 'Average';
+    letterGrade = 'C+';
     color = '#eab308';
     description = 'Average performance. Focus on completing more assignments.';
-  } else if (weightedScore >= 40) {
+  } else if (weightedScore >= 60) {
+    rating = 'Average';
+    letterGrade = 'C';
+    color = '#eab308';
+    description = 'Average performance. Focus on completing more assignments.';
+  } else if (weightedScore >= 55) {
     rating = 'Below Average';
+    letterGrade = 'C-';
+    color = '#f97316';
+    description = 'Below average performance. Needs improvement.';
+  } else if (weightedScore >= 50) {
+    rating = 'Below Average';
+    letterGrade = 'D';
     color = '#f97316';
     description = 'Below average performance. Needs improvement.';
   } else {
     rating = 'Needs Improvement';
+    letterGrade = 'F';
     color = '#ef4444';
     description = 'Poor performance. Immediate attention required.';
   }
 
+
   const result = {
     rating,
+    letterGrade,
     color,
     description,
     score: Math.round(weightedScore),
     completionRate: Math.round(completionRate),
     onTimeRate: Math.round(onTimeRate),
+    lateRate: Math.round(lateRate),
     qualityScore: Math.round(validatedQualityScore),
     pendingBonus: Math.round(pendingBonus),
     overduePenalty: Math.round(overduePenalty),
+    recoveryBonus: Math.round(recoveryBonus),
     completedAssignments,
     pendingAssignments,
     overdueAssignments,
-    totalAssignments
+    totalAssignments,
+    lateSubmissions: lateSubmissions ? lateSubmissions.length : 0,
+    latePenaltyApplied: lateSubmissions && lateSubmissions.length > 0,
+    shiftBasedDecayApplied: overdueAssignmentsWithDates && overdueAssignmentsWithDates.length > 0,
+    weightBreakdown: {
+      completionWeight: '50%',
+      onTimeWeight: '25%', 
+      lateWeight: '15%',
+      qualityWeight: '10%'
+    }
   };
 
   logKPICalculation('Assignment KPI', {

@@ -1,0 +1,26 @@
+{
+  "name": "backend-tests",
+  "version": "1.0.0",
+  "description": "Test configuration for backend KPI system",
+  "scripts": {
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage"
+  },
+  "devDependencies": {
+    "jest": "^29.0.0",
+    "@types/jest": "^29.0.0"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": ["**/tests/**/*.test.js"],
+    "collectCoverageFrom": [
+      "utils/**/*.js",
+      "services/**/*.js",
+      "controllers/**/*.js",
+      "repositories/**/*.js"
+    ],
+    "coverageDirectory": "coverage",
+    "coverageReporters": ["text", "lcov", "html"]
+  }
+}

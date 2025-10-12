@@ -1,6 +1,9 @@
-const { supabase } = require('../config/supabase');
+// Import new domain-specific controllers
+const goalTrackingController = require('./goalTracking.controller');
+const assignmentKPIController = require('./assignmentKPI.controller');
+const teamMonitoringController = require('./teamMonitoring.controller');
 
-// Import utilities
+// Import utilities for backward compatibility
 const logger = require('../utils/logger');
 const dateUtils = require('../utils/dateUtils');
 const kpiUtils = require('../utils/kpiUtils');
@@ -1989,11 +1992,33 @@ const getTeamLeaderAssignmentKPI = async (req, res) => {
 
     const teamMemberIds = teamMembers?.map(member => member.id) || [];
 
-    // Get all assignments for team members this month
+    // Get all assignments for team members this month (EXCLUDING unselected workers)
+    // First, get unselected workers for this month to exclude them from KPI calculation
+    const { data: unselectedWorkers } = await supabase
+      .from('unselected_workers')
+      .select('worker_id, assignment_date')
+      .eq('team_leader_id', teamLeaderId)
+      .gte('assignment_date', monthStart.toISOString().split('T')[0])
+      .lte('assignment_date', monthEnd.toISOString().split('T')[0]);
+
+    // Create a set of unselected worker IDs for quick lookup
+    const unselectedWorkerIds = new Set(unselectedWorkers?.map(uw => uw.worker_id) || []);
+
+    // Filter out unselected workers from team member IDs
+    const selectedTeamMemberIds = teamMemberIds.filter(id => !unselectedWorkerIds.has(id));
+
+    logger.logBusiness('Team Member Filtering', {
+      totalTeamMembers: teamMemberIds.length,
+      unselectedWorkers: unselectedWorkerIds.size,
+      selectedTeamMembers: selectedTeamMemberIds.length,
+      unselectedWorkerIds: Array.from(unselectedWorkerIds)
+    });
+
+    // Get assignments only for selected team members (excluding unselected workers)
     const { data: assignments, error: assignmentsError } = await supabase
       .from('work_readiness_assignments')
       .select('*')
-      .in('worker_id', teamMemberIds)
+      .in('worker_id', selectedTeamMemberIds)
       .gte('assigned_date', monthStart.toISOString().split('T')[0])
       .lte('assigned_date', monthEnd.toISOString().split('T')[0])
       .order('assigned_date', { ascending: false });
@@ -2029,13 +2054,16 @@ const getTeamLeaderAssignmentKPI = async (req, res) => {
       return true; // All overdue assignments count as penalty
     }).length || 0;
 
-    logger.logBusiness('Team Metrics', {
+    logger.logBusiness('Team Metrics (Excluding Unselected Workers)', {
       totalAssignments,
       completedAssignments,
       onTimeSubmissions,
       pendingAssignments,
       overdueAssignments,
-      teamMembersCount: teamMembers?.length || 0
+      totalTeamMembers: teamMembers?.length || 0,
+      selectedTeamMembers: selectedTeamMemberIds.length,
+      unselectedWorkers: unselectedWorkerIds.size,
+      unselectedWorkerIds: Array.from(unselectedWorkerIds)
     });
 
     // Calculate individual worker KPIs
@@ -2044,6 +2072,31 @@ const getTeamLeaderAssignmentKPI = async (req, res) => {
     });
     
     const individualKPIs = await Promise.all(teamMembers.map(async (member) => {
+      // Only calculate KPI for selected team members (exclude unselected workers)
+      if (unselectedWorkerIds.has(member.id)) {
+        return {
+          workerId: member.id,
+          workerName: `${member.first_name} ${member.last_name}`,
+          kpi: {
+            rating: 'Unselected',
+            letterGrade: 'N/A',
+            score: 0,
+            color: '#6b7280',
+            description: 'Worker not selected for assignments'
+          },
+          metrics: {
+            totalAssignments: 0,
+            completedAssignments: 0,
+            onTimeSubmissions: 0,
+            pendingAssignments: 0,
+            overdueAssignments: 0,
+            completionRate: 0,
+            onTimeRate: 0,
+            qualityScore: 0
+          }
+        };
+      }
+
       const memberAssignments = assignments?.filter(a => a.worker_id === member.id) || [];
       const memberCompleted = memberAssignments.filter(a => a.status === 'completed').length;
       
@@ -2124,7 +2177,17 @@ const getTeamLeaderAssignmentKPI = async (req, res) => {
       ? individualKPIs.reduce((sum, kpi) => sum + kpi.kpi.qualityScore, 0) / individualKPIs.length 
       : 0;
 
-    const teamKPI = calculateAssignmentKPI(completedAssignments, totalAssignments, onTimeSubmissions, avgQualityScore, pendingAssignments, overdueAssignments);
+    // Calculate team late submissions
+    const teamLateSubmissions = allAssignments.filter(assignment => {
+      if (assignment.status !== 'completed' || !assignment.completed_at || !assignment.due_time) {
+        return false;
+      }
+      const completedTime = new Date(assignment.completed_at);
+      const dueTime = new Date(assignment.due_time);
+      return completedTime > dueTime;
+    });
+
+    const teamKPI = calculateAssignmentKPI(completedAssignments, totalAssignments, onTimeSubmissions, avgQualityScore, pendingAssignments, overdueAssignments, [], teamLateSubmissions);
 
     logger.logBusiness('Team KPI Calculation with Penalties', {
       totalAssignments,
@@ -2136,9 +2199,11 @@ const getTeamLeaderAssignmentKPI = async (req, res) => {
       avgQualityScore: avgQualityScore.toFixed(1),
       pendingBonus: teamKPI.pendingBonus.toFixed(2),
       overduePenalty: teamKPI.overduePenalty.toFixed(2),
+      lateSubmissions: teamLateSubmissions.length,
+      latePenaltyApplied: teamKPI.latePenaltyApplied,
       teamKPIRating: teamKPI.rating,
       teamKPIScore: teamKPI.score.toFixed(2),
-      finalFormula: `(${teamCompletionRate.toFixed(1)}% * 0.7) + (${teamOnTimeRate.toFixed(1)}% * 0.2) + (${avgQualityScore.toFixed(1)} * 0.1) + ${teamKPI.pendingBonus.toFixed(2)}% bonus - ${teamKPI.overduePenalty.toFixed(2)}% penalty = ${teamKPI.score.toFixed(2)}`
+        finalFormula: `(${teamCompletionRate.toFixed(1)}% * 0.5) + (${teamOnTimeRate.toFixed(1)}% * 0.25) + (${teamLateRate.toFixed(1)}% * 0.15) + (${avgQualityScore.toFixed(1)} * 0.1) + ${teamKPI.pendingBonus.toFixed(2)}% bonus - ${teamKPI.overduePenalty.toFixed(2)}% penalty = ${teamKPI.score.toFixed(2)}`
     });
 
     res.json({
@@ -2153,7 +2218,10 @@ const getTeamLeaderAssignmentKPI = async (req, res) => {
         teamCompletionRate: Math.round(teamCompletionRate),
         teamOnTimeRate: Math.round(teamOnTimeRate),
         avgQualityScore: Math.round(avgQualityScore),
-        totalMembers: teamMembers.length
+        totalMembers: teamMembers.length,
+        selectedMembers: selectedTeamMemberIds.length,
+        unselectedMembers: unselectedWorkerIds.size,
+        unselectedWorkerIds: Array.from(unselectedWorkerIds)
       },
       individualKPIs,
       period: {
@@ -2240,6 +2308,16 @@ const getWorkerAssignmentKPI = async (req, res) => {
       new Date(a.completed_at) <= new Date(a.due_time)
     ).length || 0;
     
+    // Detect late submissions (completed after due time)
+    const lateSubmissions = assignments?.filter(assignment => {
+      if (assignment.status !== 'completed' || !assignment.completed_at || !assignment.due_time) {
+        return false;
+      }
+      const completedTime = new Date(assignment.completed_at);
+      const dueTime = new Date(assignment.due_time);
+      return completedTime > dueTime;
+    }) || [];
+    
     // ✅ PENDING ASSIGNMENTS WITH FUTURE DUE DATES (WORKER LEVEL)
     const currentTime = new Date();
     const pendingAssignments = assignments?.filter(a => {
@@ -2269,7 +2347,7 @@ const getWorkerAssignmentKPI = async (req, res) => {
     }
 
     // Calculate KPI using enhanced assignment-based system with pending assignments and overdue penalty
-    const kpi = calculateAssignmentKPI(completedAssignments, totalAssignments, onTimeSubmissions, qualityScore, pendingAssignments, overdueAssignments);
+    const kpi = calculateAssignmentKPI(completedAssignments, totalAssignments, onTimeSubmissions, qualityScore, pendingAssignments, overdueAssignments, [], lateSubmissions);
 
     // Get recent assignments for context
     const recentAssignments = assignments?.slice(0, 5).map(assignment => ({
@@ -2292,7 +2370,8 @@ const getWorkerAssignmentKPI = async (req, res) => {
         onTimeSubmissions,
         qualityScore: Math.round(qualityScore),
         completionRate: totalAssignments > 0 ? Math.round((completedAssignments / totalAssignments) * 100) : 0,
-        onTimeRate: totalAssignments > 0 ? Math.round((onTimeSubmissions / totalAssignments) * 100) : 0
+        onTimeRate: totalAssignments > 0 ? Math.round((onTimeSubmissions / totalAssignments) * 100) : 0,
+        lateRate: totalAssignments > 0 ? Math.round((lateSubmissions.length / totalAssignments) * 100) : 0
       },
       recentAssignments,
       period: {
@@ -2321,6 +2400,10 @@ const handleAssessmentSubmission = async (req, res) => {
   try {
     const { workerId, assessmentData } = req.body;
     
+    console.log('🔍 CONTROLLER - Request body:', JSON.stringify(req.body, null, 2));
+    console.log('🔍 CONTROLLER - Worker ID:', workerId);
+    console.log('🔍 CONTROLLER - Assessment data:', assessmentData);
+    
     logger.logBusiness('Handling Assessment Submission', { workerId, assessmentData });
     
     if (!workerId) {
@@ -2338,7 +2421,17 @@ const handleAssessmentSubmission = async (req, res) => {
       });
     }
 
-    const { readinessLevel, fatigueLevel } = assessmentData;
+    // Support both camelCase and snake_case field names
+    const { 
+      readinessLevel, 
+      fatigueLevel, 
+      readiness_level, 
+      fatigue_level 
+    } = assessmentData;
+    
+    // Use snake_case if available, otherwise camelCase
+    const actualReadinessLevel = readiness_level || readinessLevel;
+    const actualFatigueLevel = fatigue_level || fatigueLevel;
     
     // Validation is handled by middleware - no need to duplicate here
     
@@ -2384,14 +2477,17 @@ const handleAssessmentSubmission = async (req, res) => {
       });
     }
 
-    // Check if assignment is overdue - BLOCK submission if overdue
+    // Allow submission even if assignment is overdue
     const currentTime = new Date();
     const dueTime = new Date(assignment.due_time);
-    if (currentTime > dueTime) {
-      return res.status(400).json({
-        success: false,
-        message: 'Assignment is overdue - no catch-up allowed. This is a permanent record.',
-        error: 'Overdue assignments cannot be completed. This reflects the true performance record.'
+    const isOverdue = currentTime > dueTime;
+    
+    if (isOverdue) {
+      logger.logBusiness('Assignment is overdue but allowing submission', {
+        workerId,
+        assignmentId: assignment.id,
+        dueTime: dueTime.toISOString(),
+        currentTime: currentTime.toISOString()
       });
     }
     
@@ -2463,10 +2559,10 @@ const handleAssessmentSubmission = async (req, res) => {
     // Transform assessment data to match database schema (camelCase to snake_case)
     const transformedAssessmentData = {
       worker_id: workerId,
-      readiness_level: assessmentData.readinessLevel,
-      fatigue_level: assessmentData.fatigueLevel,
+      readiness_level: actualReadinessLevel,
+      fatigue_level: actualFatigueLevel,
       mood: assessmentData.mood,
-      pain_discomfort: assessmentData.painDiscomfort,
+      pain_discomfort: assessmentData.pain_discomfort,
       notes: assessmentData.notes || null,
       // Legacy cycle columns - kept for migration but not used in new assignment-based system
       cycle_start: cycleStart,
@@ -2597,21 +2693,29 @@ const handleAssessmentSubmission = async (req, res) => {
   }
 };
 
+// Export new domain-specific controllers for backward compatibility
 module.exports = {
-  getWorkerWeeklyProgress,
-  getWorkerAssignmentKPI,
-  getTeamLeaderAssignmentKPI,
-  getTeamWeeklyKPI,
-  getTeamMonitoringDashboard,
-  getMonthlyPerformanceTracking,
-  handleLogin,
-  handleAssessmentSubmission,
-  calculateKPI,
-  calculateCompletionRateKPI,
-  calculateAssignmentKPI,
-  getWeekDateRange,
-  getWorkingDaysCount,
-  calculateStreaks,
+  // Goal Tracking Controller exports
+  getWorkerWeeklyProgress: goalTrackingController.getWorkerWeeklyProgress,
+  handleLogin: goalTrackingController.handleLogin,
+  handleAssessmentSubmission: goalTrackingController.handleAssessmentSubmission,
+  
+  // Assignment KPI Controller exports
+  getWorkerAssignmentKPI: assignmentKPIController.getWorkerAssignmentKPI,
+  getTeamLeaderAssignmentKPI: assignmentKPIController.getTeamLeaderAssignmentKPI,
+  
+  // Team Monitoring Controller exports
+  getTeamWeeklyKPI: teamMonitoringController.getTeamWeeklyKPI,
+  getTeamMonitoringDashboard: teamMonitoringController.getTeamMonitoringDashboard,
+  getMonthlyPerformanceTracking: teamMonitoringController.getMonthlyPerformanceTracking,
+  
+  // Utility exports for backward compatibility
+  calculateKPI: kpiUtils.calculateKPI,
+  calculateCompletionRateKPI: kpiUtils.calculateCompletionRateKPI,
+  calculateAssignmentKPI: kpiUtils.calculateAssignmentKPI,
+  getWeekDateRange: dateUtils.getWeekDateRange,
+  getWorkingDaysCount: dateUtils.getWorkingDaysCount,
+  calculateStreaks: kpiUtils.calculateStreaks,
   getPerformanceTrend: teamAnalyticsUtils.getPerformanceTrend,
   getTeamWeeklyComparison: teamAnalyticsUtils.getTeamWeeklyComparison,
   generatePerformanceInsights: teamAnalyticsUtils.generatePerformanceInsights,

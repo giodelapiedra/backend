@@ -133,20 +133,26 @@ const getPhilippineTime = () => {
 };
 
 /**
- * Get today's date string in YYYY-MM-DD format
+ * Get today's date string in YYYY-MM-DD format (PH time UTC+8)
  * @returns {string} Today's date string
  */
 const getTodayDateString = () => {
-  return new Date().toISOString().split('T')[0];
+  const now = new Date();
+  const phtOffset = 8 * 60; // 8 hours in minutes
+  const phtTime = new Date(now.getTime() + (phtOffset * 60 * 1000));
+  return phtTime.toISOString().split('T')[0];
 };
 
 /**
- * Get date string from Date object
+ * Get date string from Date object (PH time UTC+8)
  * @param {Date} date - Date object
  * @returns {string} Date string in YYYY-MM-DD format
  */
 const getDateString = (date) => {
-  return new Date(date).toISOString().split('T')[0];
+  const targetDate = new Date(date);
+  const phtOffset = 8 * 60; // 8 hours in minutes
+  const phtTime = new Date(targetDate.getTime() + (phtOffset * 60 * 1000));
+  return phtTime.toISOString().split('T')[0];
 };
 
 /**

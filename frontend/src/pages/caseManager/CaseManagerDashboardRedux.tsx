@@ -1,4 +1,5 @@
 import React, { useEffect, useCallback } from 'react';
+import { debugLog, debugError, debugWarn, logError } from '../../utils/debugUtils';
 import {
   Box,
   Typography,
@@ -57,10 +58,6 @@ import {
   Timeline,
   Refresh,
   CalendarToday,
-  Cached,
-  AutoAwesome,
-  Psychology,
-  Speed,
 } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext.supabase';
 import LayoutWithSidebar from '../../components/LayoutWithSidebar';
@@ -163,10 +160,6 @@ const CaseManagerDashboardRedux: React.FC = () => {
   const [notifications, setNotifications] = React.useState<any[]>([]);
   const [unreadNotificationCount, setUnreadNotificationCount] = React.useState(0);
   
-  // Smart cache clear modal state
-  const [smartCacheModal, setSmartCacheModal] = React.useState(false);
-  const [selectedClinicianForCache, setSelectedClinicianForCache] = React.useState<Clinician | null>(null);
-  
   // Assignment confirmation modal state
   const [assignmentConfirmationModal, setAssignmentConfirmationModal] = React.useState(false);
   const [assignmentToConfirm, setAssignmentToConfirm] = React.useState<{
@@ -200,7 +193,8 @@ const CaseManagerDashboardRedux: React.FC = () => {
     page: currentPage,
     limit: pageSize,
     search: searchTerm,
-    status: statusFilter
+    status: statusFilter,
+    caseManagerId: user?.id
   });
 
   // Get all cases for accurate stats (same as Site Supervisor)
@@ -208,7 +202,7 @@ const CaseManagerDashboardRedux: React.FC = () => {
     data: allCasesData,
     isLoading: allCasesLoading,
     error: allCasesError
-  } = useGetCasesQuery({});
+  } = useGetCasesQuery({ includeAll: true });
 
   const {
     data: incidentsData,
@@ -225,16 +219,16 @@ const CaseManagerDashboardRedux: React.FC = () => {
   const incidents = incidentsData?.incidents || [];
   const pagination = casesData?.pagination || { page: 1, limit: 10, total: 0, totalPages: 0 };
 
-  // Calculate stats (use all cases for accurate count, same as Site Supervisor)
+  // Calculate stats (use all cases for accurate count)
   const stats: DashboardStats = {
-    totalCases: allCases.length, // Use all cases count
+    totalCases: allCases.length,
     newCases: allCases.filter(c => c.status === 'new').length,
     activeCases: allCases.filter(c => ['triaged', 'assessed', 'in_rehab'].includes(c.status)).length,
     completedCases: allCases.filter(c => ['return_to_work', 'closed'].includes(c.status)).length,
-    avgCaseDuration: 45, // Mock data
-    complianceRate: 92, // Mock data
-    upcomingAppointments: 8, // Mock data
-    overdueTasks: 2 // Mock data
+    avgCaseDuration: 45, // TODO: Calculate from actual data
+    complianceRate: 92, // TODO: Calculate from actual data
+    upcomingAppointments: 8, // TODO: Fetch from appointments table
+    overdueTasks: 2 // TODO: Calculate from tasks
   };
 
   // Effects
@@ -266,12 +260,12 @@ const CaseManagerDashboardRedux: React.FC = () => {
     }
   }, [casesError, incidentsError, allCasesError, dispatch]);
 
-  // Fetch notifications (same logic as Site Supervisor)
+  // Fetch notifications
   const fetchNotifications = useCallback(async () => {
     if (!user?.id) return;
     
     try {
-      console.log('Fetching notifications for case manager:', user.id);
+      debugLog('Fetching notifications for case manager:', user.id);
       
       const { data: notificationsData, error: notificationsError } = await dataClient
         .from('notifications')
@@ -281,15 +275,15 @@ const CaseManagerDashboardRedux: React.FC = () => {
         .limit(10);
       
       if (notificationsError) {
-        console.error('Error fetching notifications:', notificationsError);
+        logError('Error fetching notifications:', notificationsError);
         return;
       }
       
-      console.log('Notifications fetched:', notificationsData?.length || 0);
+      debugLog('Notifications fetched:', notificationsData?.length || 0);
       setNotifications(notificationsData || []);
       setUnreadNotificationCount(notificationsData?.filter(n => !n.is_read).length || 0);
     } catch (error) {
-      console.error('Error in fetchNotifications:', error);
+      logError('Error in fetchNotifications:', error);
     }
   }, [user?.id]);
 
@@ -299,7 +293,7 @@ const CaseManagerDashboardRedux: React.FC = () => {
       try {
         // Fetch clinicians using the new service
         const availableClinicians = await CaseAssignmentService.getAvailableClinicians();
-        console.log('Available clinicians for case manager:', availableClinicians);
+        debugLog('Available clinicians for case manager:', availableClinicians);
         
         const cliniciansWithAvailability = availableClinicians.map(c => ({
           ...c,
@@ -307,26 +301,23 @@ const CaseManagerDashboardRedux: React.FC = () => {
           workload: Math.floor(Math.random() * 10) // Mock workload
         }));
         
-        console.log('Processed clinicians for dropdown:', cliniciansWithAvailability);
+        debugLog('Processed clinicians for dropdown:', cliniciansWithAvailability);
         setClinicians(cliniciansWithAvailability);
-        
-        // Debug: Check if admin_clinician@test.com exists
-        await CaseAssignmentService.debugClinicianExists('admin_clinician@test.com');
 
         // Fetch notifications
         await fetchNotifications();
       } catch (err) {
-        console.error('Error fetching additional data:', err);
+        logError('Error fetching additional data:', err);
       }
     };
 
     // Listen for global notification refresh events
     const handleNotificationRefresh = (event: CustomEvent) => {
       const { userId, allRead } = event.detail;
-      console.log('Received notification refresh event:', { userId, allRead });
+      debugLog('Received notification refresh event:', { userId, allRead });
       
       if (userId === user?.id) {
-        console.log('Refreshing notifications for current user...');
+        debugLog('Refreshing notifications for current user...');
         fetchNotifications();
       }
     };
@@ -344,154 +335,16 @@ const CaseManagerDashboardRedux: React.FC = () => {
     };
   }, [user?.id]);
 
-  // Function to aggressively clear all browser cache (like Team Leader)
-  const clearAllBrowserCache = useCallback(async () => {
-    console.log('=== CLEARING ALL BROWSER CACHE ===');
-    
-    try {
-      // Clear localStorage
-      localStorage.clear();
-      console.log('localStorage cleared');
-      
-      // Clear sessionStorage
-      sessionStorage.clear();
-      console.log('sessionStorage cleared');
-      
-      // Clear IndexedDB
-      if ('indexedDB' in window) {
-        try {
-          const databases = await indexedDB.databases();
-          await Promise.all(databases.map(db => {
-            return new Promise((resolve, reject) => {
-              if (db.name) {
-                const deleteReq = indexedDB.deleteDatabase(db.name);
-                deleteReq.onsuccess = () => resolve(true);
-                deleteReq.onerror = () => reject(deleteReq.error);
-              } else {
-                resolve(true);
-              }
-            });
-          }));
-          console.log('IndexedDB cleared');
-        } catch (error) {
-          console.log('IndexedDB clear error:', error);
-        }
-      }
-      
-      // Clear Service Worker cache
-      if ('serviceWorker' in navigator) {
-        try {
-          const registrations = await navigator.serviceWorker.getRegistrations();
-          await Promise.all(registrations.map(registration => registration.unregister()));
-          console.log('Service Worker cleared');
-        } catch (error) {
-          console.log('Service Worker clear error:', error);
-        }
-      }
-      
-      // Clear Cache API
-      if ('caches' in window) {
-        try {
-          const cacheNames = await caches.keys();
-          await Promise.all(cacheNames.map(cacheName => caches.delete(cacheName)));
-          console.log('Cache API cleared');
-        } catch (error) {
-          console.log('Cache API clear error:', error);
-        }
-      }
-      
-      // Clear cookies but preserve login/auth cookies
-      try {
-        const cookiesToPreserve = ['supabase.auth.token', 'sb-', 'auth-token'];
-        
-        document.cookie.split(";").forEach(function(cookie) { 
-          const cookieName = cookie.replace(/^ +/, "").split("=")[0];
-          
-          // Only clear cookies that are not auth-related
-          const shouldPreserve = cookiesToPreserve.some(preserveName => 
-            cookieName.includes(preserveName)
-          );
-          
-          if (!shouldPreserve) {
-            document.cookie = cookie.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/"); 
-          }
-        });
-        console.log('Non-auth cookies cleared (login cookies preserved)');
-      } catch (error) {
-        console.log('Cookie clear error:', error);
-      }
-      
-      console.log('=== BROWSER CACHE CLEARED ===');
-    } catch (error) {
-      console.error('Error clearing browser cache:', error);
-    }
-  }, []);
-
-  // Smart cache clear for specific clinician
-  const smartCacheClearForClinician = useCallback(async (clinician: Clinician) => {
-    try {
-      console.log('SMART CACHE CLEAR FOR CLINICIAN:', clinician.first_name, clinician.last_name);
-      
-      // Clear all browser cache first
-      await clearAllBrowserCache();
-      
-      // Clear all Redux caches and refetch
-      dispatch(casesApi.util.resetApiState());
-      dispatch(incidentsApi.util.resetApiState());
-      refetchCases();
-      refetchIncidents();
-      
-      // Invalidate clinician cases cache to force immediate update
-      dispatch(casesApi.util.invalidateTags([
-        { type: 'Case', id: `clinician-${clinician.id}` },
-        { type: 'Case', id: 'LIST' }
-      ]));
-      
-      // Trigger global cache clear event for clinician
-      const globalCacheClearEvent = new CustomEvent('globalCacheClear', {
-        detail: { 
-          clinicianId: clinician.id,
-          clinicianName: `${clinician.first_name} ${clinician.last_name}`,
-          timestamp: Date.now(),
-          triggeredBy: 'case_manager',
-          triggeredByUser: user?.email || 'Unknown'
-        }
-      });
-      console.log('CASE MANAGER: Dispatching globalCacheClear event:', globalCacheClearEvent.detail);
-      window.dispatchEvent(globalCacheClearEvent);
-      
-      // Also trigger clinician-specific refresh event
-      const clinicianRefreshEvent = new CustomEvent('clinicianDataRefresh', {
-        detail: { 
-          clinicianId: clinician.id,
-          timestamp: Date.now(),
-          cacheCleared: true,
-          triggeredBy: 'case_manager'
-        }
-      });
-      console.log('CASE MANAGER: Dispatching clinicianDataRefresh event:', clinicianRefreshEvent.detail);
-      window.dispatchEvent(clinicianRefreshEvent);
-      
-      // Show success message
-      dispatch(setSuccessMessage(`Smart cache cleared for Dr. ${clinician.first_name} ${clinician.last_name}! Their dashboard will refresh automatically.`));
-      setTimeout(() => dispatch(clearMessages()), 5000);
-      
-      console.log('Smart cache clear completed for clinician:', clinician.id);
-    } catch (error) {
-      console.error('Error in smart cache clear for clinician:', error);
-      dispatch(setError('Failed to clear cache for clinician. Please try again.'));
-    }
-  }, [clearAllBrowserCache, dispatch, refetchCases, refetchIncidents, user?.email]);
 
   // Fetch new data when real-time events occur
   const fetchNewData = useCallback(async () => {
     if (!user?.id) return;
     
     try {
-      console.log('Real-time: Fetching new data...');
+      debugLog('Real-time: Fetching new data...');
       
       // Comprehensive cache clearing
-      console.log('Starting comprehensive cache clear...');
+      debugLog('Starting comprehensive cache clear...');
       
       // Clear RTK Query cache for all APIs
       dispatch(casesApi.util.resetApiState());
@@ -507,7 +360,7 @@ const CaseManagerDashboardRedux: React.FC = () => {
         await Promise.all(
           cacheNames.map(cacheName => caches.delete(cacheName))
         );
-        console.log('Browser cache cleared:', cacheNames.length, 'caches');
+        debugLog('Browser cache cleared:', cacheNames.length, 'caches');
       }
       
       // Clear localStorage cache
@@ -530,17 +383,17 @@ const CaseManagerDashboardRedux: React.FC = () => {
       }
       sessionKeysToRemove.forEach(key => sessionStorage.removeItem(key));
       
-      console.log('Comprehensive cache clear completed');
+      debugLog('Comprehensive cache clear completed');
       
-      // Fetch notifications (same as /notifications page)
+      // Fetch notifications
       await fetchNotifications();
       
       // Force refetch cases and incidents data with fresh cache
       refetchCases();
       
-      console.log('Real-time: Data updated successfully with cache cleared');
+      debugLog('Real-time: Data updated successfully with cache cleared');
     } catch (error) {
-      console.error('Error in real-time data fetch:', error);
+      logError('Error in real-time data fetch:', error);
     }
   }, [user?.id, dispatch, refetchCases]);
 
@@ -548,7 +401,7 @@ const CaseManagerDashboardRedux: React.FC = () => {
   useEffect(() => {
     if (!user?.id) return;
 
-    console.log('Initializing real-time cases and incidents...');
+    debugLog('Initializing real-time cases and incidents...');
 
     const casesSubscription = dataClient
       .channel('cases-changes')
@@ -560,8 +413,8 @@ const CaseManagerDashboardRedux: React.FC = () => {
           table: 'cases'
         },
         (payload) => {
-          console.log('Real-time: New case detected:', payload);
-          console.log('Case data:', payload.new);
+          debugLog('Real-time: New case detected:', payload);
+          debugLog('Case data:', payload.new);
           fetchNewData();
         }
       )
@@ -573,13 +426,13 @@ const CaseManagerDashboardRedux: React.FC = () => {
           table: 'cases'
         },
         (payload) => {
-          console.log('Real-time: Case updated:', payload);
-          console.log('Updated case data:', payload.new);
+          debugLog('Real-time: Case updated:', payload);
+          debugLog('Updated case data:', payload.new);
           fetchNewData();
         }
       )
       .subscribe((status) => {
-        console.log('Real-time cases subscription status:', status);
+        debugLog('Real-time cases subscription status:', status);
         setConnectionStatus(status === 'SUBSCRIBED' ? 'connected' : 'disconnected');
       });
 
@@ -593,8 +446,8 @@ const CaseManagerDashboardRedux: React.FC = () => {
           table: 'incidents'
         },
         (payload) => {
-          console.log('Real-time: New incident detected:', payload);
-          console.log('Incident data:', payload.new);
+          debugLog('Real-time: New incident detected:', payload);
+          debugLog('Incident data:', payload.new);
           fetchNewData();
         }
       )
@@ -606,13 +459,13 @@ const CaseManagerDashboardRedux: React.FC = () => {
           table: 'incidents'
         },
         (payload) => {
-          console.log('Real-time: Incident updated:', payload);
-          console.log('Updated incident data:', payload.new);
+          debugLog('Real-time: Incident updated:', payload);
+          debugLog('Updated incident data:', payload.new);
           fetchNewData();
         }
       )
       .subscribe((status) => {
-        console.log('Real-time incidents subscription status:', status);
+        debugLog('Real-time incidents subscription status:', status);
       });
 
     // Real-time subscription for notifications
@@ -627,17 +480,17 @@ const CaseManagerDashboardRedux: React.FC = () => {
           filter: `user_id=eq.${user.id}`
         },
         (payload) => {
-          console.log('Real-time: New notification received:', payload);
-          console.log('Notification data:', payload.new);
+          debugLog('Real-time: New notification received:', payload);
+          debugLog('Notification data:', payload.new);
           fetchNewData();
         }
       )
       .subscribe((status) => {
-        console.log('Real-time notifications subscription status:', status);
+        debugLog('Real-time notifications subscription status:', status);
       });
 
     return () => {
-      console.log('Cleaning up real-time subscriptions...');
+      debugLog('Cleaning up real-time subscriptions...');
       casesSubscription.unsubscribe();
       incidentsSubscription.unsubscribe();
       notificationsSubscription.unsubscribe();
@@ -661,9 +514,9 @@ const CaseManagerDashboardRedux: React.FC = () => {
       const selectedCase = cases.find(c => c.id === assignmentForm.case);
       const selectedClinician = clinicians.find(c => c.id === assignmentForm.clinician);
       
-      console.log('Selected case:', selectedCase);
-      console.log('Selected clinician:', selectedClinician);
-      console.log('Assignment form data:', assignmentForm);
+      debugLog('Selected case:', selectedCase);
+      debugLog('Selected clinician:', selectedClinician);
+      debugLog('Assignment form data:', assignmentForm);
       
       if (!selectedCase || !selectedClinician) {
         dispatch(setError('Invalid case or clinician selection'));
@@ -683,7 +536,7 @@ const CaseManagerDashboardRedux: React.FC = () => {
       setAssignmentConfirmationModal(true);
 
     } catch (error) {
-      console.error('Error in handleAssignClinician:', error);
+      logError('Error in handleAssignClinician:', error);
       dispatch(setError('An error occurred while preparing assignment'));
     }
   }, [assignmentForm, cases, clinicians, user, dispatch]);
@@ -696,8 +549,8 @@ const CaseManagerDashboardRedux: React.FC = () => {
         return;
       }
 
-      console.log('User confirmed case assignment - starting assignment process...');
-      console.log('Assignment details:', {
+      debugLog('User confirmed case assignment - starting assignment process...');
+      debugLog('Assignment details:', {
         caseId: assignmentToConfirm.case.id,
         clinicianId: assignmentToConfirm.clinician.id,
         caseManagerId: user.id,
@@ -707,7 +560,7 @@ const CaseManagerDashboardRedux: React.FC = () => {
 
       // Use the new case assignment service
       try {
-        console.log('CASE MANAGER: Starting case assignment...');
+        debugLog('CASE MANAGER: Starting case assignment...');
         await CaseAssignmentService.assignCaseToClinician({
           caseId: assignmentToConfirm.case.id,
           clinicianId: assignmentToConfirm.clinician.id,
@@ -715,9 +568,9 @@ const CaseManagerDashboardRedux: React.FC = () => {
           notes: assignmentToConfirm.notes || 'Case assigned by case manager'
         });
         
-        console.log('CASE MANAGER: Case assignment completed successfully');
+        debugLog('CASE MANAGER: Case assignment completed successfully');
       } catch (error) {
-        console.error('CASE MANAGER: Case assignment failed:', error);
+        logError('CASE MANAGER: Case assignment failed:', error);
         dispatch(setError('Failed to assign case. Please try again.'));
         return; // Exit early if assignment fails
       }
@@ -750,17 +603,22 @@ const CaseManagerDashboardRedux: React.FC = () => {
         notes: ''
       });
       
-      // AUTOMATIC SMART CACHE CLEAR FOR ASSIGNED CLINICIAN
-      console.log('AUTOMATIC SMART CACHE CLEAR FOR ASSIGNED CLINICIAN...');
-      console.log('ASSIGNMENT CONFIRMED: Triggering immediate data refresh for:', assignmentToConfirm.clinician.first_name, assignmentToConfirm.clinician.last_name);
-      console.log('ASSIGNMENT CONFIRMED: Clinician ID:', assignmentToConfirm.clinician.id);
-      await smartCacheClearForClinician(assignmentToConfirm.clinician);
+      // Trigger cache clear for clinician dashboard
+      debugLog('Triggering clinician dashboard refresh...');
+      const clinicianRefreshEvent = new CustomEvent('clinicianDataRefresh', {
+        detail: { 
+          clinicianId: assignmentToConfirm.clinician.id,
+          timestamp: Date.now(),
+          triggeredBy: 'case_manager'
+        }
+      });
+      window.dispatchEvent(clinicianRefreshEvent);
       
     } catch (error) {
-      console.error('Error in handleConfirmedAssignment:', error);
+      logError('Error in handleConfirmedAssignment:', error);
       dispatch(setError('An error occurred while assigning the case'));
     }
-  }, [assignmentToConfirm, user, dispatch, smartCacheClearForClinician]);
+  }, [assignmentToConfirm, user, dispatch]);
 
   const handleCaseStatusUpdate = useCallback(async (caseId: string, newStatus: string) => {
     try {
@@ -774,7 +632,7 @@ const CaseManagerDashboardRedux: React.FC = () => {
       dispatch(setSuccessMessage(`Case status updated to ${newStatus}`));
       refetchCases();
     } catch (err: any) {
-      console.error('Error updating case status:', err);
+      logError('Error updating case status:', err);
       dispatch(setError(err.message || 'Failed to update case status'));
     }
   }, [updateCase, dispatch, refetchCases]);
@@ -991,7 +849,7 @@ const CaseManagerDashboardRedux: React.FC = () => {
                 <Box>
                   <Typography variant="h6" sx={{ color: '#1e3a52', fontWeight: 'bold' }}>My Cases</Typography>
                   <Typography variant="caption" sx={{ color: '#2d5a87' }}>
-                    Smart refresh • Updates only when new data is available
+                    Real-time updates enabled
                   </Typography>
                 </Box>
                 <Box sx={{ display: 'flex', gap: 1 }}>
@@ -1031,12 +889,7 @@ const CaseManagerDashboardRedux: React.FC = () => {
                       transition: 'all 0.2s ease'
                     }}
                     onClick={async () => {
-                      // Clear all browser cache first
-                      await clearAllBrowserCache();
-                      
-                      // Clear all Redux caches and refetch
-                      dispatch(casesApi.util.resetApiState());
-                      dispatch(incidentsApi.util.resetApiState());
+                      // Refetch data using RTK Query
                       refetchCases();
                       refetchIncidents();
                       
@@ -1055,36 +908,16 @@ const CaseManagerDashboardRedux: React.FC = () => {
                             setUnreadNotificationCount(notificationsData.filter(n => !n.is_read).length);
                           }
                         } catch (err) {
-                          console.error('Error refreshing notifications:', err);
+                          logError('Error refreshing notifications:', err);
                         }
                       }
                       
                       // Show success message
-                      dispatch(setSuccessMessage('All data refreshed successfully!'));
+                      dispatch(setSuccessMessage('Data refreshed successfully!'));
                       setTimeout(() => dispatch(setSuccessMessage(null)), 3000);
                     }}
                   >
-                    Manual Refresh
-                  </Button>
-
-                  <Button
-                    variant="contained"
-                    startIcon={<AutoAwesome />}
-                    onClick={() => setSmartCacheModal(true)}
-                    sx={{
-                      background: 'linear-gradient(135deg, #5ba3d6 0%, #4f94cd 100%)',
-                      color: 'white',
-                      fontWeight: 'medium',
-                      borderRadius: 2,
-                      '&:hover': {
-                        background: 'linear-gradient(135deg, #4f94cd 0%, #2d5a87 100%)',
-                        transform: 'translateY(-1px)'
-                      },
-                      boxShadow: '0 4px 15px rgba(91, 163, 214, 0.4)',
-                      transition: 'all 0.2s ease'
-                    }}
-                  >
-                    Smart Clear Cache
+                    Refresh
                   </Button>
                 </Box>
               </Box>
@@ -1174,7 +1007,7 @@ const CaseManagerDashboardRedux: React.FC = () => {
                           >
                             <Visibility />
                           </IconButton>
-                          {caseItem.status === 'new' && !caseItem.clinician_id && (
+                          {!caseItem.clinician_id && (
                             <IconButton
                               size="small"
                               onClick={() => {
@@ -1272,8 +1105,7 @@ const CaseManagerDashboardRedux: React.FC = () => {
                               ));
                               setUnreadNotificationCount(prev => prev > 0 ? prev - 1 : 0);
                               
-                              // Clear cache and refresh notifications to ensure consistency
-                              await clearAllBrowserCache();
+                              // Refresh notifications to ensure consistency
                               if (user?.id) {
                                 const { data: notificationsData, error: notificationsError } = await dataClient
                                   .from('notifications')
@@ -1289,7 +1121,7 @@ const CaseManagerDashboardRedux: React.FC = () => {
                               }
                             }
                           } catch (err) {
-                            console.error('Error marking notification as read:', err);
+                            logError('Error marking notification as read:', err);
                           }
                         }
                       }}
@@ -1375,11 +1207,17 @@ const CaseManagerDashboardRedux: React.FC = () => {
                   onChange={(e) => setAssignmentForm(prev => ({ ...prev, case: e.target.value }))}
                   label="Case"
                 >
-                  {cases.filter(c => c.status === 'new' && !c.clinician_id && c.case_manager_id === user?.id).map((caseItem) => (
-                    <MenuItem key={caseItem.id} value={caseItem.id}>
-                      {caseItem.case_number} - {caseItem.worker?.first_name} {caseItem.worker?.last_name}
+                  {cases.filter(c => !c.clinician_id).length === 0 ? (
+                    <MenuItem disabled>
+                      No unassigned cases available
                     </MenuItem>
-                  ))}
+                  ) : (
+                    cases.filter(c => !c.clinician_id).map((caseItem) => (
+                      <MenuItem key={caseItem.id} value={caseItem.id}>
+                        {caseItem.case_number} - {caseItem.worker?.first_name} {caseItem.worker?.last_name} ({caseItem.status})
+                      </MenuItem>
+                    ))
+                  )}
                 </Select>
               </FormControl>
 
@@ -1607,7 +1445,7 @@ const CaseManagerDashboardRedux: React.FC = () => {
                     border: '1px solid rgba(255, 255, 255, 0.2)',
                   }}>
                     <Typography variant="subtitle2" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <AutoAwesome sx={{ fontSize: 18 }} />
+                      <CheckCircle sx={{ fontSize: 18, color: '#4caf50' }} />
                       What happens next?
                     </Typography>
                     <Box sx={{ mt: 1 }}>
@@ -1674,204 +1512,6 @@ const CaseManagerDashboardRedux: React.FC = () => {
           </DialogActions>
         </Dialog>
 
-        {/* Smart Cache Clear Modal */}
-        <Dialog
-          open={smartCacheModal}
-          onClose={() => {
-            setSmartCacheModal(false);
-            setSelectedClinicianForCache(null);
-          }}
-          maxWidth="md"
-          fullWidth
-          PaperProps={{
-            sx: {
-              borderRadius: 3,
-              background: 'linear-gradient(135deg, #5ba3d6 0%, #2d5a87 100%)',
-              color: 'white',
-              boxShadow: '0 8px 32px rgba(91, 163, 214, 0.4)'
-            }
-          }}
-        >
-          <DialogTitle sx={{ 
-            textAlign: 'center', 
-            pb: 1,
-            background: 'rgba(255, 255, 255, 0.1)',
-            backdropFilter: 'blur(10px)',
-          }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1 }}>
-              <AutoAwesome sx={{ fontSize: 28 }} />
-              <Typography variant="h5" component="div" sx={{ fontWeight: 'bold' }}>
-                Smart Cache Clear
-              </Typography>
-            </Box>
-            <Typography variant="body2" sx={{ mt: 1, opacity: 0.9 }}>
-              Select a clinician to clear their dashboard cache and force real-time data refresh
-            </Typography>
-          </DialogTitle>
-          
-          <DialogContent sx={{ pt: 3 }}>
-            <Box sx={{ 
-              background: 'rgba(255, 255, 255, 0.1)', 
-              borderRadius: 2, 
-              p: 3,
-              backdropFilter: 'blur(10px)',
-            }}>
-              <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Psychology sx={{ fontSize: 20 }} />
-                Available Clinicians
-              </Typography>
-              
-              <Typography variant="body2" sx={{ mb: 3, opacity: 0.9 }}>
-                Choose a clinician to trigger smart cache clearing. This will:
-              </Typography>
-              
-              <Box sx={{ mb: 3 }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                  <CheckCircle sx={{ fontSize: 16, color: '#4caf50' }} />
-                  <Typography variant="body2">Clear all browser cache for the selected clinician</Typography>
-                </Box>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                  <CheckCircle sx={{ fontSize: 16, color: '#4caf50' }} />
-                  <Typography variant="body2">Force refresh their dashboard data in real-time</Typography>
-                </Box>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                  <CheckCircle sx={{ fontSize: 16, color: '#4caf50' }} />
-                  <Typography variant="body2">Update case counts and notifications instantly</Typography>
-                </Box>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <CheckCircle sx={{ fontSize: 16, color: '#4caf50' }} />
-                  <Typography variant="body2">Ensure data consistency across all dashboards</Typography>
-                </Box>
-              </Box>
-
-              <FormControl fullWidth>
-                <InputLabel sx={{ color: 'white' }}>Select Clinician</InputLabel>
-                <Select
-                  value={selectedClinicianForCache?.id || ''}
-                  onChange={(e) => {
-                    const clinician = clinicians.find(c => c.id === e.target.value);
-                    setSelectedClinicianForCache(clinician || null);
-                  }}
-                  label="Select Clinician"
-                  sx={{
-                    color: 'white',
-                    '& .MuiOutlinedInput-notchedOutline': {
-                      borderColor: 'rgba(255, 255, 255, 0.3)',
-                    },
-                    '&:hover .MuiOutlinedInput-notchedOutline': {
-                      borderColor: 'rgba(255, 255, 255, 0.5)',
-                    },
-                    '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
-                      borderColor: 'white',
-                    },
-                    '& .MuiSvgIcon-root': {
-                      color: 'white',
-                    },
-                  }}
-                >
-                  {clinicians.map((clinician) => (
-                    <MenuItem key={clinician.id} value={clinician.id}>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, width: '100%' }}>
-                        <Avatar sx={{ 
-                          width: 32, 
-                          height: 32, 
-                          background: 'linear-gradient(45deg, #4caf50, #8bc34a)',
-                          fontSize: 14,
-                        }}>
-                          {clinician.first_name[0]}{clinician.last_name[0]}
-                        </Avatar>
-                        <Box sx={{ flex: 1 }}>
-                          <Typography variant="body1" sx={{ fontWeight: 'medium' }}>
-                            Dr. {clinician.first_name} {clinician.last_name}
-                          </Typography>
-                          <Typography variant="caption" sx={{ opacity: 0.8 }}>
-                            {clinician.specialty || 'General Practice'} • {clinician.is_available ? 'Available' : 'Busy'}
-                          </Typography>
-                        </Box>
-                        <Chip
-                          label={clinician.is_available ? 'Available' : 'Busy'}
-                          size="small"
-                          color={clinician.is_available ? 'success' : 'warning'}
-                          variant="outlined"
-                        />
-                      </Box>
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-
-              {selectedClinicianForCache && (
-                <Box sx={{ 
-                  mt: 3, 
-                  p: 2, 
-                  background: 'rgba(255, 255, 255, 0.1)', 
-                  borderRadius: 2,
-                  border: '1px solid rgba(255, 255, 255, 0.2)',
-                }}>
-                  <Typography variant="subtitle2" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <Speed sx={{ fontSize: 18 }} />
-                    Cache Clear Preview
-                  </Typography>
-                  <Typography variant="body2" sx={{ opacity: 0.9 }}>
-                    Ready to clear cache for <strong>Dr. {selectedClinicianForCache.first_name} {selectedClinicianForCache.last_name}</strong>
-                  </Typography>
-                  <Typography variant="caption" sx={{ opacity: 0.7, display: 'block', mt: 1 }}>
-                    This action will immediately refresh their dashboard and sync all case data.
-                  </Typography>
-                </Box>
-              )}
-            </Box>
-          </DialogContent>
-          
-          <DialogActions sx={{ 
-            p: 3, 
-            background: 'rgba(255, 255, 255, 0.1)',
-            backdropFilter: 'blur(10px)',
-          }}>
-            <Button 
-              onClick={() => {
-                setSmartCacheModal(false);
-                setSelectedClinicianForCache(null);
-              }}
-              sx={{ 
-                color: 'white', 
-                borderColor: 'rgba(255, 255, 255, 0.3)',
-                '&:hover': {
-                  borderColor: 'rgba(255, 255, 255, 0.5)',
-                  background: 'rgba(255, 255, 255, 0.1)',
-                }
-              }}
-              variant="outlined"
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={async () => {
-                if (selectedClinicianForCache) {
-                  await smartCacheClearForClinician(selectedClinicianForCache);
-                  setSmartCacheModal(false);
-                  setSelectedClinicianForCache(null);
-                }
-              }}
-              disabled={!selectedClinicianForCache}
-              variant="contained"
-              startIcon={<Cached />}
-              sx={{
-                background: 'linear-gradient(45deg, #4caf50 0%, #8bc34a 100%)',
-                '&:hover': {
-                  background: 'linear-gradient(45deg, #45a049 0%, #7cb342 100%)',
-                },
-                '&:disabled': {
-                  background: 'rgba(255, 255, 255, 0.2)',
-                  color: 'rgba(255, 255, 255, 0.5)',
-                },
-                boxShadow: '0 4px 15px rgba(76, 175, 80, 0.4)',
-              }}
-            >
-              Clear Cache & Refresh
-            </Button>
-          </DialogActions>
-        </Dialog>
       </Box>
     </LayoutWithSidebar>
   );

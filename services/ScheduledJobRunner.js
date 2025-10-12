@@ -20,16 +20,17 @@ class ScheduledJobRunner {
     try {
       console.log('⏰ Running overdue assignment marking with shift-based deadlines...');
       
-      const today = new Date().toISOString().split('T')[0];
-      const jobId = `mark-overdue-${today}`;
+      const now = new Date();
+      const currentHour = now.getHours();
+      const jobId = `mark-overdue-${now.toISOString().split('T')[0]}-${currentHour}`;
 
-      // Check if job already ran today (idempotency)
+      // Check if job already ran this hour (idempotency)
       const { data: existingJob, error: jobCheckError } = await supabaseAdmin
         .from('system_jobs')
         .select('id, status, created_at')
         .eq('job_id', jobId)
         .eq('status', 'completed')
-        .gte('created_at', `${today}T00:00:00.000Z`)
+        .gte('created_at', `${now.toISOString().split('T')[0]}T${currentHour.toString().padStart(2, '0')}:00:00.000Z`)
         .single();
 
       if (jobCheckError && jobCheckError.code !== 'PGRST116') {
@@ -38,13 +39,12 @@ class ScheduledJobRunner {
       }
 
       if (existingJob) {
-        console.log('✅ Overdue assignments already processed today');
+        console.log(`✅ Overdue assignments already processed this hour (${currentHour}:00)`);
         return;
       }
 
       // OPTIMIZED: Mark overdue assignments using database-level filtering
       // This is 90% faster than fetching all and filtering in app
-      const now = new Date();
       const nowISO = now.toISOString();
       
       const { data, error } = await supabaseAdmin
@@ -67,6 +67,16 @@ class ScheduledJobRunner {
       // Log overdue assignments for monitoring
       if (markedCount > 0) {
         console.log(`🕐 Marked ${markedCount} assignments as overdue (current time: ${nowISO})`);
+        
+        // Log details of overdue assignments for debugging
+        const overdueDetails = data?.map(assignment => ({
+          id: assignment.id,
+          worker_id: assignment.worker_id,
+          due_time: assignment.due_time,
+          assigned_date: assignment.assigned_date
+        })) || [];
+        
+        console.log('📋 Overdue Assignment Details:', overdueDetails);
       }
 
       // Record job completion for idempotency
@@ -80,7 +90,7 @@ class ScheduledJobRunner {
           created_at: new Date().toISOString()
         });
 
-      console.log(`✅ Marked ${markedCount} assignments as overdue (shift-based deadline check)`);
+      console.log(`✅ Marked ${markedCount} assignments as overdue (hourly shift-based deadline check)`);
 
     } catch (error) {
       console.error('❌ Error in markOverdueAssignments:', error);
@@ -132,14 +142,8 @@ class ScheduledJobRunner {
       timezone: 'Asia/Manila'
     }));
     
-    // Mark overdue assignments every day at 8 AM
-    this.jobs.set('markOverdueAssignments', cron.schedule('0 8 * * *', async () => {
-      console.log('⏰ Running overdue assignment marking...');
-      await this.markOverdueAssignments();
-    }, {
-      scheduled: true,
-      timezone: 'Asia/Manila'
-    }));
+  // Manual overdue marking only - no automatic detection
+  // Team leaders can manually mark assignments as overdue after due time
     
     // Run all checks every 6 hours for critical notifications
     this.jobs.set('allChecks', cron.schedule('0 */6 * * *', async () => {
@@ -155,7 +159,7 @@ class ScheduledJobRunner {
     
     // Log job schedule
     console.log('📅 Job Schedule:');
-    console.log('  - Overdue assignments: Daily at 8:00 AM');
+    console.log('  - Overdue assignments: Manual only (team leader control)');
     console.log('  - Check-in reminders: Daily at 9:00 AM');
     console.log('  - Overdue cases: Daily at 10:00 AM');
     console.log('  - Rehab milestones: Daily at 11:00 AM');

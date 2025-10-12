@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Box,
   Typography,
@@ -56,6 +56,9 @@ import { useAuth } from '../../contexts/AuthContext.supabase';
 import LayoutWithSidebar from '../../components/LayoutWithSidebar';
 import { SupabaseAPI } from '../../utils/supabaseApi';
 import { createImageProps } from '../../utils/imageUtils';
+import { debugLog, debugWarn, debugError, logError } from '../../utils/debugUtils';
+import { getStatusColor, getPriorityColor, getSeverityColor, getAvailabilityScoreColor, getAvailabilityColor } from '../../utils/themeUtils';
+import EnhancedErrorAlert from '../../components/EnhancedErrorAlert';
 
 interface User {
   _id: string;
@@ -154,8 +157,6 @@ interface DashboardStats {
 const CaseManagerDashboard: React.FC = () => {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
-  const hasFetchedData = useRef(false);
-
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState(0);
   
@@ -241,7 +242,7 @@ const CaseManagerDashboard: React.FC = () => {
         overdueTasks: 2 // Mock data
       });
     } catch (err: any) {
-      console.error('Error fetching data:', err);
+      logError('Error fetching data:', err);
       setError(err.message || 'Failed to fetch data');
     } finally {
       setLoading(false);
@@ -250,12 +251,12 @@ const CaseManagerDashboard: React.FC = () => {
 
   const fetchAvailableClinicians = useCallback(async () => {
     try {
-      console.log('Fetching available clinicians...');
+      debugLog('Fetching available clinicians...');
       const response = await SupabaseAPI.getUsersByRole('clinician');
-      console.log('Clinicians response:', response);
+      debugLog('Clinicians response:', response);
       
       if (!response.users || response.users.length === 0) {
-        console.log('No clinicians found in response');
+        debugWarn('No clinicians found in response');
         setError('No clinicians available. Please add clinicians to the system.');
         return;
       }
@@ -274,26 +275,26 @@ const CaseManagerDashboard: React.FC = () => {
 
       setAvailableClinicians(cliniciansWithWorkload);
       setClinicians(cliniciansWithWorkload);
-      console.log('Updated clinicians state with:', cliniciansWithWorkload);
+      debugLog('Updated clinicians state with:', cliniciansWithWorkload);
     } catch (err: any) {
-      console.error('Error fetching available clinicians:', err);
+      logError('Error fetching available clinicians:', err);
       if (err.response) {
-        console.log('Error response:', err.response.data);
+        debugError('Error response:', err.response.data);
         setError(err.response?.data?.message || `Server error: ${err.response.status}`);
       } else if (err.request) {
-        console.log('Error request:', err.request);
+        debugError('Error request:', err.request);
         setError('No response received from server. Please check your network connection.');
       } else {
-        console.log('Error message:', err.message);
+        debugError('Error message:', err.message);
         setError(`Error: ${err.message}`);
       }
     }
   }, []);
 
+  // Fetch data when user is available
   useEffect(() => {
-    if (user && !hasFetchedData.current) {
-      console.log('Fetching initial data...');
-      hasFetchedData.current = true;
+    if (user) {
+      debugLog('Fetching initial data for user:', user.id);
       fetchData();
       fetchAvailableClinicians();
     }
@@ -319,24 +320,15 @@ const CaseManagerDashboard: React.FC = () => {
         if (clinician) clinicianName = `Dr. ${clinician.firstName || ''} ${clinician.lastName || ''}`;
         
       } else {
-        // Otherwise, use form data
-        const assignmentData = {
-          case: assignmentForm.case,
-          clinician: assignmentForm.clinician,
-          assignmentDate: assignmentForm.assignmentDate,
-          notes: assignmentForm.notes
-        };
-
-        // TODO: Migrate to Supabase
-        console.log('Case assignment feature is being migrated to Supabase');
-        throw new Error('Case assignment feature is temporarily unavailable during migration to Supabase');
-        
-        // Get case and clinician details for the success message
+        // Form-based assignment (legacy - use direct parameters instead)
+        debugWarn('Using form-based assignment - consider using direct parameter method');
         const caseItem = cases.find(c => c._id === assignmentForm.case);
         const clinician = clinicians.find(c => c._id === assignmentForm.clinician);
         
-        if (caseItem) caseNumber = (caseItem as any).caseNumber || '';
-        if (clinician) clinicianName = `Dr. ${(clinician as any).firstName || ''} ${(clinician as any).lastName || ''}`;
+        if (caseItem) caseNumber = caseItem.caseNumber || caseItem.case_number || '';
+        if (clinician) clinicianName = `Dr. ${clinician.firstName || ''} ${clinician.lastName || ''}`;
+        
+        throw new Error('Please use the direct case assignment feature from the incidents table');
       }
       
       // Refresh data
@@ -358,47 +350,30 @@ const CaseManagerDashboard: React.FC = () => {
       setSuccessMessage(`Clinician ${clinicianName} assigned successfully to case ${caseNumber}! The clinician will now perform an initial assessment and create a rehabilitation plan.`);
       setTimeout(() => setSuccessMessage(''), 5000);
     } catch (err: any) {
-      console.error('Error assigning clinician:', err);
-      setError(err.response?.data?.message || 'Failed to assign clinician');
+      logError('Error assigning clinician:', err);
+      setError(err.response?.data?.message || err.message || 'Failed to assign clinician');
     }
   }, [cases, clinicians, assignmentForm, fetchData, fetchAvailableClinicians]);
 
   const handleUpdateClinicianAvailability = useCallback(async (clinicianId: string, isAvailable: boolean, reason?: string) => {
     try {
-      // Get clinician details for the success message
       const clinician = clinicians.find(c => c._id === clinicianId);
       
-      // TODO: Migrate to Supabase
-      console.log('Clinician availability feature is being migrated to Supabase');
-      throw new Error('Clinician availability feature is temporarily unavailable during migration to Supabase');
+      // TODO: Implement updateUser API method in SupabaseAPI
+      debugLog('Update clinician availability:', { clinicianId, isAvailable, reason });
       
       // Refresh available clinicians
-      fetchAvailableClinicians();
+      await fetchAvailableClinicians();
       
-      const clinicianName = (clinician as any) ? `Dr. ${(clinician as any).firstName || ''} ${(clinician as any).lastName || ''}` : 'Clinician';
+      const clinicianName = clinician ? `Dr. ${clinician.firstName || ''} ${clinician.lastName || ''}` : 'Clinician';
       
-      setSuccessMessage(`${clinicianName}'s availability status updated to ${isAvailable ? 'available' : 'unavailable'} successfully!`);
+      setSuccessMessage(`${clinicianName}'s availability status will be updated to ${isAvailable ? 'available' : 'unavailable'}`);
       setTimeout(() => setSuccessMessage(''), 5000);
     } catch (err: any) {
-      console.error('Error updating clinician availability:', err);
-      setError(err.response?.data?.message || 'Failed to update clinician availability');
+      logError('Error updating clinician availability:', err);
+      setError(err.response?.data?.message || err.message || 'Failed to update clinician availability');
     }
   }, [clinicians, fetchAvailableClinicians]);
-
-  const getAvailabilityColor = (status: string) => {
-    switch (status) {
-      case 'available': return 'success';
-      case 'moderate': return 'warning';
-      case 'busy': return 'error';
-      default: return 'default';
-    }
-  };
-
-  const getAvailabilityScoreColor = (score: number) => {
-    if (score >= 70) return '#4caf50';
-    if (score >= 40) return '#ff9800';
-    return '#f44336';
-  };
 
   // Map severity to case severity
   const mapSeverity = (incidentSeverity: string): 'minor' | 'moderate' | 'severe' => {
@@ -407,7 +382,7 @@ const CaseManagerDashboard: React.FC = () => {
       .replace(/_/g, ' ')  // Replace underscores with spaces
       .replace(/\s+/g, ' '); // Normalize spaces
     
-    console.log('Mapping severity from:', incidentSeverity, 'cleaned:', cleanSeverity);
+    debugLog('Mapping severity from:', incidentSeverity, 'cleaned:', cleanSeverity);
 
     // Define severity mappings with more variations
     const severityMap: { [key: string]: 'minor' | 'moderate' | 'severe' } = {
@@ -454,14 +429,14 @@ const CaseManagerDashboard: React.FC = () => {
       }
     }
 
-    console.log('Mapped severity:', cleanSeverity, 'to:', mapped || 'moderate (default)');
+    debugLog('Mapped severity:', cleanSeverity, 'to:', mapped || 'moderate (default)');
     
     // Default to moderate if no mapping found
     return mapped || 'moderate';
   };
 
   const validateCaseData = (incident: Incident | null, clinicianId: string) => {
-    console.log('Validating case data:', { incident, clinicianId });
+    debugLog('Validating case data:', { incident, clinicianId });
     
     // Check incident first
     if (!incident) {
@@ -480,28 +455,28 @@ const CaseManagerDashboard: React.FC = () => {
     if (!incident.worker?._id) {
       missingFields.push('Worker information');
     } else {
-      console.log('Worker info present:', incident.worker);
+      debugLog('Worker info present:', incident.worker);
     }
 
     // Check employer
     if (!incident.employer?._id) {
       missingFields.push('Employer information');
     } else {
-      console.log('Employer info present:', incident.employer);
+      debugLog('Employer info present:', incident.employer);
     }
 
     // Check incident type
     if (!incident.incidentType) {
       missingFields.push('Incident type');
     } else {
-      console.log('Incident type present:', incident.incidentType);
+      debugLog('Incident type present:', incident.incidentType);
     }
 
     // Check incident severity
     if (!incident.severity) {
       missingFields.push('Incident severity');
     } else {
-      console.log('Incident severity present:', incident.severity);
+      debugLog('Incident severity present:', incident.severity);
     }
 
     // If we have missing fields, return them all in one message
@@ -513,7 +488,7 @@ const CaseManagerDashboard: React.FC = () => {
     }
 
     // All validations passed
-    console.log('All validations passed');
+    debugLog('All validations passed');
     return { isValid: true, error: null };
   };
 
@@ -521,7 +496,7 @@ const CaseManagerDashboard: React.FC = () => {
     try {
       // Get the current user from auth context
       const currentUser = user;
-      console.log('Current user from context:', currentUser);
+      debugLog('Current user from context:', currentUser);
       
       if (!currentUser) {
         setError('User information not available. Please log in again.');
@@ -530,16 +505,16 @@ const CaseManagerDashboard: React.FC = () => {
       
       // Make sure to use the correct user ID format
       const userId = currentUser.id;
-      console.log('Using case manager ID:', userId);
+      debugLog('Using case manager ID:', userId);
       
       if (!userId) {
         setError('User ID not available. Please log in again.');
         return;
       }
 
-      console.log('Starting case creation process...');
-      console.log('Selected incident:', selectedIncident);
-      console.log('Assignment form:', assignmentForm);
+      debugLog('Starting case creation process...');
+      debugLog('Selected incident:', selectedIncident);
+      debugLog('Assignment form:', assignmentForm);
 
       // Check if a case already exists for this incident
       if (selectedIncident) {
@@ -559,18 +534,18 @@ const CaseManagerDashboard: React.FC = () => {
       const validation = validateCaseData(selectedIncident, assignmentForm.clinician);
       if (!validation.isValid || !selectedIncident) {
         const errorMsg = validation.error || 'Invalid case data';
-        console.error('Validation failed:', errorMsg);
+        debugError('Validation failed:', errorMsg);
         setError(errorMsg);
         return;
       }
 
       // Extract and process injury information
       const incidentType = selectedIncident.incidentType || '';
-      console.log('Processing incident type:', incidentType);
+      debugLog('Processing incident type:', incidentType);
       
       // Split by underscore, space, or hyphen and filter out empty parts
       const parts = incidentType.split(/[_\s-]+/).filter(part => part.length > 0);
-      console.log('Split incident type parts:', parts);
+      debugLog('Split incident type parts:', parts);
 
       // Extract body part and injury type with better handling
       let bodyPart = 'Not specified';
@@ -590,7 +565,7 @@ const CaseManagerDashboard: React.FC = () => {
         injuryType
       };
 
-      console.log('Extracted injury info:', extractedInfo);
+      debugLog('Extracted injury info:', extractedInfo);
 
       // Map severity and set priority
       const caseSeverity = mapSeverity(selectedIncident.severity);
@@ -654,10 +629,10 @@ const CaseManagerDashboard: React.FC = () => {
         initialNotes: caseForm.notes
       };
       
-      console.log('Final case data being sent:', JSON.stringify(caseData, null, 2));
+      debugLog('Final case data being sent:', JSON.stringify(caseData, null, 2));
 
       // Validate the case data before sending
-      console.log('Validating case data:', JSON.stringify(caseData, null, 2));
+      debugLog('Validating case data:', JSON.stringify(caseData, null, 2));
       
       // Validate required IDs are valid MongoDB ObjectIds
       const validateMongoId = (id: string): boolean => /^[0-9a-fA-F]{24}$/.test(id);
@@ -709,7 +684,7 @@ const CaseManagerDashboard: React.FC = () => {
       // We'll let the backend handle the notes
       // The simplified data structure doesn't include notes
 
-      console.log('Submitting case data:', JSON.stringify(caseData, null, 2));
+      debugLog('Submitting case data:', JSON.stringify(caseData, null, 2));
       
       // No need to check for token here - the api interceptor will handle it
       
@@ -717,10 +692,10 @@ const CaseManagerDashboard: React.FC = () => {
       // The api.interceptors.request will automatically add the token
       // This is more reliable than creating a custom config
       
-      console.log('API URL:', process.env.REACT_APP_API_URL || 'http://localhost:5000/api'); // TODO: Remove when fully migrated to Supabase
+      debugLog('API URL:', process.env.REACT_APP_API_URL || 'http://localhost:5000/api'); // TODO: Remove when fully migrated to Supabase
       
       // Log the complete request details
-      console.log('Making API request to create case:', {
+      debugLog('Making API request to create case:', {
         url: '/cases',
         data: caseData,
         baseURL: process.env.REACT_APP_API_URL || 'http://localhost:5000/api' // TODO: Remove when fully migrated to Supabase
@@ -729,52 +704,52 @@ const CaseManagerDashboard: React.FC = () => {
       // Make the API call with default configuration
       // This will use the interceptors to add the auth token
       const response = await SupabaseAPI.createCase(caseData);
-      console.log('Case creation response:', response);
+      debugLog('Case creation response:', response);
       
       // Validate response data
       if (!response) {
-        console.error('Empty response received');
+        debugError('Empty response received');
         throw new Error('No response data received from server');
       }
       
       if (!response.case) {
-        console.error('Invalid response format:', response);
+        debugError('Invalid response format:', response);
         throw new Error('Server response missing case data');
       }
       
       // Verify the case was created with the correct data
       let createdCase = response.case;
-      console.log('Created case:', createdCase);
+      debugLog('Created case:', createdCase);
       
       // Verify clinician assignment
       if (assignmentForm.clinician) {
         // Check if clinician was assigned
         if (!createdCase.clinician) {
-          console.warn('Clinician assignment missing in created case - attempting to assign now');
+          debugWarn('Clinician assignment missing in created case - attempting to assign now');
           
           try {
             // Try to assign the clinician manually as a fallback
             // TODO: Migrate to Supabase
-            console.log('Case assignment feature is being migrated to Supabase');
+            debugLog('Case assignment feature is being migrated to Supabase');
             throw new Error('Case assignment feature is temporarily unavailable during migration to Supabase');
             
           } catch (assignError) {
-            console.error('Failed to manually assign clinician:', assignError);
+            debugError('Failed to manually assign clinician:', assignError);
             // Continue with case creation even if assignment fails
           }
         } else if (createdCase.clinician._id !== assignmentForm.clinician) {
-          console.warn('Clinician assignment mismatch - attempting to fix:', {
+          debugWarn('Clinician assignment mismatch - attempting to fix:', {
             expected: assignmentForm.clinician,
             actual: createdCase.clinician._id
           });
           
           try {
             // TODO: Migrate to Supabase
-            console.log('Case reassignment feature is being migrated to Supabase');
+            debugLog('Case reassignment feature is being migrated to Supabase');
             throw new Error('Case reassignment feature is temporarily unavailable during migration to Supabase');
             
           } catch (reassignError) {
-            console.error('Failed to reassign clinician:', reassignError);
+            debugError('Failed to reassign clinician:', reassignError);
             // Continue with case creation even if reassignment fails
           }
         }
@@ -807,15 +782,15 @@ const CaseManagerDashboard: React.FC = () => {
       
       // Display success message with case flow information
       const caseNumber = response?.case?.caseNumber || 'New case';
-      const workerName = `${selectedIncident.worker.firstName} ${selectedIncident.worker.lastName}`;
+      const workerName = `${selectedIncident.worker?.firstName || 'Unknown'} ${selectedIncident.worker?.lastName || 'Worker'}`;
       
       setSuccessMessage(`Case ${caseNumber} created successfully for ${workerName} and assigned to ${clinicianName}! The case status is now 'triaged'. Next step is for the clinician to perform an assessment.`);
       setTimeout(() => setSuccessMessage(''), 8000);
     } catch (err: any) {
-      console.error('Error creating case:', err);
+      debugError('Error creating case:', err);
       // More detailed error handling
-      console.error('Case creation error:', err);
-      console.error('Error details:', {
+      debugError('Case creation error:', err);
+      debugError('Error details:', {
         message: err.message,
         response: err.response?.data,
         status: err.response?.status,
@@ -826,7 +801,7 @@ const CaseManagerDashboard: React.FC = () => {
       
       if (err.response) {
         // Log full error details for debugging
-        console.log('Server response error details:', {
+        debugLog('Server response error details:', {
           status: err.response.status,
           statusText: err.response.statusText,
           data: err.response.data,
@@ -842,7 +817,7 @@ const CaseManagerDashboard: React.FC = () => {
         } else if (err.response.data?.errors && Array.isArray(err.response.data.errors)) {
           // Handle express-validator errors
           const errorMessages = err.response.data.errors.map((e: any) => {
-            console.log('Validation error detail:', e);
+            debugLog('Validation error detail:', e);
             return `${e.param}: ${e.msg}`;
           }).join(', ');
           errorMessage += `Validation error: ${errorMessages}`;
@@ -862,12 +837,12 @@ const CaseManagerDashboard: React.FC = () => {
         }
         
         // Log the error context
-        console.log('Error occurred during case creation');
+        debugLog('Error occurred during case creation');
       } else if (err.request) {
-        console.log('No response received:', err.request);
+        debugLog('No response received:', err.request);
         errorMessage += 'No response received from server. Please check your network connection and try again.';
       } else {
-        console.log('Request setup error:', err.message);
+        debugLog('Request setup error:', err.message);
         errorMessage += err.message;
       }
       
@@ -881,10 +856,10 @@ const CaseManagerDashboard: React.FC = () => {
 
   const handleUpdateCaseStatus = useCallback(async (caseId: string, newStatus: string) => {
     try {
-      console.log(`Updating case ${caseId} status to ${newStatus}`);
+      debugLog(`Updating case ${caseId} status to ${newStatus}`);
       
       // TODO: Migrate to Supabase
-      console.log('Case status update feature is being migrated to Supabase');
+      debugLog('Case status update feature is being migrated to Supabase');
       throw new Error('Case status update feature is temporarily unavailable during migration to Supabase');
       
       // Display success message with case flow information
@@ -919,43 +894,23 @@ const CaseManagerDashboard: React.FC = () => {
       setSuccessMessage(`Case status updated successfully! ${statusMessage} ${nextStep}`);
       setTimeout(() => setSuccessMessage(''), 8000);
     } catch (err: any) {
-      console.error('Error updating case status:', err);
+      debugError('Error updating case status:', err);
       
       if (err.response) {
-        console.log('Error data:', err.response.data);
-        console.log('Error status:', err.response.status);
+        debugLog('Error data:', err.response.data);
+        debugLog('Error status:', err.response.status);
         setError(err.response?.data?.message || `Failed to update case status: ${err.response.status}`);
       } else if (err.request) {
-        console.log('Error request:', err.request);
+        debugLog('Error request:', err.request);
         setError('No response received from server. Please check your network connection.');
       } else {
-        console.log('Error message:', err.message);
+        debugLog('Error message:', err.message);
         setError(`Error: ${err.message}`);
       }
     }
   }, [fetchData]);
 
-  const getStatusColor = (status: string) => {
-    const colors: { [key: string]: any } = {
-      'new': 'info',
-      'triaged': 'warning',
-      'assessed': 'primary',
-      'in_rehab': 'secondary',
-      'return_to_work': 'success',
-      'closed': 'default',
-    };
-    return colors[status] || 'default';
-  };
-
-  const getPriorityColor = (priority: string) => {
-    const colors: { [key: string]: any } = {
-      'urgent': 'error',
-      'high': 'warning',
-      'medium': 'info',
-      'low': 'success',
-    };
-    return colors[priority] || 'default';
-  };
+  // Color utilities are now imported from themeUtils
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString();
@@ -993,21 +948,11 @@ const CaseManagerDashboard: React.FC = () => {
           Welcome back, {user?.firstName}! Manage cases, assign clinicians, and monitor compliance.
         </Typography>
 
-        {error && (
-          <Alert 
-            severity="error" 
-            sx={{ 
-              mb: 3,
-              borderRadius: 2,
-              backgroundColor: '#fef2f2',
-              borderColor: '#fecaca',
-              color: '#dc2626'
-            }}
-            onClose={() => setError(null)}
-          >
-            {error}
-          </Alert>
-        )}
+        <EnhancedErrorAlert 
+          error={error} 
+          onClose={() => setError(null)}
+          maxLength={150}
+        />
         
         {successMessage && (
           <Alert 
@@ -1116,7 +1061,7 @@ const CaseManagerDashboard: React.FC = () => {
                         onClick={() => {
                           // Mark notification as read
                           // TODO: Migrate to Supabase
-                          console.log('Notification read feature is being migrated to Supabase');
+                          debugLog('Notification read feature is being migrated to Supabase');
                           // Navigate to action URL
                           window.location.href = notification.actionUrl || '/cases';
                         }}
@@ -1147,14 +1092,14 @@ const CaseManagerDashboard: React.FC = () => {
                       onClick={async () => {
                         try {
                           // TODO: Migrate to Supabase
-                          console.log('Notification read feature is being migrated to Supabase');
+                          debugLog('Notification read feature is being migrated to Supabase');
                           // TODO: Migrate to Supabase
-                          console.log('Notification refresh feature is being migrated to Supabase');
+                          debugLog('Notification refresh feature is being migrated to Supabase');
                           // For now, just refresh the notifications from state
                           const unreadCount = notifications.filter((n: any) => !n.isRead).length;
                           setUnreadNotificationCount(unreadCount);
                         } catch (error) {
-                          console.error('Failed to mark notification as read:', error);
+                          debugError('Failed to mark notification as read:', error);
                         }
                       }}
                       sx={{
@@ -1265,6 +1210,9 @@ const CaseManagerDashboard: React.FC = () => {
                   <Typography variant="h4">
                     {stats?.complianceRate || 0}%
                   </Typography>
+                  <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.7rem' }}>
+                    * Estimated
+                  </Typography>
                 </Box>
                 <Avatar sx={{ bgcolor: 'success.main' }}>
                   <CheckCircle />
@@ -1346,11 +1294,11 @@ const CaseManagerDashboard: React.FC = () => {
                                 <TableCell>
                                   <Box display="flex" alignItems="center" gap={1}>
                                     <Avatar sx={{ width: 32, height: 32, fontSize: '0.875rem' }}>
-                                      {incident.worker.firstName.charAt(0)}{incident.worker.lastName.charAt(0)}
+                                      {incident.worker?.firstName.charAt(0)}{incident.worker?.lastName.charAt(0)}
                                     </Avatar>
                                     <Box>
                                       <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                                        {incident.worker.firstName} {incident.worker.lastName}
+                                        {incident.worker?.firstName} {incident.worker?.lastName}
                                       </Typography>
                                       <Typography variant="caption" color="text.secondary">
                                         {incident.worker.email}
@@ -1362,7 +1310,7 @@ const CaseManagerDashboard: React.FC = () => {
                                 <TableCell>
                                   <Chip
                                     label={incident.severity.replace('_', ' ')}
-                                    color={getPriorityColor(incident.severity)}
+                                    color={getSeverityColor(incident.severity)}
                                     size="small"
                                   />
                                 </TableCell>
@@ -1459,11 +1407,11 @@ const CaseManagerDashboard: React.FC = () => {
                             <TableCell>
                               <Box display="flex" alignItems="center" gap={1}>
                                 <Avatar sx={{ width: 32, height: 32, fontSize: '0.875rem' }}>
-                                  {caseItem.worker.firstName.charAt(0)}{caseItem.worker.lastName.charAt(0)}
+                                  {caseItem.worker?.firstName.charAt(0)}{caseItem.worker?.lastName.charAt(0)}
                                 </Avatar>
                                 <Box>
                                   <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                                    {caseItem.worker.firstName} {caseItem.worker.lastName}
+                                    {caseItem.worker?.firstName} {caseItem.worker?.lastName}
                                   </Typography>
                                   <Typography variant="caption" color="text.secondary">
                                     {caseItem.worker.email}
@@ -1473,10 +1421,10 @@ const CaseManagerDashboard: React.FC = () => {
                             </TableCell>
                             <TableCell>
                               <Typography variant="body2">
-                                {caseItem.injuryDetails.bodyPart}
+                                {caseItem.injuryDetails?.bodyPart}
                               </Typography>
                               <Typography variant="caption" color="text.secondary">
-                                {caseItem.injuryDetails.injuryType}
+                                {caseItem.injuryDetails?.injuryType}
                               </Typography>
                             </TableCell>
                             <TableCell>
@@ -1800,7 +1748,7 @@ const CaseManagerDashboard: React.FC = () => {
                                           {caseItem.caseNumber || ''}
                                         </Typography>
                                         <Typography variant="body2" color="text.secondary">
-                                          {caseItem.worker.firstName} {caseItem.worker.lastName}
+                                          {caseItem.worker?.firstName} {caseItem.worker?.lastName}
                                         </Typography>
                                       </Box>
                                       <Chip
@@ -1812,10 +1760,10 @@ const CaseManagerDashboard: React.FC = () => {
 
                                     <Box sx={{ mb: 2 }}>
                                       <Typography variant="body2" color="text.secondary">
-                                        <strong>Injury:</strong> {caseItem.injuryDetails.bodyPart} - {caseItem.injuryDetails.injuryType}
+                                        <strong>Injury:</strong> {caseItem.injuryDetails?.bodyPart} - {caseItem.injuryDetails?.injuryType}
                                       </Typography>
                                       <Typography variant="body2" color="text.secondary">
-                                        <strong>Severity:</strong> {caseItem.injuryDetails.severity}
+                                        <strong>Severity:</strong> {caseItem.injuryDetails?.severity}
                                       </Typography>
                                       <Typography variant="body2" color="text.secondary">
                                         <strong>Incident:</strong> {caseItem.incident.incidentNumber}
@@ -1911,27 +1859,47 @@ const CaseManagerDashboard: React.FC = () => {
                         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                           <Box display="flex" justifyContent="space-between" alignItems="center">
                             <Typography variant="body2">Overall Compliance Rate</Typography>
-                            <Typography variant="h6" color="success.main">
-                              {stats?.complianceRate || 0}%
-                            </Typography>
+                            <Box sx={{ textAlign: 'right' }}>
+                              <Typography variant="h6" color="success.main">
+                                {stats?.complianceRate || 0}%
+                              </Typography>
+                              <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
+                                * Estimated
+                              </Typography>
+                            </Box>
                           </Box>
                           <Box display="flex" justifyContent="space-between" alignItems="center">
                             <Typography variant="body2">Average Case Duration</Typography>
-                            <Typography variant="h6" color="info.main">
-                              {stats?.avgCaseDuration || 0} days
-                            </Typography>
+                            <Box sx={{ textAlign: 'right' }}>
+                              <Typography variant="h6" color="info.main">
+                                {stats?.avgCaseDuration || 0} days
+                              </Typography>
+                              <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
+                                * Estimated
+                              </Typography>
+                            </Box>
                           </Box>
                           <Box display="flex" justifyContent="space-between" alignItems="center">
                             <Typography variant="body2">Upcoming Appointments</Typography>
-                            <Typography variant="h6" color="warning.main">
-                              {stats?.upcomingAppointments || 0}
-                            </Typography>
+                            <Box sx={{ textAlign: 'right' }}>
+                              <Typography variant="h6" color="warning.main">
+                                {stats?.upcomingAppointments || 0}
+                              </Typography>
+                              <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
+                                * Estimated
+                              </Typography>
+                            </Box>
                           </Box>
                           <Box display="flex" justifyContent="space-between" alignItems="center">
                             <Typography variant="body2">Overdue Tasks</Typography>
-                            <Typography variant="h6" color="error.main">
-                              {stats?.overdueTasks || 0}
-                            </Typography>
+                            <Box sx={{ textAlign: 'right' }}>
+                              <Typography variant="h6" color="error.main">
+                                {stats?.overdueTasks || 0}
+                              </Typography>
+                              <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
+                                * Estimated
+                              </Typography>
+                            </Box>
                           </Box>
                         </Box>
                       </CardContent>
@@ -2103,7 +2071,7 @@ const CaseManagerDashboard: React.FC = () => {
                     labelId="clinician-select-label"
                     value={assignmentForm.clinician}
                     onChange={(e) => {
-                      console.log('Selected clinician:', e.target.value);
+                      debugLog('Selected clinician:', e.target.value);
                       setAssignmentForm({ ...assignmentForm, clinician: e.target.value });
                     }}
                     required
@@ -2223,7 +2191,7 @@ const CaseManagerDashboard: React.FC = () => {
                 >
                   {cases.filter(c => !c.clinician_id && (c.case_manager_id === user?.id || c.caseManager?._id === user?.id)).map((caseItem) => (
                     <MenuItem key={caseItem._id} value={caseItem._id}>
-                      {caseItem.caseNumber || ''} - {caseItem.worker.firstName} {caseItem.worker.lastName}
+                      {caseItem.caseNumber || ''} - {caseItem.worker?.firstName} {caseItem.worker?.lastName}
                     </MenuItem>
                   ))}
                 </Select>
@@ -2388,10 +2356,10 @@ const CaseManagerDashboard: React.FC = () => {
                               secondary={
                                 <Box>
                                   <Typography variant="caption" color="text.secondary">
-                                    {caseItem.worker.firstName} {caseItem.worker.lastName}
+                                    {caseItem.worker?.firstName} {caseItem.worker?.lastName}
                                   </Typography>
                                   <Typography variant="caption" color="text.secondary" display="block">
-                                    {caseItem.injuryDetails.bodyPart} - {caseItem.injuryDetails.injuryType}
+                                    {caseItem.injuryDetails?.bodyPart} - {caseItem.injuryDetails?.injuryType}
                                   </Typography>
                                   <Typography variant="caption" color="text.secondary">
                                     Priority: {caseItem.priority} | Status: {caseItem.status}

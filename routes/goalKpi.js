@@ -5,23 +5,10 @@ const { validatePagination, validateDateRange } = require('../middleware/validat
 const asyncHandler = require('../middleware/asyncHandler');
 const { validateTeamLeaderId, validateWorkerId, validateWorkReadinessData } = require('../middleware/validation');
 const { supabase } = require('../config/supabase');
-const {
-  getWorkerWeeklyProgress,
-  getWorkerAssignmentKPI,
-  getTeamLeaderAssignmentKPI,
-  getTeamWeeklyKPI,
-  getTeamMonitoringDashboard,
-  getMonthlyPerformanceTracking,
-  handleLogin,
-  handleAssessmentSubmission,
-  calculateKPI,
-  getWeekDateRange,
-  getWorkingDaysCount,
-  calculateStreaks,
-  getPerformanceTrend,
-  getTeamWeeklyComparison,
-  generatePerformanceInsights
-} = require('../controllers/goalKpiController');
+// Import new domain-specific controllers
+const goalTrackingController = require('../controllers/goalTracking.controller');
+const assignmentKPIController = require('../controllers/assignmentKPI.controller');
+const teamMonitoringController = require('../controllers/teamMonitoring.controller');
 
 /**
  * Goal Tracking & KPI Routes
@@ -33,20 +20,56 @@ const {
 // Apply authentication to all routes
 router.use(authenticateToken);
 
-// Worker routes - now with authentication and validation
-router.get('/worker/weekly-progress', validatePagination, validateDateRange, getWorkerWeeklyProgress);
-router.get('/worker/assignment-kpi', validateWorkerId, validatePagination, validateDateRange, getWorkerAssignmentKPI);
+// Worker routes - with async error handling
+router.get('/worker/weekly-progress', 
+  validatePagination, 
+  validateDateRange, 
+  asyncHandler(goalTrackingController.getWorkerWeeklyProgress)
+);
 
-// Team Leader routes - now with authentication and validation
-router.get('/team-leader/weekly-summary', validateTeamLeaderId, validatePagination, validateDateRange, getTeamWeeklyKPI);
-router.get('/team-leader/assignment-summary', validateTeamLeaderId, validatePagination, validateDateRange, getTeamLeaderAssignmentKPI);
-router.get('/team-leader/monitoring-dashboard', validateTeamLeaderId, validatePagination, validateDateRange, getTeamMonitoringDashboard);
-router.get('/team-leader/monthly-performance', validatePagination, getMonthlyPerformanceTracking);
+router.get('/worker/assignment-kpi', 
+  validateWorkerId, 
+  validatePagination, 
+  validateDateRange, 
+  asyncHandler(assignmentKPIController.getWorkerAssignmentKPI)
+);
 
-// Login cycle handler - now with authentication
-router.post('/login-cycle', handleLogin);
+// Team Leader routes - with async error handling
+router.get('/team-leader/weekly-kpi', 
+  validateTeamLeaderId, 
+  validatePagination, 
+  validateDateRange, 
+  asyncHandler(teamMonitoringController.getTeamWeeklyKPI)
+);
 
-// Assessment submission handler - with validation
-router.post('/submit-assessment', validateWorkReadinessData, handleAssessmentSubmission);
+router.get('/team-leader/assignment-summary', 
+  validateTeamLeaderId, 
+  validatePagination, 
+  validateDateRange, 
+  asyncHandler(assignmentKPIController.getTeamLeaderAssignmentKPI)
+);
+
+router.get('/team-leader/monitoring-dashboard', 
+  validateTeamLeaderId, 
+  validatePagination, 
+  validateDateRange, 
+  asyncHandler(teamMonitoringController.getTeamMonitoringDashboard)
+);
+
+router.get('/team-leader/monthly-performance', 
+  validatePagination, 
+  asyncHandler(teamMonitoringController.getMonthlyPerformanceTracking)
+);
+
+// Login cycle handler - with async error handling
+router.post('/login-cycle', 
+  asyncHandler(goalTrackingController.handleLogin)
+);
+
+// Assessment submission handler - with validation and async error handling
+router.post('/submit-assessment', 
+  validateWorkReadinessData, 
+  asyncHandler(goalTrackingController.handleAssessmentSubmission)
+);
 
 module.exports = router;
