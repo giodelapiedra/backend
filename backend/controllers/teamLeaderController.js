@@ -8,6 +8,7 @@ const CheckIn = require('../models/CheckIn');
 const Incident = require('../models/Incident');
 const { validationResult } = require('express-validator');
 const { getTeamMemberLoginActivity } = require('../middleware/supabaseAuthLogger');
+const { db } = require('../config/supabase');
 
 // @desc    Get team leader dashboard data
 // @route   GET /api/team-leader/dashboard
@@ -502,70 +503,114 @@ const createUser = async (req, res) => {
 
     const { firstName, lastName, email, password, phone, team } = req.body;
 
-    // Check if user already exists
-    const existingUser = await User.findOne({ email });
+    // Check if user already exists in Supabase
+    const existingUser = await db.users.findByEmail(email);
     if (existingUser) {
       return res.status(400).json({ message: 'User already exists with this email' });
     }
 
-    // Get team leader's default team if no team specified
-    const teamLeader = await User.findById(req.user._id);
-    
-    // Use provided team or default team
-    let assignedTeam = team || teamLeader.defaultTeam || teamLeader.team;
-    
-    // If still no team, use first managed team
-    if (!assignedTeam && teamLeader.managedTeams && teamLeader.managedTeams.length > 0) {
-      assignedTeam = teamLeader.managedTeams[0];
+    // Get team leader information from Supabase
+    const teamLeader = await db.users.findById(req.user.id);
+    if (!teamLeader) {
+      return res.status(404).json({ message: 'Team leader not found' });
     }
-
-    // If still no team, create a default team
+    
+    // Use provided team or create a default team for the team leader
+    let assignedTeam = team;
+    
     if (!assignedTeam) {
-      assignedTeam = 'Default Team';
-      await User.findByIdAndUpdate(req.user._id, {
-        $addToSet: { managedTeams: assignedTeam },
-        defaultTeam: assignedTeam,
-        team: assignedTeam
-      });
+      // If no team provided, use team leader's team or create a default one
+      if (teamLeader.team) {
+        assignedTeam = teamLeader.team;
+      } else {
+        // Create a default team name based on team leader's name
+        const teamLeaderName = `${teamLeader.first_name}_${teamLeader.last_name}`.replace(/\s+/g, '_').toUpperCase();
+        assignedTeam = `TEAM_${teamLeaderName}`;
+        
+        // Update team leader's team
+        await supabase
+          .from('users')
+          .update({ 
+            team: assignedTeam,
+            default_team: assignedTeam,
+            managed_teams: [assignedTeam],
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', req.user.id);
+      }
     }
 
-    // Create new worker user
-    const userData = {
-      firstName: firstName.trim(),
-      lastName: lastName.trim(),
+    // Create Supabase Auth user first
+    const { createClient } = require('@supabase/supabase-js');
+    const supabaseUrl = process.env.SUPABASE_URL || 'https://dtcgzgbxhefwhqpeotrl.supabase.co';
+    const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR0Y2d6Z2J4aGVmd2hxcGVvdHJsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1OTE0NDcxOCwiZXhwIjoyMDc0NzIwNzE4fQ.D1wSP12YM8jPtF-llVFiC4cI7xKJtRMtiaUuwRzJ3z8';
+    
+    const supabase = createClient(supabaseUrl, supabaseServiceKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
+      }
+    });
+
+    // Create user in Supabase Auth
+    const { data: authData, error: authError } = await supabase.auth.admin.createUser({
       email: email.toLowerCase().trim(),
-      password,
-      role: 'worker', // Only workers can be created
-      phone: phone ? phone.trim() : '',
+      password: password,
+      email_confirm: true,
+      user_metadata: {
+        first_name: firstName.trim(),
+        last_name: lastName.trim(),
+        role: 'worker'
+      }
+    });
+
+    if (authError) {
+      console.error('Supabase Auth error:', authError);
+      if (authError.message.includes('already registered')) {
+        return res.status(400).json({ message: 'Email already registered. Please use a different email address.' });
+      }
+      throw authError;
+    }
+
+    console.log('Supabase Auth user created:', authData.user.id);
+
+    // Hash the password for storage in password_hash column using bcrypt
+    const bcrypt = require('bcryptjs');
+    const salt = await bcrypt.genSalt(12);
+    const passwordHash = await bcrypt.hash(password, salt);
+
+    // Create user profile in Supabase database
+    const userData = {
+      id: authData.user.id,
+      first_name: firstName.trim(),
+      last_name: lastName.trim(),
+      email: email.toLowerCase().trim(),
+      password_hash: passwordHash,
+      role: 'worker',
+      phone: phone ? phone.trim() : null,
       team: assignedTeam,
-      teamLeader: req.user._id,
-      package: 'package1', // Default to Package 1
-      isActive: true
+      team_leader_id: req.user.id,
+      is_active: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
     };
 
-    const user = new User(userData);
-    await user.save();
+    const user = await db.users.create(userData);
+    console.log('User profile created in database:', user.email);
 
-    // Send notification to new user (don't fail if notification fails)
-    try {
-      await Notification.create({
-        recipient: user._id,
-        type: 'account_created',
-        title: 'Account Created',
-        message: `Your account has been created by ${req.user.firstName} ${req.user.lastName}. Please log in to complete your profile.`,
-        priority: 'medium'
-      });
-    } catch (notificationError) {
-      // Don't fail user creation if notification fails
-      console.log('Notification creation failed, but user was created successfully');
-    }
+    // Return user without sensitive data
+    const userResponse = {
+      id: user.id,
+      first_name: user.first_name,
+      last_name: user.last_name,
+      email: user.email,
+      role: user.role,
+      phone: user.phone,
+      team: user.team,
+      is_active: user.is_active,
+      created_at: user.created_at
+    };
 
-    // Return user without password
-    const userResponse = user.toObject();
-    delete userResponse.password;
-
-    console.log('User created successfully:', userResponse.email);
-    
     res.status(201).json({
       message: 'Worker created successfully',
       user: userResponse

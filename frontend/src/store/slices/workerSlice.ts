@@ -47,12 +47,20 @@ export interface Assignment {
   status: string;
 }
 
+export interface ClinicianAssignment {
+  hasAssignedClinician: boolean;
+  clinicianName?: string;
+  caseId?: string;
+  caseNumber?: string;
+}
+
 interface WorkerState {
   // Data
   cases: Case[];
   notifications: Notification[];
   currentAssignment: Assignment | null;
   todaySubmission: WorkReadinessSubmission | null;
+  clinicianAssignment: ClinicianAssignment;
   
   // Exercise completion tracking
   hasCompletedExercisesToday: boolean;
@@ -107,6 +115,9 @@ const initialState: WorkerState = {
   notifications: [],
   currentAssignment: null,
   todaySubmission: null,
+  clinicianAssignment: {
+    hasAssignedClinician: false
+  },
   
   // Exercise completion tracking
   hasCompletedExercisesToday: false,
@@ -174,6 +185,10 @@ const workerSlice = createSlice({
     
     setTodaySubmission: (state, action: PayloadAction<WorkReadinessSubmission | null>) => {
       state.todaySubmission = action.payload;
+    },
+    
+    setClinicianAssignment: (state, action: PayloadAction<ClinicianAssignment>) => {
+      state.clinicianAssignment = action.payload;
     },
     
     // Exercise completion
@@ -308,6 +323,7 @@ export const {
   setNotifications,
   setCurrentAssignment,
   setTodaySubmission,
+  setClinicianAssignment,
   setHasCompletedExercisesToday,
   setExerciseCompletionTime,
   setHasSubmittedToday,

@@ -63,9 +63,11 @@ interface MonthlyTrackingProps {
 }
 
 interface MonthlyMetrics {
+  // Base metrics
   totalAssignments: number;
   completedAssignments: number;
   onTimeSubmissions: number;
+  lateSubmissions?: number;  // Late submissions (completed after due time)
   overdueSubmissions: number;
   notStartedAssignments: number;
   averageResponseTime: number;
@@ -74,7 +76,14 @@ interface MonthlyMetrics {
   caseClosures: number;
   completionRate: number;
   onTimeRate: number;
+  
+  // Shift-based metrics
+  activeWorkers: number;
+  shiftsCompleted: number;
+  totalShifts: number;
   qualityScore: number;
+  improvementRate: number;
+  highRiskCount: number;
   totalMembers: number;
   monthOverMonthChange: {
     completionRate: number;
@@ -113,6 +122,39 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear().toString());
+  
+  // Helper functions for KPI calculations
+  const calculateTeamHealth = (assignments: any[]) => {
+    if (!assignments.length) return 0;
+    const healthyAssignments = assignments.filter(a => !a.is_overdue && a.status !== 'not_started').length;
+    const onTimeRate = assignments.filter(a => a.status === 'completed' && !a.is_overdue).length / assignments.length;
+    const riskRate = 1 - (assignments.filter(a => a.risk_level === 'high').length / assignments.length);
+    
+    return Math.round(
+      (healthyAssignments / assignments.length * 0.4 + // Current health: 40%
+      onTimeRate * 0.3 +                              // On-time performance: 30%
+      riskRate * 0.3) * 100                          // Risk management: 30%
+    );
+  };
+
+  const calculateQualityScore = (assignments: any[]) => {
+    if (!assignments.length) return 0;
+    const completionQuality = assignments.filter(a => a.status === 'completed').length / assignments.length;
+    const timelinessQuality = assignments.filter(a => !a.is_overdue).length / assignments.length;
+    const riskQuality = 1 - (assignments.filter(a => a.risk_level === 'high').length / assignments.length);
+    
+    return Math.round(
+      (completionQuality * 0.4 +    // Completion quality: 40%
+      timelinessQuality * 0.4 +     // Timeliness quality: 40%
+      riskQuality * 0.2) * 100      // Risk management: 20%
+    );
+  };
+
+  const getPreviousMonthMetrics = () => {
+    // Get previous month's metrics from state
+    const prevMonth = new Date(parseInt(selectedYear), parseInt(selectedMonth.split('-')[1]) - 2, 1);
+    return metrics;
+  };
   
   console.log('🔍 Debug Year Selection:');
   console.log('Current Year:', new Date().getFullYear());
@@ -209,18 +251,55 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
     console.log('📊 ===== CALCULATING MONTHLY METRICS =====');
     console.log(`📋 Total Assignments: ${assignments.length}`);
     
-    // ✅ SHIFT-BASED DEADLINE VALIDATION
+    // Base calculations
+    const total = assignments.length;
+    const completed = assignments.filter(a => a.status === 'completed').length;
+    const onTime = assignments.filter(a => a.status === 'completed' && !a.is_overdue).length;
+    const overdue = assignments.filter(a => a.status === 'completed' && a.is_overdue).length;
+    const notStarted = assignments.filter(a => a.status === 'not_started').length;
+
+    // Shift-based calculations
     const shiftsUsed = assignments.filter(a => a.due_time).length;
     console.log(`✅ Assignments with shift-based deadlines: ${shiftsUsed}/${assignments.length}`);
     
-    // Find the first assignment date to determine when system started
-    const assignmentDates = assignments.map(a => new Date(a.assigned_date)).sort((a, b) => a.getTime() - b.getTime());
-    const firstAssignmentDate = assignmentDates.length > 0 ? assignmentDates[0] : null;
+    // Calculate unique workers and shifts
+    const uniqueWorkers = new Set(assignments.map(a => a.worker_id)).size;
+    const shifts = assignments.reduce((acc, curr) => {
+      if (curr.due_time) {
+        const shiftDate = new Date(curr.due_time).toISOString().split('T')[0];
+        acc[shiftDate] = (acc[shiftDate] || 0) + 1;
+      }
+      return acc;
+    }, {} as Record<string, number>);
+
+    const totalShifts = Object.keys(shifts).length;
+    const completedShifts = Object.entries(shifts)
+      .filter(([date, _]) => {
+        const shiftAssignments = assignments.filter(a => 
+          a.due_time && new Date(a.due_time).toISOString().split('T')[0] === date
+        );
+        const shiftCompleted = shiftAssignments.filter(a => a.status === 'completed').length;
+        return shiftCompleted === shiftAssignments.length;
+      }).length;
+
+    // Quality calculations
+    const qualityScore = calculateQualityScore(assignments);
+    const teamHealth = calculateTeamHealth(assignments);
+    const highRiskCount = assignments.filter(a => a.risk_level === 'high').length;
+
+    // Improvement rate calculation
+    const prevMonthMetrics = getPreviousMonthMetrics();
+    const improvementRate = prevMonthMetrics ? 
+      ((completed / total) - prevMonthMetrics.completionRate) * 100 : 0;
     
     // Calculate days from first assignment to end of month
     const month = parseInt(selectedMonth.split('-')[1]) - 1;
     const year = parseInt(selectedYear);
     const endOfMonth = new Date(year, month + 1, 0);
+    
+    // Find the first assignment date
+    const assignmentDates = assignments.map(a => new Date(a.assigned_date)).sort((a, b) => a.getTime() - b.getTime());
+    const firstAssignmentDate = assignmentDates.length > 0 ? assignmentDates[0] : null;
     const systemStartDate = firstAssignmentDate || new Date(year, month, 1);
     const daysFromStart = Math.ceil((endOfMonth.getTime() - systemStartDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
     const totalDaysInMonth = new Date(year, month + 1, 0).getDate();
@@ -287,12 +366,12 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
     // This shows what percentage of ALL assignments were completed on time
     const onTimeRate = totalAssignments > 0 ? (onTimeSubmissions / totalAssignments) * 100 : 0;
     
-    // Calculate quality score based on completion rate and on-time rate
-    const qualityScore = Math.round((completionRate * 0.6) + (onTimeRate * 0.4));
+    // Calculate basic performance score based on completion rate and on-time rate
+    const basicPerformanceScore = Math.round((completionRate * 0.6) + (onTimeRate * 0.4));
     
     // Get unique team members from assignments
-    const uniqueWorkers = new Set(assignments.map(a => a.worker?.id).filter(Boolean));
-    const totalMembers = uniqueWorkers.size;
+    const teamMembers = new Set(assignments.map(a => a.worker?.id).filter(Boolean));
+    const totalMembers = teamMembers.size;
     
     // Additional metrics for better insights
     const lateRate = totalAssignments > 0 ? (overdueSubmissions / totalAssignments) * 100 : 0;
@@ -312,18 +391,26 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
     // Month-over-month changes: real-time neutral (0) until previous-period data is available
     // When previous-month data exists, compute deltas against prior period
     return {
+      // Base metrics
       totalAssignments,
       completedAssignments,
       onTimeSubmissions,
       overdueSubmissions,
       notStartedAssignments,
-      averageResponseTime: Math.round(averageResponseTime * 10) / 10, // Round to 1 decimal
-      teamHealthScore: Math.round(teamHealthScore * 10) / 10, // Round to 1 decimal
+      averageResponseTime: Math.round(averageResponseTime * 10) / 10,
+      teamHealthScore: Math.round(teamHealthScore * 10) / 10,
       highRiskReports,
       caseClosures,
-      completionRate: Math.round(completionRate * 10) / 10, // Round to 1 decimal
-      onTimeRate: Math.round(onTimeRate * 10) / 10, // Round to 1 decimal - NOW FIXED!
-      qualityScore,
+      completionRate: Math.round(completionRate * 10) / 10,
+      onTimeRate: Math.round(onTimeRate * 10) / 10,
+      
+      // Shift-based metrics
+      activeWorkers: uniqueWorkers,
+      shiftsCompleted: completedShifts,
+      totalShifts,
+      qualityScore: Math.round(basicPerformanceScore * 10) / 10,
+      improvementRate: Math.round(improvementRate * 10) / 10,
+      highRiskCount: assignments.filter(a => a.risk_level === 'high').length,
       totalMembers,
       monthOverMonthChange: {
         completionRate: 0,
@@ -507,16 +594,43 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
   };
 
   const getTeamRating = (metrics: MonthlyMetrics) => {
-    // Use backend KPI system instead of frontend calculator
-    // This ensures consistency and security
+    // BACKEND-ALIGNED KPI calculation
     const completionRate = metrics.completionRate;
     const onTimeRate = metrics.onTimeRate;
-    const qualityScore = 70; // Default quality score
-    const pendingBonus = 0; // No pending bonus for monthly tracking
+    const qualityScore = metrics.qualityScore || 70;
+    
+    // Calculate late rate (completed assignments / total assignments)
+    const lateSubmissions = metrics.lateSubmissions || 0;
+    const lateRate = metrics.totalAssignments > 0 
+      ? (lateSubmissions / metrics.totalAssignments) * 100 
+      : 0;
+    
+    // Backend-aligned base score calculation
+    // Formula: (completion * 0.5) + (onTime * 0.25) + (late * 0.15) + (quality * 0.1)
+    const baseScore = (completionRate * 0.5) +      // 50% weight for completion
+                     (onTimeRate * 0.25) +          // 25% weight for on-time
+                     (lateRate * 0.15) +            // 15% weight for late submissions
+                     (qualityScore * 0.1);          // 10% weight for quality
+    
+    // Pending bonus: up to 5% for pending assignments with future due dates
+    const pendingRate = metrics.totalAssignments > 0 
+      ? ((metrics.totalAssignments - metrics.completedAssignments - metrics.overdueSubmissions) / metrics.totalAssignments) 
+      : 0;
+    const pendingBonus = Math.min(5, pendingRate * 5);
+    
+    // Overdue penalty: up to 10% for overdue assignments
     const overduePenalty = Math.min(10, (metrics.overdueSubmissions / metrics.totalAssignments) * 10);
     
-    // Calculate weighted score using backend KPI formula
-    const weightedScore = (completionRate * 0.7) + (onTimeRate * 0.2) + (qualityScore * 0.1) + pendingBonus - overduePenalty;
+    // Recovery bonus: up to 3% for recent completions (simplified in frontend)
+    const recoveryBonus = metrics.improvementRate > 0 ? Math.min(3, metrics.improvementRate * 0.03) : 0;
+    
+    // Calculate final weighted score aligned with backend
+    const weightedScore = Math.max(0, Math.min(100,
+      baseScore +           // Base score from weighted formula
+      pendingBonus -        // Pending bonus (up to 5%)
+      overduePenalty +      // Overdue penalty (up to -10%)
+      recoveryBonus         // Recovery bonus (up to 3%)
+    ));
     
     // Convert to letter grade using backend KPI scale
     let letterGrade = '';
@@ -541,17 +655,19 @@ const MonthlyAssignmentTracking: React.FC<MonthlyTrackingProps> = ({
       color,
       description,
       breakdown: {
-        completionScore: Math.min(35, (completionRate / 100) * 35),
-        onTimeScore: Math.min(25, (onTimeRate / 100) * 25),
-        latePenalty: Math.max(-5, 15 - (metrics.overdueSubmissions / metrics.totalAssignments) * 15),
-        volumeBonus: Math.min(10, (metrics.totalAssignments / 100) * 10),
-        improvementBonus: 0,
-        gracePeriodBonus: metrics.totalAssignments < 50 ? 5 : 0,
+        completionScore: Math.min(50, (completionRate / 100) * 50),  // 50% weight
+        onTimeScore: Math.min(25, (onTimeRate / 100) * 25),          // 25% weight
+        lateScore: Math.min(15, (lateRate / 100) * 15),              // 15% weight
+        qualityScore: Math.min(10, (qualityScore / 100) * 10),       // 10% weight
+        pendingBonus: pendingBonus,                                   // up to 5%
+        overduePenalty: overduePenalty,                               // up to -10%
+        recoveryBonus: recoveryBonus,                                 // up to 3%
         fairCalculation: {
           decidedAssignments: metrics.totalAssignments - metrics.notStartedAssignments,
           fairCompletionRate: completionRate,
           fairOnTimeRate: onTimeRate,
-          lateRate: (metrics.overdueSubmissions / metrics.totalAssignments) * 100
+          lateRate: lateRate,
+          formula: `(${completionRate.toFixed(1)}% × 0.5) + (${onTimeRate.toFixed(1)}% × 0.25) + (${lateRate.toFixed(1)}% × 0.15) + (${qualityScore.toFixed(1)} × 0.1) + ${pendingBonus.toFixed(2)}% - ${overduePenalty.toFixed(2)}% + ${recoveryBonus.toFixed(2)}% = ${weightedScore.toFixed(2)}`
         }
       }
     };

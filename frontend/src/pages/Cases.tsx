@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useMediaQuery, useTheme } from '@mui/material';
 import { 
   Box, 
   Typography, 
@@ -30,7 +31,8 @@ import {
   TextField,
   InputAdornment,
   IconButton,
-  SelectChangeEvent
+  SelectChangeEvent,
+  Skeleton
 } from '@mui/material';
 import { 
   Warning, 
@@ -51,6 +53,7 @@ import LayoutWithSidebar from '../components/LayoutWithSidebar';
 import { dataClient } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext.supabase';
 import { CaseAssignmentService } from '../utils/caseAssignmentService';
+import { getStatusLabel } from '../utils/themeUtils';
 
 interface Case {
   id: string;
@@ -101,6 +104,10 @@ interface Case {
 const Cases: React.FC = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+  const isTablet = useMediaQuery(theme.breakpoints.down('md'));
+  
   const [cases, setCases] = useState<Case[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -108,6 +115,7 @@ const Cases: React.FC = () => {
   // Pagination states
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
+  const [totalCount, setTotalCount] = useState(0);
   
   // Search and filter states
   const [searchTerm, setSearchTerm] = useState('');
@@ -126,40 +134,59 @@ const Cases: React.FC = () => {
         return;
       }
 
+      // OPTIMIZATION FOR 1K+ RECORDS: Server-side pagination + filtering
+      // Calculate pagination range
+      const from = (currentPage - 1) * itemsPerPage;
+      const to = from + itemsPerPage - 1;
+
+      // Build base query with joins (ONE query instead of N+1!)
       let casesQuery = dataClient
         .from('cases')
-        .select('*')
+        .select(`
+          *,
+          worker:worker_id(id, first_name, last_name, email),
+          case_manager:case_manager_id(id, first_name, last_name, email),
+          clinician:clinician_id(id, first_name, last_name, email),
+          incident:incident_id(id, incident_type, severity, description)
+        `, { count: 'exact' }) // Get total count for pagination
         .order('created_at', { ascending: false });
 
-      // Filter cases based on user role
+      // Apply role-based filtering
       if (user.role === 'clinician') {
-        // Get cases assigned to this clinician from database
         casesQuery = casesQuery.eq('clinician_id', user.id);
-        console.log('Filtering cases for clinician:', user.id);
       } else if (user.role === 'case_manager') {
-        // Case managers see cases they manage
         casesQuery = casesQuery.eq('case_manager_id', user.id);
-        console.log('Filtering cases for case manager:', user.id);
       } else if (user.role === 'worker') {
-        // Workers see their own cases
         casesQuery = casesQuery.eq('worker_id', user.id);
-        console.log('Filtering cases for worker:', user.id);
       } else if (user.role === 'employer') {
-        // Employers see cases for their workers
         casesQuery = casesQuery.eq('employer_id', user.id);
-        console.log('Filtering cases for employer:', user.id);
-      } else if (user.role === 'admin' || user.role === 'site_supervisor') {
-        // Admins and site supervisors see all cases
-        console.log('Showing all cases for admin/site supervisor');
-      } else {
-        // Unknown role - show no cases
+      } else if (user.role !== 'admin' && user.role !== 'site_supervisor') {
         console.log('Unknown user role, showing no cases');
         setCases([]);
+        setTotalCount(0);
         setLoading(false);
         return;
       }
+
+      // Apply search filter (server-side)
+      if (searchTerm) {
+        casesQuery = casesQuery.or(`case_number.ilike.%${searchTerm}%`);
+      }
+
+      // Apply status filter (server-side)
+      if (statusFilter !== 'all') {
+        casesQuery = casesQuery.eq('status', statusFilter);
+      }
+
+      // Apply priority filter (server-side)
+      if (priorityFilter !== 'all') {
+        casesQuery = casesQuery.eq('priority', priorityFilter);
+      }
+
+      // Apply pagination (server-side) - ONLY fetch what's needed!
+      casesQuery = casesQuery.range(from, to);
       
-      const { data: casesData, error: casesError } = await casesQuery;
+      const { data: casesData, error: casesError, count } = await casesQuery;
       
       if (casesError) {
         console.error('Supabase error:', casesError);
@@ -167,63 +194,16 @@ const Cases: React.FC = () => {
         return;
       }
       
-      // Then fetch related data separately
-      const enrichedCases = await Promise.all(
-        (casesData || []).map(async (caseItem) => {
-          const [worker, caseManager, clinician, incident] = await Promise.all([
-            // Get worker
-            dataClient
-              .from('users')
-              .select('id, first_name, last_name, email')
-              .eq('id', caseItem.worker_id)
-              .single(),
-            
-            // Get case manager
-            dataClient
-              .from('users')
-              .select('id, first_name, last_name, email')
-              .eq('id', caseItem.case_manager_id)
-              .single(),
-            
-            // Get clinician (if exists)
-            caseItem.clinician_id ? 
-              dataClient
-                .from('users')
-                .select('id, first_name, last_name, email')
-                .eq('id', caseItem.clinician_id)
-                .single() : 
-              Promise.resolve({ data: null, error: null }),
-            
-            // Get incident
-            dataClient
-              .from('incidents')
-              .select('id, incident_type, severity, description')
-              .eq('id', caseItem.incident_id)
-              .single()
-          ]);
-          
-          return {
-            ...caseItem,
-            worker: worker.data,
-            case_manager: caseManager.data,
-            clinician: clinician.data,
-            incident: incident.data
-          };
-        })
-      );
-      
-      const data = enrichedCases;
-      
-      console.log('Cases fetched from Supabase:', data?.length || 0);
-      console.log('User role:', user?.role, 'Cases count:', data?.length || 0);
-      setCases(data || []);
+      console.log('Cases fetched:', casesData?.length || 0, 'Total:', count || 0);
+      setCases(casesData || []);
+      setTotalCount(count || 0);
     } catch (err: any) {
       console.error('Error fetching cases:', err);
       setError(err.message || 'Failed to fetch cases');
     } finally {
       setLoading(false);
     }
-  }, [user]);
+  }, [user, currentPage, itemsPerPage, searchTerm, statusFilter, priorityFilter]);
   
   useEffect(() => {
     if (user) {
@@ -231,33 +211,25 @@ const Cases: React.FC = () => {
     }
   }, [user, fetchCases]);
   
-  const handleRefresh = React.useCallback(async () => {
+  const handleRefresh = useCallback(async () => {
+    setLoading(true);
     await fetchCases();
   }, [fetchCases]);
   
-  // Filter cases based on search and filters
-  const filteredCases = cases.filter(caseItem => {
-    const matchesSearch = searchTerm === '' || 
-      caseItem.case_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      caseItem.incident?.incident_type?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      caseItem.incident?.description?.toLowerCase().includes(searchTerm.toLowerCase());
-    
-    const matchesStatus = statusFilter === 'all' || caseItem.status === statusFilter;
-    const matchesPriority = priorityFilter === 'all' || (caseItem.priority || 'medium') === priorityFilter;
-    
-    return matchesSearch && matchesStatus && matchesPriority;
-  });
-  
-  // Pagination logic
-  const totalItems = filteredCases.length;
-  const totalPages = Math.ceil(totalItems / itemsPerPage);
+  // OPTIMIZATION: Server-side pagination means we display cases directly
+  // No need for client-side filtering since it's done on the server!
+  const totalPages = Math.ceil(totalCount / itemsPerPage);
   const startIndex = (currentPage - 1) * itemsPerPage;
-  const endIndex = startIndex + itemsPerPage;
-  const paginatedCases = filteredCases.slice(startIndex, endIndex);
+  const endIndex = startIndex + cases.length;
   
-  // Reset to first page when filters change
+  // Reset to first page when filters change and refetch
   useEffect(() => {
-    setCurrentPage(1);
+    if (currentPage !== 1) {
+      setCurrentPage(1);
+    } else {
+      // If already on page 1, just refetch
+      fetchCases();
+    }
   }, [searchTerm, statusFilter, priorityFilter]);
   
   const handlePageChange = (event: React.ChangeEvent<unknown>, page: number) => {
@@ -309,11 +281,41 @@ const Cases: React.FC = () => {
     navigate(`/cases/${caseItem.id}`);
   };
 
+  // OPTIMIZATION: Better loading state with skeletons
   if (loading) {
     return (
       <LayoutWithSidebar>
-        <Box display="flex" justifyContent="center" alignItems="center" minHeight="50vh">
-          <CircularProgress />
+        <Box sx={{ p: { xs: 1, sm: 2, md: 3 }, minHeight: '100vh', background: '#FFFFFF' }}>
+          <Card sx={{ mb: { xs: 2, sm: 3 }, borderRadius: { xs: 2, sm: 3 } }}>
+            <Skeleton variant="rectangular" height={120} />
+          </Card>
+          <Card sx={{ mb: { xs: 2, sm: 3 }, borderRadius: { xs: 2, sm: 3 } }}>
+            <CardContent>
+              <Grid container spacing={2}>
+                <Grid item xs={12} md={4}>
+                  <Skeleton variant="rectangular" height={56} />
+                </Grid>
+                <Grid item xs={12} sm={6} md={3}>
+                  <Skeleton variant="rectangular" height={56} />
+                </Grid>
+                <Grid item xs={12} sm={6} md={3}>
+                  <Skeleton variant="rectangular" height={56} />
+                </Grid>
+                <Grid item xs={12} md={2}>
+                  <Skeleton variant="rectangular" height={56} />
+                </Grid>
+              </Grid>
+            </CardContent>
+          </Card>
+          <Card sx={{ borderRadius: { xs: 2, sm: 3 } }}>
+            <CardContent>
+              {[...Array(5)].map((_, index) => (
+                <Box key={index} sx={{ mb: 2 }}>
+                  <Skeleton variant="rectangular" height={80} sx={{ borderRadius: 2 }} />
+                </Box>
+              ))}
+            </CardContent>
+          </Card>
         </Box>
       </LayoutWithSidebar>
     );
@@ -324,31 +326,31 @@ const Cases: React.FC = () => {
       <Box sx={{ 
         p: { xs: 1, sm: 2, md: 3 },
         minHeight: '100vh', 
-        background: 'linear-gradient(135deg, #f8fdff 0%, #e8f4f8 100%)'
+        background: '#FFFFFF'
       }}>
         {/* Mobile-First Header */}
         <Card sx={{ 
           mb: { xs: 2, sm: 3 },
           borderRadius: { xs: 2, sm: 3 },
-          boxShadow: '0 8px 32px rgba(0, 0, 0, 0.08)',
-          overflow: 'hidden'
+          boxShadow: '0 2px 8px rgba(27, 58, 87, 0.08)',
+          overflow: 'hidden',
+          border: '1px solid rgba(20, 184, 166, 0.1)'
         }}>
           <Box sx={{ 
             p: { xs: 2, sm: 3 },
-            background: 'linear-gradient(135deg, #2d5a87 0%, #1e3a52 100%)',
+            background: 'linear-gradient(135deg, #1B3A57 0%, #0F2942 100%)',
             color: 'white',
             position: 'relative',
-            overflow: 'hidden',
-            boxShadow: '0 8px 32px rgba(45, 90, 135, 0.3)'
+            overflow: 'hidden'
           }}>
-            {/* Background Pattern */}
+            {/* Background Pattern - Teal Accent */}
             <Box sx={{
               position: 'absolute',
               top: 0,
               right: 0,
               width: '200px',
               height: '200px',
-              background: 'radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%)',
+              background: 'radial-gradient(circle, rgba(20, 184, 166, 0.15) 0%, transparent 70%)',
               borderRadius: '50%',
               transform: 'translate(50%, -50%)'
             }} />
@@ -372,11 +374,10 @@ const Cases: React.FC = () => {
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  background: 'rgba(255, 255, 255, 0.2)',
-                  backdropFilter: 'blur(10px)',
-                  boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)'
+                  background: '#14B8A6',
+                  boxShadow: '0 4px 12px rgba(20, 184, 166, 0.3)'
                 }}>
-                  <Assignment sx={{ fontSize: { xs: 24, sm: 28 } }} />
+                  <Assignment sx={{ fontSize: { xs: 24, sm: 28 }, color: 'white' }} />
                 </Box>
                 <Box>
                   <Typography variant="h5" sx={{ 
@@ -421,18 +422,17 @@ const Cases: React.FC = () => {
                   variant="outlined"
                   startIcon={<FilterList sx={{ fontSize: { xs: 16, sm: 18 } }} />}
                   onClick={() => setShowFilters(!showFilters)}
-                  color={showFilters ? 'primary' : 'inherit'}
-                  size={window.innerWidth < 600 ? 'small' : 'medium'}
+                  size={isMobile ? 'small' : 'medium'}
                   sx={{
                     borderRadius: { xs: 2, sm: 2 },
                     fontSize: { xs: '0.75rem', sm: '0.875rem' },
-                    bgcolor: 'rgba(255,255,255,0.1)',
+                    bgcolor: showFilters ? 'rgba(20, 184, 166, 0.15)' : 'transparent',
                     color: 'white',
-                    borderColor: 'rgba(255,255,255,0.3)',
+                    borderColor: showFilters ? '#14B8A6' : 'rgba(255,255,255,0.3)',
                     minWidth: { xs: '80px', sm: '100px' },
                     '&:hover': {
-                      bgcolor: 'rgba(255,255,255,0.2)',
-                      borderColor: 'rgba(255,255,255,0.5)'
+                      bgcolor: 'rgba(20, 184, 166, 0.2)',
+                      borderColor: '#14B8A6'
                     }
                   }}
                 >
@@ -442,17 +442,17 @@ const Cases: React.FC = () => {
                   variant="contained"
                   startIcon={<Refresh sx={{ fontSize: { xs: 16, sm: 18 } }} />}
                   onClick={handleRefresh}
-                  size={window.innerWidth < 600 ? 'small' : 'medium'}
+                  size={isMobile ? 'small' : 'medium'}
                   sx={{
                     borderRadius: { xs: 2, sm: 2 },
                     fontSize: { xs: '0.75rem', sm: '0.875rem' },
-                    bgcolor: 'rgba(255,255,255,0.9)',
-                    color: 'primary.main',
+                    bgcolor: '#14B8A6',
+                    color: 'white',
                     minWidth: { xs: '80px', sm: '100px' },
                     '&:hover': {
-                      bgcolor: 'white',
+                      bgcolor: '#0D9488',
                       transform: 'translateY(-1px)',
-                      boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)'
+                      boxShadow: '0 4px 12px rgba(20, 184, 166, 0.4)'
                     },
                     transition: 'all 0.2s ease'
                   }}
@@ -468,10 +468,9 @@ const Cases: React.FC = () => {
         <Card sx={{ 
           mb: { xs: 2, sm: 3 },
           borderRadius: { xs: 2, sm: 3 },
-          background: 'rgba(255, 255, 255, 0.15)',
-          backdropFilter: 'blur(15px)',
-          border: '1px solid rgba(255, 255, 255, 0.2)',
-          boxShadow: '0 8px 32px rgba(45, 90, 135, 0.2)',
+          background: '#FFFFFF',
+          border: '1px solid rgba(27, 58, 87, 0.1)',
+          boxShadow: '0 2px 8px rgba(27, 58, 87, 0.08)',
           transition: 'transform 0.3s ease, box-shadow 0.3s ease'
         }}>
           <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
@@ -482,7 +481,7 @@ const Cases: React.FC = () => {
                   placeholder="Search cases..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  size={window.innerWidth < 600 ? 'small' : 'medium'}
+                  size={isMobile ? 'small' : 'medium'}
                   InputProps={{
                     startAdornment: (
                       <InputAdornment position="start">
@@ -516,7 +515,7 @@ const Cases: React.FC = () => {
               </Grid>
               
               <Grid item xs={12} sm={6} md={3}>
-                <FormControl fullWidth size={window.innerWidth < 600 ? 'small' : 'medium'}>
+                <FormControl fullWidth size={isMobile ? 'small' : 'medium'}>
                   <InputLabel sx={{ fontSize: { xs: '0.875rem', sm: '1rem' } }}>Status</InputLabel>
                   <Select
                     value={statusFilter}
@@ -538,7 +537,7 @@ const Cases: React.FC = () => {
               </Grid>
               
               <Grid item xs={12} sm={6} md={3}>
-                <FormControl fullWidth size={window.innerWidth < 600 ? 'small' : 'medium'}>
+                <FormControl fullWidth size={isMobile ? 'small' : 'medium'}>
                   <InputLabel sx={{ fontSize: { xs: '0.875rem', sm: '1rem' } }}>Priority</InputLabel>
                   <Select
                     value={priorityFilter}
@@ -565,21 +564,21 @@ const Cases: React.FC = () => {
                   justifyContent: { xs: 'center', md: 'flex-start' }
                 }}>
                   <Chip
-                    label={`${totalItems} results`}
-                    color="primary"
-                    variant="outlined"
-                    size={window.innerWidth < 600 ? 'small' : 'medium'}
+                    label={`${totalCount} results`}
+                    size={isMobile ? 'small' : 'medium'}
                     sx={{
                       fontSize: { xs: '0.75rem', sm: '0.875rem' },
-                      borderRadius: { xs: 2, sm: 2 }
+                      borderRadius: { xs: 2, sm: 2 },
+                      bgcolor: '#E0F2F1',
+                      color: '#0D9488',
+                      border: '1px solid #14B8A6',
+                      fontWeight: 600
                     }}
                   />
                   {(searchTerm || statusFilter !== 'all' || priorityFilter !== 'all') && (
                     <Chip
                       label="Filtered"
-                      color="secondary"
-                      variant="outlined"
-                      size={window.innerWidth < 600 ? 'small' : 'medium'}
+                      size={isMobile ? 'small' : 'medium'}
                       onDelete={() => {
                         setSearchTerm('');
                         setStatusFilter('all');
@@ -587,7 +586,11 @@ const Cases: React.FC = () => {
                       }}
                       sx={{
                         fontSize: { xs: '0.75rem', sm: '0.875rem' },
-                        borderRadius: { xs: 2, sm: 2 }
+                        borderRadius: { xs: 2, sm: 2 },
+                        bgcolor: '#FFF4E6',
+                        color: '#F59E0B',
+                        border: '1px solid #FCD34D',
+                        fontWeight: 600
                       }}
                     />
                   )}
@@ -612,57 +615,56 @@ const Cases: React.FC = () => {
         {/* Mobile-Optimized Cases Display */}
         <Card sx={{
           borderRadius: { xs: 2, sm: 3 },
-          background: 'rgba(255, 255, 255, 0.12)',
-          backdropFilter: 'blur(20px)',
-          border: '1px solid rgba(255, 255, 255, 0.25)',
-          boxShadow: '0 12px 40px rgba(45, 90, 135, 0.25)',
+          background: '#FFFFFF',
+          border: '1px solid rgba(27, 58, 87, 0.1)',
+          boxShadow: '0 2px 8px rgba(27, 58, 87, 0.08)',
           transition: 'transform 0.3s ease, box-shadow 0.3s ease',
           overflow: 'hidden'
         }}>
           <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
             <Typography variant="h6" sx={{ 
               mb: { xs: 2, sm: 2 }, 
-              fontWeight: 600,
+              fontWeight: 700,
               fontSize: { xs: '1.125rem', sm: '1.25rem' },
-              color: '#1e3a52'
+              color: '#1B3A57'
             }}>
               {(() => {
                 switch (user?.role) {
                   case 'clinician':
-                    return `Assigned Cases (${totalItems})`;
+                    return `Assigned Cases (${totalCount})`;
                   case 'case_manager':
-                    return `Managed Cases (${totalItems})`;
+                    return `Managed Cases (${totalCount})`;
                   case 'worker':
-                    return `My Cases (${totalItems})`;
+                    return `My Cases (${totalCount})`;
                   case 'employer':
-                    return `Workers' Cases (${totalItems})`;
+                    return `Workers' Cases (${totalCount})`;
                   case 'admin':
                   case 'site_supervisor':
-                    return `All Cases (${totalItems})`;
+                    return `All Cases (${totalCount})`;
                   default:
-                    return `Cases (${totalItems})`;
+                    return `Cases (${totalCount})`;
                 }
               })()}
             </Typography>
             
-            {paginatedCases.length > 0 ? (
+            {cases.length > 0 ? (
               <>
                 {/* Mobile Card View for Small Screens */}
-                {window.innerWidth < 768 ? (
+                {isTablet ? (
                   <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                    {paginatedCases.map((caseItem) => (
+                    {cases.map((caseItem) => (
                       <Card 
                         key={caseItem.id} 
                         sx={{
                           borderRadius: 2,
-                          background: 'rgba(255, 255, 255, 0.08)',
-                          backdropFilter: 'blur(10px)',
-                          border: '1px solid rgba(255, 255, 255, 0.15)',
+                          background: '#FFFFFF',
+                          border: '1px solid rgba(27, 58, 87, 0.1)',
+                          boxShadow: '0 1px 3px rgba(27, 58, 87, 0.08)',
                           transition: 'all 0.3s ease',
                           '&:hover': {
-                            boxShadow: '0 8px 25px rgba(45, 90, 135, 0.2)',
+                            boxShadow: '0 4px 12px rgba(20, 184, 166, 0.15)',
                             transform: 'translateY(-3px)',
-                            background: 'rgba(255, 255, 255, 0.12)'
+                            borderColor: '#14B8A6'
                           }
                         }}
                       >
@@ -708,12 +710,13 @@ const Cases: React.FC = () => {
                                 px: { xs: 2, sm: 3 },
                                 py: { xs: 1, sm: 1 },
                                 minHeight: { xs: '32px', sm: '32px' },
-                                background: 'linear-gradient(135deg, #4f94cd 0%, #2d5a87 100%)',
+                                bgcolor: '#14B8A6',
                                 color: 'white',
-                                boxShadow: '0 4px 12px rgba(79, 148, 205, 0.3)',
+                                boxShadow: '0 2px 8px rgba(20, 184, 166, 0.3)',
                                 '&:hover': {
-                                  background: 'linear-gradient(135deg, #3b82c4 0%, #1e3a52 100%)',
-                                  transform: 'translateY(-1px)'
+                                  bgcolor: '#0D9488',
+                                  transform: 'translateY(-1px)',
+                                  boxShadow: '0 4px 12px rgba(20, 184, 166, 0.4)'
                                 },
                                 transition: 'all 0.2s ease'
                               }}
@@ -725,12 +728,25 @@ const Cases: React.FC = () => {
                           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1, mb: 1 }}>
                             <Box sx={{ display: 'flex', gap: 0.5 }}>
                               <Chip
-                                label={caseItem.status?.replace('_', ' ').toUpperCase() || 'UNKNOWN'}
-                                color={getStatusColor(caseItem.status)}
+                                label={getStatusLabel(caseItem.status || 'Unknown')}
                                 size="small"
                                 sx={{
+                                  borderRadius: '20px',
+                                  fontWeight: 600,
                                   fontSize: { xs: '0.65rem', sm: '0.75rem' },
-                                  height: { xs: 20, sm: 24 }
+                                  height: { xs: 20, sm: 24 },
+                                  backgroundColor: 
+                                    caseItem.status === 'new' ? '#3b82f6' :
+                                    caseItem.status === 'triaged' ? '#f59e0b' :
+                                    caseItem.status === 'assessed' ? '#8b5cf6' :
+                                    caseItem.status === 'in_rehab' ? '#ef4444' :
+                                    caseItem.status === 'return_to_work' ? '#f97316' :
+                                    caseItem.status === 'closed' ? '#6b7280' : '#6b7280',
+                                  color: 'white',
+                                  border: 'none',
+                                  '&:hover': {
+                                    opacity: 0.9
+                                  }
                                 }}
                               />
                               <Chip
@@ -796,83 +812,82 @@ const Cases: React.FC = () => {
           }}>
             <Table size="small">
               <TableHead sx={{ 
-                background: 'rgba(184, 212, 227, 0.3)', 
-                backdropFilter: 'blur(10px)',
-                borderBottom: '1px solid rgba(168, 200, 216, 0.4)'
+                background: '#F8FAFB',
+                borderBottom: '2px solid #E5E7EB'
               }}>
                 <TableRow>
                   <TableCell sx={{ 
-                    fontWeight: 600, 
-                    color: '#1e3a52',
-                    borderBottom: '2px solid #a8c8d8',
+                    fontWeight: 700, 
+                    color: '#1B3A57',
+                    borderBottom: '2px solid #14B8A6',
                     whiteSpace: 'nowrap',
                     padding: { xs: '8px', sm: '16px' },
                     fontSize: { xs: '0.75rem', sm: '0.875rem' }
                   }}>Case Number</TableCell>
                   <TableCell sx={{ 
-                    fontWeight: 600, 
-                    color: '#1e3a52',
-                    borderBottom: '2px solid #a8c8d8',
+                    fontWeight: 700, 
+                    color: '#1B3A57',
+                    borderBottom: '2px solid #14B8A6',
                     whiteSpace: 'nowrap',
                     padding: { xs: '8px', sm: '16px' },
                     fontSize: { xs: '0.75rem', sm: '0.875rem' }
                   }}>Status</TableCell>
                   <TableCell sx={{ 
-                    fontWeight: 600, 
-                    color: '#1e3a52',
-                    borderBottom: '2px solid #a8c8d8',
+                    fontWeight: 700, 
+                    color: '#1B3A57',
+                    borderBottom: '2px solid #14B8A6',
                     whiteSpace: 'nowrap',
                     padding: { xs: '8px', sm: '16px' },
                     fontSize: { xs: '0.75rem', sm: '0.875rem' }
                   }}>Priority</TableCell>
                   <TableCell sx={{ 
-                    fontWeight: 600, 
-                    color: '#1e3a52',
-                    borderBottom: '2px solid #a8c8d8',
+                    fontWeight: 700, 
+                    color: '#1B3A57',
+                    borderBottom: '2px solid #14B8A6',
                     whiteSpace: 'nowrap',
                     padding: { xs: '8px', sm: '16px' },
                     fontSize: { xs: '0.75rem', sm: '0.875rem' },
                     display: { xs: 'none', md: 'table-cell' }
                   }}>Injury Details</TableCell>
                   <TableCell sx={{ 
-                    fontWeight: 600, 
-                    color: '#1e3a52',
-                    borderBottom: '2px solid #a8c8d8',
+                    fontWeight: 700, 
+                    color: '#1B3A57',
+                    borderBottom: '2px solid #14B8A6',
                     whiteSpace: 'nowrap',
                     padding: { xs: '8px', sm: '16px' },
                     fontSize: { xs: '0.75rem', sm: '0.875rem' },
                     display: { xs: 'none', lg: 'table-cell' }
                   }}>Incident</TableCell>
                   <TableCell sx={{ 
-                    fontWeight: 600, 
-                    color: '#1e3a52',
-                    borderBottom: '2px solid #a8c8d8',
+                    fontWeight: 700, 
+                    color: '#1B3A57',
+                    borderBottom: '2px solid #14B8A6',
                     whiteSpace: 'nowrap',
                     padding: { xs: '8px', sm: '16px' },
                     fontSize: { xs: '0.75rem', sm: '0.875rem' },
                     display: { xs: 'none', md: 'table-cell' }
                   }}>Case Manager</TableCell>
                   <TableCell sx={{ 
-                    fontWeight: 600, 
-                    color: '#1e3a52',
-                    borderBottom: '2px solid #a8c8d8',
+                    fontWeight: 700, 
+                    color: '#1B3A57',
+                    borderBottom: '2px solid #14B8A6',
                     whiteSpace: 'nowrap',
                     padding: { xs: '8px', sm: '16px' },
                     fontSize: { xs: '0.75rem', sm: '0.875rem' }
                   }}>Created</TableCell>
                   <TableCell sx={{ 
-                    fontWeight: 600, 
-                    color: '#1e3a52',
-                    borderBottom: '2px solid #a8c8d8',
+                    fontWeight: 700, 
+                    color: '#1B3A57',
+                    borderBottom: '2px solid #14B8A6',
                     whiteSpace: 'nowrap',
                     padding: { xs: '8px', sm: '16px' },
                     fontSize: { xs: '0.75rem', sm: '0.875rem' },
                     display: { xs: 'none', md: 'table-cell' }
                   }}>Last Check-in</TableCell>
                   <TableCell sx={{ 
-                    fontWeight: 600, 
-                    color: '#1e3a52',
-                    borderBottom: '2px solid #a8c8d8',
+                    fontWeight: 700, 
+                    color: '#1B3A57',
+                    borderBottom: '2px solid #14B8A6',
                     whiteSpace: 'nowrap',
                     padding: { xs: '8px', sm: '16px' },
                     fontSize: { xs: '0.75rem', sm: '0.875rem' }
@@ -880,9 +895,9 @@ const Cases: React.FC = () => {
                 </TableRow>
               </TableHead>
               <TableBody>
-                        {paginatedCases.map((caseItem) => (
+                        {cases.map((caseItem) => (
                   <TableRow key={caseItem.id} sx={{ 
-                    '&:hover': { backgroundColor: '#f8fdff' },
+                    '&:hover': { backgroundColor: '#F0FDFA' },
                     '&:last-child td': { borderBottom: 0 }
                   }}>
                     <TableCell sx={{ 
@@ -913,7 +928,7 @@ const Cases: React.FC = () => {
                       fontSize: { xs: '0.75rem', sm: '0.875rem' }
                     }}>
                       <Chip
-                        label={caseItem.status?.replace('_', ' ').toUpperCase() || 'UNKNOWN'}
+                        label={getStatusLabel(caseItem.status || 'Unknown')}
                         color={getStatusColor(caseItem.status)}
                         size="small"
                         sx={{ 
@@ -1063,12 +1078,13 @@ const Cases: React.FC = () => {
                           py: { xs: 1, sm: 1 },
                           minHeight: { xs: '36px', sm: '32px' },
                           touchAction: 'manipulation',
-                          background: 'linear-gradient(135deg, #4f94cd 0%, #2d5a87 100%)',
+                          bgcolor: '#14B8A6',
                           color: 'white',
-                          boxShadow: '0 4px 12px rgba(79, 148, 205, 0.3)',
+                          boxShadow: '0 2px 8px rgba(20, 184, 166, 0.3)',
                           '&:hover': {
-                            background: 'linear-gradient(135deg, #3b82c4 0%, #1e3a52 100%)',
-                            transform: 'translateY(-1px)'
+                            bgcolor: '#0D9488',
+                            transform: 'translateY(-1px)',
+                            boxShadow: '0 4px 12px rgba(20, 184, 166, 0.4)'
                           },
                           transition: 'all 0.2s ease'
                         }}
@@ -1084,7 +1100,7 @@ const Cases: React.FC = () => {
                 )}
                 
                 {/* Pagination Controls */}
-                {totalItems > 0 && (
+                {totalCount > 0 && (
                   <Box sx={{ 
                     display: 'flex', 
                     justifyContent: 'space-between', 
@@ -1092,7 +1108,7 @@ const Cases: React.FC = () => {
                     mt: 3,
                     pt: 2,
                     borderTop: '2px solid',
-                    borderColor: '#b8d4e3',
+                    borderColor: '#E5E7EB',
                     flexDirection: { xs: 'column', sm: 'row' },
                     gap: { xs: 2, sm: 0 }
                   }}>
@@ -1105,7 +1121,7 @@ const Cases: React.FC = () => {
                       <Typography variant="body2" color="text.secondary" sx={{
                         fontSize: { xs: '0.75rem', sm: '0.875rem' }
                       }}>
-                        Showing {startIndex + 1} to {Math.min(endIndex, totalItems)} of {totalItems} entries
+                        Showing {startIndex + 1} to {Math.min(endIndex, totalCount)} of {totalCount} entries
                       </Typography>
                       <FormControl size="small" sx={{ minWidth: 80 }}>
                         <Select
@@ -1134,11 +1150,11 @@ const Cases: React.FC = () => {
                       page={currentPage}
                       onChange={handlePageChange}
                       color="primary"
-                      size={window.innerWidth < 600 ? 'small' : 'medium'}
+                      size={isMobile ? 'small' : 'medium'}
                       showFirstButton
                       showLastButton
-                      siblingCount={window.innerWidth < 600 ? 0 : 1}
-                      boundaryCount={window.innerWidth < 600 ? 1 : 1}
+                      siblingCount={isMobile ? 0 : 1}
+                      boundaryCount={isMobile ? 1 : 1}
                       sx={{
                         '& .MuiPaginationItem-root': {
                           fontSize: { xs: '0.75rem', sm: '0.875rem' }

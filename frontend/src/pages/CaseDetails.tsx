@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -34,6 +34,7 @@ import {
   MenuItem,
   Tooltip,
   IconButton,
+  Pagination,
 } from '@mui/material';
 import { useAuth } from '../contexts/AuthContext.supabase';
 import NotFound from './NotFound';
@@ -60,6 +61,17 @@ import {
 import LayoutWithSidebar from '../components/LayoutWithSidebar';
 import { SupabaseAPI } from '../utils/supabaseApi';
 import { createImageProps } from '../utils/imageUtils';
+import { useUpdateCaseMutation } from '../store/api/casesApi';
+import { getStatusLabel } from '../utils/themeUtils';
+import { supabase } from '../lib/supabase';
+
+// Security: Sanitize text input to prevent XSS
+const sanitizeInput = (input: string): string => {
+  return input
+    .replace(/[<>]/g, '') // Remove potential HTML tags
+    .trim()
+    .substring(0, 5000); // Limit length to prevent abuse
+};
 
 interface Case {
   _id: string;
@@ -111,6 +123,7 @@ interface Case {
     phone?: string;
   };
   worker: {
+    id?: string;
     firstName: string;
     lastName: string;
     email: string;
@@ -156,6 +169,15 @@ const CaseDetails: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   
+  // Worker case history
+  const [workerHistory, setWorkerHistory] = useState<any[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [historyPage, setHistoryPage] = useState(1);
+  const [totalHistoryCases, setTotalHistoryCases] = useState(0);
+  const [lastRefreshTime, setLastRefreshTime] = useState<number>(0);
+  const HISTORY_PAGE_SIZE = 5; // Show 5 cases per page
+  const REFRESH_COOLDOWN = 3000; // 3 seconds cooldown for refresh
+  
   // Dialog states
   const [editDialog, setEditDialog] = useState(false);
   const [statusDialog, setStatusDialog] = useState(false);
@@ -188,14 +210,23 @@ const CaseDetails: React.FC = () => {
   
   const [clinicians, setClinicians] = useState<any[]>([]);
   const [loadingClinicians, setLoadingClinicians] = useState(false);
+  
+  // RTK Query mutation for updating case
+  const [updateCaseMutation] = useUpdateCaseMutation();
 
   useEffect(() => {
     if (id) {
       fetchCaseDetails();
     }
   }, [id]);
+  
+  useEffect(() => {
+    if (caseData?.worker?.id) {
+      fetchWorkerCaseHistory();
+    }
+  }, [caseData?.worker?.id, historyPage]);
 
-  const fetchCaseDetails = async () => {
+  const fetchCaseDetails = useCallback(async () => {
     try {
       setLoading(true);
       setError(null); // Clear any previous errors
@@ -289,9 +320,117 @@ const CaseDetails: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [id, user?.role, user?.id]);
+  
+  const fetchWorkerCaseHistory = useCallback(async () => {
+    try {
+      setLoadingHistory(true);
+      
+      if (!caseData?.worker) {
+        console.log('❌ No worker data available');
+        return;
+      }
+      
+      console.log('🔍 Fetching case history for worker:', caseData.worker);
+      
+      // Check if worker object has the id property
+      const workerId = (caseData.worker as any).id;
+      
+      if (!workerId) {
+        console.error('❌ Worker ID not found in case data');
+        console.log('Worker object structure:', JSON.stringify(caseData.worker, null, 2));
+        return;
+      }
+      
+      console.log('✅ Worker ID:', workerId);
+      console.log('📋 Current case ID to exclude:', id);
+      console.log('📋 Current case status:', caseData.status);
+      console.log('📄 Page:', historyPage, 'Page size:', HISTORY_PAGE_SIZE);
+      
+      // Debug: Check ALL cases for this worker to see statuses
+      const { data: debugCases } = await supabase
+        .from('cases')
+        .select('id, case_number, status')
+        .eq('worker_id', workerId);
+      
+      console.log('🔍 DEBUG - All cases for this worker:', debugCases);
+      
+      // First, get the total count of CLOSED cases (including current if closed)
+      const { count, error: countError } = await supabase
+        .from('cases')
+        .select('id', { count: 'exact', head: true })
+        .eq('worker_id', workerId)
+        .eq('status', 'closed'); // Only closed cases (no exclusion)
+      
+      if (countError) {
+        console.error('❌ Error counting cases:', countError);
+      } else {
+        console.log('📊 Total CLOSED history cases for this worker:', count || 0);
+        setTotalHistoryCases(count || 0);
+      }
+      
+      // Calculate pagination
+      const from = (historyPage - 1) * HISTORY_PAGE_SIZE;
+      const to = from + HISTORY_PAGE_SIZE - 1;
+      
+      console.log('📑 Fetching records from', from, 'to', to);
+      
+      // Fetch paginated CLOSED cases for this worker (including current)
+      const { data: cases, error: casesError } = await supabase
+        .from('cases')
+        .select(`
+          id,
+          case_number,
+          status,
+          priority,
+          created_at,
+          updated_at,
+          incidents:incidents!cases_incident_id_fkey(
+            id,
+            incident_type,
+            severity,
+            description,
+            created_at
+          )
+        `)
+        .eq('worker_id', workerId)
+        .eq('status', 'closed') // Only closed cases (no exclusion)
+        .order('created_at', { ascending: false})
+        .range(from, to);
+      
+      if (casesError) {
+        console.error('❌ Error fetching case history:', casesError);
+        console.error('Error details:', JSON.stringify(casesError, null, 2));
+        return;
+      }
+      
+      console.log('✅ Worker case history fetched (excluding current case):', cases);
+      console.log('📈 Total history cases:', cases?.length || 0);
+      
+      if (cases && cases.length > 0) {
+        console.log('📝 Case details:', cases.map(c => ({
+          id: c.id,
+          case_number: c.case_number,
+          status: c.status,
+          created: c.created_at
+        })));
+      } else {
+        console.log('⚠️ No CLOSED history cases found. This could mean:');
+        console.log('   1. This is the worker\'s first case');
+        console.log('   2. All other cases are still active (not closed)');
+        console.log('   3. The only closed case is the current one being viewed');
+      }
+      
+      setWorkerHistory(cases || []);
+    } catch (err: any) {
+      console.error('❌ Error in fetchWorkerCaseHistory:', err);
+      console.error('Error stack:', err.stack);
+    } finally {
+      setLoadingHistory(false);
+    }
+  }, [caseData?.worker, historyPage, id]);
 
-  const getStatusColor = (status: string) => {
+  const getStatusColor = useCallback((status: string) => {
     const colors: { [key: string]: any } = {
       'new': 'info',
       'triaged': 'warning',
@@ -301,9 +440,9 @@ const CaseDetails: React.FC = () => {
       'closed': 'default'
     };
     return colors[status] || 'default';
-  };
+  }, []);
 
-  const getPriorityColor = (priority: string) => {
+  const getPriorityColor = useCallback((priority: string) => {
     const colors: { [key: string]: any } = {
       'low': 'success',
       'medium': 'warning',
@@ -311,16 +450,16 @@ const CaseDetails: React.FC = () => {
       'urgent': 'error'
     };
     return colors[priority] || 'default';
-  };
+  }, []);
 
-  const getPainLevelColor = (level: number) => {
+  const getPainLevelColor = useCallback((level: number) => {
     if (level >= 7) return '#dc2626'; // Red
     if (level >= 4) return '#f59e0b'; // Yellow
     return '#22c55e'; // Green
-  };
+  }, []);
 
   // Handler functions
-  const handleEditCase = () => {
+  const handleEditCase = useCallback(() => {
     if (caseData) {
       setEditForm({
         priority: caseData.priority,
@@ -334,34 +473,83 @@ const CaseDetails: React.FC = () => {
       });
       setEditDialog(true);
     }
-  };
+  }, [caseData]);
 
-  const handleUpdateCase = async () => {
+  const handleUpdateCase = useCallback(async () => {
     try {
-      // TODO: Migrate to Supabase
-      console.log('Case update feature is being migrated to Supabase');
-      throw new Error('Case update feature is temporarily unavailable during migration to Supabase');
+      if (!caseData || !id) {
+        setError('Case data or ID is missing');
+        return;
+      }
+
+      console.log('Updating case:', { caseId: id, updates: editForm });
+      
+      // Validate priority value
+      const validPriorities = ['low', 'medium', 'high', 'urgent'];
+      if (!validPriorities.includes(editForm.priority)) {
+        setError('Invalid priority value');
+        return;
+      }
+      
+      // Use RTK Query mutation to update case
+      const result = await updateCaseMutation({
+        id: id,
+        updates: {
+          priority: editForm.priority,
+          updated_at: new Date().toISOString()
+        }
+      }).unwrap();
+
+      console.log('Case updated successfully:', result);
+      
       setSuccessMessage('Case updated successfully');
       setEditDialog(false);
-      fetchCaseDetails(); // Refresh data
+      
+      // Refresh case data
+      await fetchCaseDetails();
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to update case');
+      console.error('Error updating case:', err);
+      setError(err?.data?.message || err?.message || 'Failed to update case');
     }
-  };
+  }, [caseData, id, editForm, updateCaseMutation, fetchCaseDetails]);
 
-  const handleUpdateStatus = async (newStatus: string) => {
+  const handleUpdateStatus = useCallback(async (newStatus: string) => {
     try {
-      // TODO: Migrate to Supabase
-      console.log('Case status update feature is being migrated to Supabase');
-      throw new Error('Case status update feature is temporarily unavailable during migration to Supabase');
-      setSuccessMessage(`Case status updated to ${newStatus}`);
+      if (!caseData || !id) {
+        setError('Case data or ID is missing');
+        return;
+      }
+
+      console.log('Updating case status:', { caseId: id, newStatus });
+      
+      // Validate status value
+      const validStatuses = ['new', 'triaged', 'assessed', 'in_rehab', 'return_to_work', 'closed'];
+      if (!validStatuses.includes(newStatus)) {
+        setError('Invalid status value');
+        return;
+      }
+      
+      // Use RTK Query mutation to update case status
+      const result = await updateCaseMutation({
+        id: id,
+        updates: {
+          status: newStatus,
+          updated_at: new Date().toISOString()
+        }
+      }).unwrap();
+
+      console.log('Case status updated successfully:', result);
+      
+      setSuccessMessage(`Case status updated to ${newStatus.replace('_', ' ').toUpperCase()}`);
       setStatusDialog(false);
-      fetchCaseDetails(); // Refresh data
+      
+      // Refresh case data
+      await fetchCaseDetails();
     } catch (err: any) {
       console.error('Error updating status:', err);
-      setError(err.response?.data?.message || 'Failed to update status');
+      setError(err?.data?.message || err?.message || 'Failed to update status');
     }
-  };
+  }, [caseData, id, updateCaseMutation, fetchCaseDetails]);
 
   const handleAssignClinician = async () => {
     try {
@@ -378,34 +566,68 @@ const CaseDetails: React.FC = () => {
 
   const handleCloseCase = async () => {
     try {
-      // TODO: Migrate to Supabase
-      console.log('Case close feature is being migrated to Supabase');
-      throw new Error('Case close feature is temporarily unavailable during migration to Supabase');
+      if (!caseData || !id) {
+        setError('Case data or ID is missing');
+        return;
+      }
+
+      console.log('Closing case:', { caseId: id });
+      
+      // Use RTK Query mutation to close case
+      const result = await updateCaseMutation({
+        id: id,
+        updates: {
+          status: 'closed',
+          updated_at: new Date().toISOString()
+        }
+      }).unwrap();
+
+      console.log('Case closed successfully:', result);
+      
       setSuccessMessage('Case closed successfully');
       setCloseDialog(false);
-      fetchCaseDetails(); // Refresh data
+      
+      // Refresh case data
+      await fetchCaseDetails();
     } catch (err: any) {
       console.error('Error closing case:', err);
-      setError(err.response?.data?.message || 'Failed to close case');
+      setError(err?.data?.message || err?.message || 'Failed to close case');
     }
   };
 
   const handleReturnToWork = async () => {
     try {
-      // TODO: Migrate to Supabase
-      console.log('Return to work feature is being migrated to Supabase');
-      throw new Error('Return to work feature is temporarily unavailable during migration to Supabase');
+      if (!caseData || !id) {
+        setError('Case data or ID is missing');
+        return;
+      }
+
+      console.log('Returning worker to work:', { caseId: id });
+      
+      // Use RTK Query mutation to update case status
+      const result = await updateCaseMutation({
+        id: id,
+        updates: {
+          status: 'return_to_work',
+          updated_at: new Date().toISOString()
+        }
+      }).unwrap();
+
+      console.log('Worker returned to work successfully:', result);
+      
       setSuccessMessage('Worker returned to work successfully');
       setReturnToWorkDialog(false);
-      fetchCaseDetails(); // Refresh data
+      
+      // Refresh case data
+      await fetchCaseDetails();
     } catch (err: any) {
       console.error('Error updating return to work status:', err);
-      setError(err.response?.data?.message || 'Failed to update status');
+      setError(err?.data?.message || err?.message || 'Failed to update status');
     }
   };
 
   // Handle print functionality
-  const handlePrint = () => {
+  const handlePrint = useCallback(() => {
     // Create a new window for printing - updated with null checks
     const printWindow = window.open('', '_blank', 'width=800,height=600');
     
@@ -737,7 +959,7 @@ const CaseDetails: React.FC = () => {
       printWindow.focus();
       printWindow.print();
     };
-  };
+  }, [caseData]);
 
   const fetchClinicians = async () => {
     try {
@@ -753,17 +975,33 @@ const CaseDetails: React.FC = () => {
     }
   };
 
-  const canEditCase = () => {
+  const canEditCase = useMemo(() => {
     return user?.role === 'case_manager'; // Removed admin role
-  };
+  }, [user?.role]);
 
-  const canAssignClinician = () => {
+  const canAssignClinician = useMemo(() => {
     return user?.role === 'case_manager'; // Removed admin role
-  };
+  }, [user?.role]);
 
-  const canUpdateStatus = () => {
+  const canUpdateStatus = useMemo(() => {
+    // Cannot update status if case is closed
+    if (caseData?.status === 'closed') {
+      return false;
+    }
     return user?.role === 'case_manager' || user?.role === 'clinician'; // Removed admin role
-  };
+  }, [user?.role, caseData?.status]);
+
+  // Memoize pagination count to prevent recalculation
+  const historyPageCount = useMemo(() => {
+    return Math.ceil(totalHistoryCases / HISTORY_PAGE_SIZE);
+  }, [totalHistoryCases]);
+
+  // Memoize showing range text
+  const showingRangeText = useMemo(() => {
+    const start = Math.min((historyPage - 1) * HISTORY_PAGE_SIZE + 1, totalHistoryCases);
+    const end = Math.min(historyPage * HISTORY_PAGE_SIZE, totalHistoryCases);
+    return `Showing ${start}-${end} of ${totalHistoryCases}`;
+  }, [historyPage, totalHistoryCases]);
 
   if (loading) {
     return (
@@ -936,16 +1174,27 @@ const CaseDetails: React.FC = () => {
             <Divider orientation="vertical" flexItem sx={{ mx: 2, height: '24px', my: 'auto' }} />
             
             <Chip 
-              label={caseData.status?.replace('_', ' ').toUpperCase() || 'UNKNOWN'}
-              color={getStatusColor(caseData.status)}
+              label={getStatusLabel(caseData.status || 'Unknown')}
               size="small"
               sx={{ 
                 fontWeight: 600, 
-                borderRadius: '6px', 
+                borderRadius: '20px', 
                 fontSize: '0.75rem',
                 px: 1,
-                height: '24px',
+                height: '28px',
+                backgroundColor: 
+                  caseData.status === 'new' ? '#3b82f6' :
+                  caseData.status === 'triaged' ? '#f59e0b' :
+                  caseData.status === 'assessed' ? '#8b5cf6' :
+                  caseData.status === 'in_rehab' ? '#ef4444' :
+                  caseData.status === 'return_to_work' ? '#f97316' :
+                  caseData.status === 'closed' ? '#6b7280' : '#6b7280',
+                color: 'white',
+                border: 'none',
                 boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+                '&:hover': {
+                  opacity: 0.9
+                },
                 '& .MuiChip-label': {
                   px: 1
                 }
@@ -980,17 +1229,19 @@ const CaseDetails: React.FC = () => {
               >
                 Case: {caseData.caseNumber}
               </Typography>
-              <Typography 
-                variant="body1" 
-                color="text.secondary"
+              <Box 
                 sx={{ 
-                  fontSize: { xs: '0.875rem', sm: '1rem' },
                   display: 'flex',
                   alignItems: 'center',
-                  gap: 1
+                  gap: 1,
+                  fontSize: { xs: '0.875rem', sm: '1rem' },
+                  color: 'text.secondary'
                 }}
               >
-                <Person fontSize="small" /> {caseData.worker?.firstName || 'Unknown'} {caseData.worker?.lastName || 'Worker'}
+                <Person fontSize="small" />
+                <Typography variant="body1" component="span" color="text.secondary">
+                  {caseData.worker?.firstName || 'Unknown'} {caseData.worker?.lastName || 'Worker'}
+                </Typography>
                 <Chip 
                   label={caseData.priority?.toUpperCase() || 'UNKNOWN'}
                   color={getPriorityColor(caseData.priority)}
@@ -999,11 +1250,10 @@ const CaseDetails: React.FC = () => {
                   sx={{ 
                     fontWeight: 600, 
                     fontSize: '0.7rem',
-                    height: '20px',
-                    ml: 1
+                    height: '20px'
                   }}
                 />
-              </Typography>
+              </Box>
             </Box>
             
             {/* Action Buttons */}
@@ -1035,7 +1285,7 @@ const CaseDetails: React.FC = () => {
                 Print
               </Button>
 
-              {canEditCase() && (
+              {canEditCase && (
                 <Button
                   variant="outlined"
                   startIcon={<Edit />}
@@ -1057,7 +1307,7 @@ const CaseDetails: React.FC = () => {
                 </Button>
               )}
               
-              {canAssignClinician() && !caseData.clinician && (
+              {canAssignClinician && !caseData.clinician && (
                 <Button
                   variant="outlined"
                   startIcon={<LocalHospital />}
@@ -1082,29 +1332,42 @@ const CaseDetails: React.FC = () => {
                 </Button>
               )}
               
-              {canUpdateStatus() && (
-                <Button
-                  variant="outlined"
-                  startIcon={<Timeline />}
-                  onClick={() => setStatusDialog(true)}
-                  size="small"
-                  sx={{ 
-                    borderRadius: '8px',
-                    textTransform: 'none',
-                    fontWeight: 600,
-                    borderColor: '#60a5fa',
-                    color: '#2563eb',
-                    '&:hover': {
-                      borderColor: '#3b82f6',
-                      backgroundColor: 'rgba(59, 130, 246, 0.04)'
-                    }
-                  }}
+              {(user?.role === 'case_manager' || user?.role === 'clinician') && (
+                <Tooltip 
+                  title={caseData.status === 'closed' ? "Cannot update status - case is closed" : "Update case status"}
+                  arrow
                 >
-                  Update Status
-                </Button>
+                  <span>
+                    <Button
+                      variant="outlined"
+                      startIcon={<Timeline />}
+                      onClick={() => setStatusDialog(true)}
+                      size="small"
+                      disabled={caseData.status === 'closed'}
+                      sx={{ 
+                        borderRadius: '8px',
+                        textTransform: 'none',
+                        fontWeight: 600,
+                        borderColor: '#60a5fa',
+                        color: '#2563eb',
+                        '&:hover': {
+                          borderColor: '#3b82f6',
+                          backgroundColor: 'rgba(59, 130, 246, 0.04)'
+                        },
+                        '&:disabled': {
+                          borderColor: '#d1d5db',
+                          color: '#9ca3af',
+                          cursor: 'not-allowed'
+                        }
+                      }}
+                    >
+                      Update Status
+                    </Button>
+                  </span>
+                </Tooltip>
               )}
               
-              {canUpdateStatus() && caseData.status !== 'closed' && (
+              {canUpdateStatus && caseData.status !== 'closed' && (
                 <Button
                   variant="contained"
                   color="error"
@@ -1125,7 +1388,7 @@ const CaseDetails: React.FC = () => {
                 </Button>
               )}
               
-              {canUpdateStatus() && caseData.status === 'in_rehab' && (
+              {canUpdateStatus && caseData.status === 'in_rehab' && (
                 <Button
                   variant="contained"
                   color="success"
@@ -1360,13 +1623,25 @@ const CaseDetails: React.FC = () => {
                     </Typography>
                     <Box sx={{ mt: 0.5 }}>
                       <Chip 
-                        label={caseData.status?.replace('_', ' ').toUpperCase() || 'UNKNOWN'}
-                        color={getStatusColor(caseData.status)}
+                        label={getStatusLabel(caseData.status || 'Unknown')}
                         size="small"
                         sx={{ 
                           fontWeight: 600,
-                          borderRadius: '6px',
-                          fontSize: '0.75rem'
+                          borderRadius: '20px',
+                          fontSize: '0.75rem',
+                          height: '28px',
+                          backgroundColor: 
+                            caseData.status === 'new' ? '#3b82f6' :
+                            caseData.status === 'triaged' ? '#f59e0b' :
+                            caseData.status === 'assessed' ? '#8b5cf6' :
+                            caseData.status === 'in_rehab' ? '#ef4444' :
+                            caseData.status === 'return_to_work' ? '#f97316' :
+                            caseData.status === 'closed' ? '#6b7280' : '#6b7280',
+                          color: 'white',
+                          border: 'none',
+                          '&:hover': {
+                            opacity: 0.9
+                          }
                         }}
                       />
                     </Box>
@@ -1788,7 +2063,7 @@ const CaseDetails: React.FC = () => {
                     <Typography variant="body2" color="text.secondary">
                       No clinician has been assigned to this case yet.
                     </Typography>
-                    {canAssignClinician() && (
+                    {canAssignClinician && (
                       <Button
                         variant="outlined"
                         size="small"
@@ -2089,6 +2364,295 @@ const CaseDetails: React.FC = () => {
               </Card>
             </Grid>
           )}
+          
+          {/* Worker Case History */}
+          <Grid item xs={12}>
+            <Paper
+              elevation={0}
+              sx={{ 
+                borderRadius: '12px',
+                border: '1px solid #e5e7eb',
+                overflow: 'hidden'
+              }}
+            >
+              <Box sx={{ 
+                p: { xs: 2, sm: 3 }, 
+                borderBottom: '1px solid #e5e7eb',
+                bgcolor: '#f9fafb',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1
+              }}>
+                <Avatar sx={{ bgcolor: '#f59e0b', width: 32, height: 32 }}>
+                  <Timeline fontSize="small" />
+                </Avatar>
+                <Typography 
+                  variant="h6" 
+                  sx={{ 
+                    fontWeight: 600, 
+                    color: '#111827',
+                    fontSize: '1rem'
+                  }}
+                >
+                  Worker Case History
+                </Typography>
+                {totalHistoryCases > 0 && (
+                  <Chip 
+                    label={`${totalHistoryCases} Total ${totalHistoryCases === 1 ? 'Case' : 'Cases'}`} 
+                    size="small" 
+                    sx={{ 
+                      bgcolor: 'rgba(245, 158, 11, 0.1)', 
+                      color: '#f59e0b',
+                      fontWeight: 600
+                    }} 
+                  />
+                )}
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={() => {
+                    const now = Date.now();
+                    if (now - lastRefreshTime < REFRESH_COOLDOWN) {
+                      setError(`Please wait ${Math.ceil((REFRESH_COOLDOWN - (now - lastRefreshTime)) / 1000)} seconds before refreshing again`);
+                      setTimeout(() => setError(null), 2000);
+                      return;
+                    }
+                    console.log('🔄 Manual refresh triggered');
+                    setLastRefreshTime(now);
+                    fetchWorkerCaseHistory();
+                  }}
+                  disabled={loadingHistory}
+                  sx={{ ml: 'auto', fontSize: '0.75rem' }}
+                >
+                  Refresh History
+                </Button>
+              </Box>
+              
+              <Box sx={{ p: { xs: 2, sm: 3 } }}>
+                {loadingHistory ? (
+                  <Box display="flex" justifyContent="center" alignItems="center" py={4}>
+                    <CircularProgress size={32} />
+                  </Box>
+                ) : workerHistory.length === 0 ? (
+                  <Box sx={{ 
+                    textAlign: 'center', 
+                    py: 4,
+                    px: 2,
+                    bgcolor: 'rgba(249, 250, 251, 0.5)',
+                    borderRadius: '8px',
+                    border: '1px dashed #e5e7eb'
+                  }}>
+                    <Info sx={{ fontSize: 48, color: '#9ca3af', mb: 2 }} />
+                    <Typography variant="body1" color="text.secondary" gutterBottom sx={{ fontWeight: 600 }}>
+                      No other closed cases found
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      {caseData.status === 'closed' 
+                        ? `This is the only closed case for ${caseData?.worker?.firstName} ${caseData?.worker?.lastName}.`
+                        : `${caseData?.worker?.firstName} ${caseData?.worker?.lastName} has no closed cases yet.`
+                      }
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 1, fontSize: '0.8rem', fontStyle: 'italic' }}>
+                      {caseData.status === 'closed' 
+                        ? 'Current case is not shown in history.'
+                        : 'Only closed cases appear in case history.'
+                      }
+                    </Typography>
+                  </Box>
+                ) : (
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    {workerHistory.map((historyCase, index) => {
+                      const isCurrentCase = historyCase.id === id;
+                      return (
+                      <Card 
+                        key={historyCase.id}
+                        elevation={0}
+                        sx={{ 
+                          border: isCurrentCase ? '2px solid #3b82f6' : '1px solid #e5e7eb',
+                          borderRadius: '8px',
+                          transition: 'all 0.2s',
+                          cursor: isCurrentCase ? 'default' : 'pointer',
+                          bgcolor: isCurrentCase ? 'rgba(59, 130, 246, 0.02)' : 'transparent',
+                          ...(!isCurrentCase && {
+                            '&:hover': {
+                              borderColor: '#3b82f6',
+                              boxShadow: '0 4px 12px rgba(59, 130, 246, 0.1)',
+                              transform: 'translateX(4px)'
+                            }
+                          })
+                        }}
+                        onClick={() => !isCurrentCase && navigate(`/cases/${historyCase.id}`)}
+                      >
+                        <CardContent sx={{ p: 2 }}>
+                          <Grid container spacing={2} alignItems="center">
+                            <Grid item xs={12} sm={3}>
+                              <Box>
+                                <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', fontSize: '0.7rem' }}>
+                                  Case Number
+                                </Typography>
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                  <Typography variant="body1" sx={{ fontWeight: 600, color: '#111827' }}>
+                                    {historyCase.case_number}
+                                  </Typography>
+                                  {isCurrentCase && (
+                                    <Chip 
+                                      label="Current" 
+                                      size="small" 
+                                      sx={{ 
+                                        bgcolor: '#3b82f6', 
+                                        color: 'white',
+                                        fontWeight: 600,
+                                        fontSize: '0.65rem',
+                                        height: '18px'
+                                      }} 
+                                    />
+                                  )}
+                                </Box>
+                              </Box>
+                            </Grid>
+                            
+                            <Grid item xs={12} sm={2}>
+                              <Box>
+                                <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', fontSize: '0.7rem' }}>
+                                  Status
+                                </Typography>
+                                <Box sx={{ mt: 0.5 }}>
+                                  <Chip 
+                                    label={getStatusLabel(historyCase.status || 'Unknown')}
+                                    size="small"
+                                    sx={{ 
+                                      fontWeight: 600,
+                                      fontSize: '0.7rem',
+                                      height: '24px',
+                                      backgroundColor: 
+                                        historyCase.status === 'new' ? '#3b82f6' :
+                                        historyCase.status === 'triaged' ? '#f59e0b' :
+                                        historyCase.status === 'assessed' ? '#8b5cf6' :
+                                        historyCase.status === 'in_rehab' ? '#ef4444' :
+                                        historyCase.status === 'return_to_work' ? '#f97316' :
+                                        historyCase.status === 'closed' ? '#6b7280' : '#6b7280',
+                                      color: 'white'
+                                    }}
+                                  />
+                                </Box>
+                              </Box>
+                            </Grid>
+                            
+                            <Grid item xs={12} sm={2}>
+                              <Box>
+                                <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', fontSize: '0.7rem' }}>
+                                  Priority
+                                </Typography>
+                                <Box sx={{ mt: 0.5 }}>
+                                  <Chip 
+                                    label={historyCase.priority?.toUpperCase() || 'UNKNOWN'}
+                                    color={getPriorityColor(historyCase.priority)}
+                                    size="small"
+                                    variant="outlined"
+                                    sx={{ 
+                                      fontWeight: 600,
+                                      fontSize: '0.7rem',
+                                      height: '24px'
+                                    }}
+                                  />
+                                </Box>
+                              </Box>
+                            </Grid>
+                            
+                            <Grid item xs={12} sm={3}>
+                              <Box>
+                                <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', fontSize: '0.7rem' }}>
+                                  Incident Type
+                                </Typography>
+                                <Typography variant="body2" sx={{ fontWeight: 500, color: '#374151', mt: 0.5 }}>
+                                  {historyCase.incidents?.incident_type || 'N/A'}
+                                </Typography>
+                              </Box>
+                            </Grid>
+                            
+                            <Grid item xs={12} sm={2}>
+                              <Box>
+                                <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', fontSize: '0.7rem' }}>
+                                  Created Date
+                                </Typography>
+                                <Typography variant="body2" sx={{ fontWeight: 500, color: '#374151', mt: 0.5 }}>
+                                  {new Date(historyCase.created_at).toLocaleDateString()}
+                                </Typography>
+                              </Box>
+                            </Grid>
+                          </Grid>
+                          
+                          {historyCase.incidents && (
+                            <Box sx={{ mt: 2, pt: 2, borderTop: '1px dashed #e5e7eb' }}>
+                              <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', fontSize: '0.7rem' }}>
+                                Incident Information
+                              </Typography>
+                              <Box sx={{ mt: 0.5, display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+                                <Typography variant="body2" sx={{ color: '#6b7280' }}>
+                                  <strong>Type:</strong> {historyCase.incidents.incident_type || 'N/A'}
+                                </Typography>
+                                <Typography variant="body2" sx={{ color: '#6b7280' }}>
+                                  <strong>Severity:</strong> {historyCase.incidents.severity || 'N/A'}
+                                </Typography>
+                                <Typography variant="body2" sx={{ color: '#6b7280' }}>
+                                  <strong>Date:</strong> {new Date(historyCase.incidents.created_at).toLocaleDateString()}
+                                </Typography>
+                              </Box>
+                              {historyCase.incidents.description && (
+                                <Box sx={{ mt: 1 }}>
+                                  <Typography variant="body2" sx={{ color: '#6b7280', fontSize: '0.875rem' }}>
+                                    {historyCase.incidents.description}
+                                  </Typography>
+                                </Box>
+                              )}
+                            </Box>
+                          )}
+                        </CardContent>
+                      </Card>
+                      );
+                    })}
+                  </Box>
+                )}
+                
+                {/* Pagination */}
+                {!loadingHistory && totalHistoryCases > 0 && (
+                  <Box sx={{ 
+                    display: 'flex', 
+                    justifyContent: 'center', 
+                    alignItems: 'center',
+                    mt: 3,
+                    pt: 2,
+                    borderTop: '1px solid #e5e7eb'
+                  }}>
+                    <Pagination 
+                      count={historyPageCount}
+                      page={historyPage}
+                      onChange={(event, value) => {
+                        console.log('📄 Changing to page:', value);
+                        setHistoryPage(value);
+                      }}
+                      color="primary"
+                      size="medium"
+                      showFirstButton
+                      showLastButton
+                      sx={{
+                        '& .MuiPaginationItem-root': {
+                          fontWeight: 600
+                        },
+                        '& .Mui-selected': {
+                          bgcolor: '#f59e0b !important',
+                          color: 'white'
+                        }
+                      }}
+                    />
+                    <Typography variant="body2" color="text.secondary" sx={{ ml: 2 }}>
+                      {showingRangeText}
+                    </Typography>
+                  </Box>
+                )}
+              </Box>
+            </Paper>
+          </Grid>
         </Grid>
 
         {/* Edit Case Dialog */}

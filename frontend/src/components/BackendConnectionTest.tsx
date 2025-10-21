@@ -1,155 +1,106 @@
-import React, { useState } from 'react';
-import { Button, Card, CardContent, Typography, Alert, Box } from '@mui/material';
-import { CheckCircle, Error as ErrorIcon, Refresh } from '@mui/icons-material';
-import { testBackendConnection, kpiAPI } from '../utils/backendApi';
+import React, { useState, useEffect } from 'react';
+import { Box, Button, Typography, Alert, Card, CardContent } from '@mui/material';
 import { useAuth } from '../contexts/AuthContext.supabase';
+import { BackendAssignmentAPI } from '../utils/backendAssignmentApi';
 
 const BackendConnectionTest: React.FC = () => {
-  const { user } = useAuth();
-  const [testing, setTesting] = useState(false);
-  const [result, setResult] = useState<{
-    success: boolean;
-    message: string;
-    details?: any;
-  } | null>(null);
+  const { user, session } = useAuth();
+  const [testResults, setTestResults] = useState<any>({});
+  const [loading, setLoading] = useState(false);
 
-  const testConnection = async () => {
-    setTesting(true);
-    setResult(null);
+  const runTests = async () => {
+    setLoading(true);
+    const results: any = {};
 
     try {
-      console.log('🔄 Testing backend connection...');
-      
-      // Test 1: Health check
-      const healthResult = await testBackendConnection();
-      
-      if (!healthResult) {
-        throw new Error('Health check failed');
-      }
+      // Test 1: Check authentication
+      results.auth = {
+        user: user ? '✅ User logged in' : '❌ No user',
+        session: session ? '✅ Session active' : '❌ No session',
+        token: session?.access_token ? '✅ Token present' : '❌ No token'
+      };
 
-      // Test 2: KPI API (if user is available)
-      let kpiResult = null;
-      let kpiTestDetails = 'Not tested';
-      
-      if (user?.id) {
-        try {
-          if (user.role === 'team_leader') {
-            kpiResult = await kpiAPI.getTeamWeeklySummary(user.id);
-            kpiTestDetails = 'Team Leader KPI - Success';
-          } else if (user.role === 'worker') {
-            kpiResult = await kpiAPI.getWorkerWeeklyProgress(user.id);
-            kpiTestDetails = 'Worker KPI - Success';
-          }
-        } catch (kpiError: any) {
-          console.warn('KPI test failed:', kpiError);
-          kpiTestDetails = `KPI Error: ${kpiError.message}`;
-        }
-      } else {
-        kpiTestDetails = 'No user logged in';
-      }
-
-      // Test 3: Direct KPI endpoint test (without auth)
-      let directKpiTest = 'Not tested';
+      // Test 2: Test basic API connection
       try {
-        const directResponse = await fetch('https://sociosystem.onrender.com/api/goal-kpi/team-leader/weekly-summary?teamLeaderId=test');
-        directKpiTest = `Direct KPI Test: ${directResponse.status} ${directResponse.statusText}`;
-      } catch (directError: any) {
-        directKpiTest = `Direct KPI Error: ${directError.message}`;
+        const assignments = await BackendAssignmentAPI.getAssignments();
+        results.assignments = '✅ Assignments API working';
+      } catch (error: any) {
+        results.assignments = `❌ Assignments API failed: ${error.message}`;
       }
 
-      setResult({
-        success: true,
-        message: 'Backend connection successful!',
-        details: {
-          health: 'OK',
-          kpi: kpiTestDetails,
-          directKpiTest: directKpiTest,
-          user: user ? `${user.role} (${user.id})` : 'No user logged in'
-        }
-      });
+      // Test 3: Test unselected workers API
+      try {
+        const unselected = await BackendAssignmentAPI.getUnselectedWorkers();
+        results.unselected = '✅ Unselected workers API working';
+      } catch (error: any) {
+        results.unselected = `❌ Unselected workers API failed: ${error.message}`;
+      }
+
+      // Test 4: Test stats API
+      try {
+        const stats = await BackendAssignmentAPI.getAssignmentStats();
+        results.stats = '✅ Stats API working';
+      } catch (error: any) {
+        results.stats = `❌ Stats API failed: ${error.message}`;
+      }
 
     } catch (error: any) {
-      console.error('❌ Backend connection test failed:', error);
-      setResult({
-        success: false,
-        message: error.message || 'Backend connection failed',
-        details: {
-          error: error.message,
-          user: user ? `${user.role} (${user.id})` : 'No user logged in'
-        }
-      });
-    } finally {
-      setTesting(false);
+      results.general = `❌ General error: ${error.message}`;
     }
+
+    setTestResults(results);
+    setLoading(false);
   };
 
+  useEffect(() => {
+    if (user && session) {
+      runTests();
+    }
+  }, [user, session]);
+
   return (
-    <>
-      <style>
-        {`
-          @keyframes spin {
-            from { transform: rotate(0deg); }
-            to { transform: rotate(360deg); }
-          }
-        `}
-      </style>
-      <Card sx={{ maxWidth: 600, mx: 'auto', mt: 2 }}>
-        <CardContent>
+    <Card sx={{ maxWidth: 600, margin: '20px auto' }}>
+      <CardContent>
         <Typography variant="h6" gutterBottom>
-          Backend Connection Test
+          🔧 Backend Connection Test
         </Typography>
         
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Test the connection between your frontend and the deployed backend at sociosystem.onrender.com
-        </Typography>
+        <Box mb={2}>
+          <Typography variant="body2" color="text.secondary">
+            User: {user?.email || 'Not logged in'}
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            Role: {user?.role || 'N/A'}
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            Session: {session ? 'Active' : 'None'}
+          </Typography>
+        </Box>
 
-        <Button
-          variant="contained"
-           startIcon={testing ? <Refresh sx={{ animation: 'spin 1s linear infinite' }} /> : <CheckCircle />}
-          onClick={testConnection}
-          disabled={testing}
+        <Button 
+          variant="contained" 
+          onClick={runTests} 
+          disabled={loading}
           sx={{ mb: 2 }}
         >
-          {testing ? 'Testing...' : 'Test Backend Connection'}
+          {loading ? 'Testing...' : 'Run Tests'}
         </Button>
 
-        {result && (
-          <Box sx={{ mt: 2 }}>
-            <Alert 
-              severity={result.success ? 'success' : 'error'}
-               icon={result.success ? <CheckCircle /> : <ErrorIcon />}
-            >
-              <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
-                {result.message}
-              </Typography>
-              
-              {result.details && (
-                <Box sx={{ mt: 1, fontSize: '0.875rem' }}>
-                  <Typography variant="body2" component="div">
-                    <strong>Details:</strong>
-                  </Typography>
-                  <pre style={{ 
-                    fontSize: '0.75rem', 
-                    margin: '8px 0', 
-                    padding: '8px', 
-                    backgroundColor: '#f5f5f5', 
-                    borderRadius: '4px',
-                    overflow: 'auto'
-                  }}>
-                    {JSON.stringify(result.details, null, 2)}
-                  </pre>
-                </Box>
-              )}
-            </Alert>
+        {Object.keys(testResults).length > 0 && (
+          <Box>
+            {Object.entries(testResults).map(([key, value]) => (
+              <Alert 
+                key={key} 
+                severity={value.toString().includes('✅') ? 'success' : 'error'}
+                sx={{ mb: 1 }}
+              >
+                <span><strong>{key}:</strong> {String(value)}</span>
+              </Alert>
+            ))}
           </Box>
         )}
-
-        <Typography variant="caption" display="block" sx={{ mt: 2, color: 'text.secondary' }}>
-          This will test the connection to: https://sociosystem.onrender.com
-        </Typography>
-        </CardContent>
-      </Card>
-    </>
+      </CardContent>
+    </Card>
   );
 };
 

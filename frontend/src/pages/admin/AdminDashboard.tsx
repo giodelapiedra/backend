@@ -42,6 +42,7 @@ import {
 import { useAuth } from '../../contexts/AuthContext.supabase';
 import LayoutWithSidebar from '../../components/LayoutWithSidebar';
 import { dataClient } from '../../lib/supabase';
+import api from '../../utils/api';
 
 const AdminDashboard: React.FC = () => {
   const { user } = useAuth();
@@ -88,45 +89,25 @@ const AdminDashboard: React.FC = () => {
   const fetchUsers = useCallback(async () => {
     try {
       setLoading(true);
-      console.log('🔄 Fetching users from Supabase...');
+      console.log('🔄 Fetching users from backend API...');
       
-      let query = dataClient
-        .from('users')
-        .select('*', { count: 'exact' });
+      const response = await api.get('/admin/users', {
+        params: {
+          page: currentPage,
+          limit: pageSize,
+          search: searchTerm,
+          role: roleFilter,
+          status: statusFilter
+        }
+      });
       
-      // Apply filters
-      if (searchTerm) {
-        query = query.or(`first_name.ilike.%${searchTerm}%,last_name.ilike.%${searchTerm}%,email.ilike.%${searchTerm}%`);
-      }
-      
-      if (roleFilter !== 'all') {
-        query = query.eq('role', roleFilter);
-      }
-      
-      if (statusFilter !== 'all') {
-        query = query.eq('is_active', statusFilter === 'active');
-      }
-      
-      // Apply pagination
-      const from = (currentPage - 1) * pageSize;
-      const to = from + pageSize - 1;
-      query = query.range(from, to);
-      
-      const { data, error, count } = await query;
-      
-      if (error) {
-        console.error('❌ Error fetching users:', error);
-        setError('Failed to fetch users: ' + error.message);
-        return;
-      }
-      
-      console.log('✅ Users fetched:', data?.length);
-      setUsers(data || []);
-      setTotalUsers(count || 0);
-      setTotalPages(Math.ceil((count || 0) / pageSize));
+      console.log('✅ Users fetched:', response.data.users?.length);
+      setUsers(response.data.users || []);
+      setTotalUsers(response.data.pagination?.totalUsers || 0);
+      setTotalPages(response.data.pagination?.totalPages || 0);
     } catch (err: any) {
       console.error('❌ Error fetching users:', err);
-      setError(err.message || 'Failed to fetch users');
+      setError(err.response?.data?.message || 'Failed to fetch users');
     } finally {
       setLoading(false);
     }
@@ -152,119 +133,73 @@ const AdminDashboard: React.FC = () => {
       setError('Please ensure the password meets all requirements');
       return;
     }
+
+    // Validate clinician-specific fields
+    if (userForm.role === 'clinician') {
+      if (!userForm.specialty.trim() || !userForm.licenseNumber.trim()) {
+        setError('Specialty and license number are required for clinicians');
+        return;
+      }
+    }
     
     // Clear any previous errors
     setError('');
     
     try {
       setLoading(true);
+      console.log('🔄 Creating user via backend API...');
       
-      if (profilePhoto) {
-        // Create FormData for file upload
-        const formData = new FormData();
-        formData.append('firstName', userForm.firstName.trim());
-        formData.append('lastName', userForm.lastName.trim());
-        formData.append('email', userForm.email.trim().toLowerCase());
-        formData.append('password', userForm.password);
-        formData.append('role', userForm.role);
-        formData.append('phone', userForm.phone.trim() || '');
-        formData.append('isActive', userForm.isActive.toString());
-        formData.append('medicalInfo', JSON.stringify({
-          allergies: [],
-          medications: [],
-          medicalConditions: []
-        }));
-        formData.append('isAvailable', 'true');
-        
-        if (userForm.role === 'clinician') {
-          if (userForm.specialty.trim()) {
-            formData.append('specialty', userForm.specialty.trim());
-          }
-          if (userForm.licenseNumber.trim()) {
-            formData.append('licenseNumber', userForm.licenseNumber.trim());
-          }
-        }
+      // Determine package based on role
+      let packageValue = 'package1';
+      if (userForm.role === 'team_leader') {
+        packageValue = 'package2';
+      } else if (userForm.role === 'admin') {
+        packageValue = 'package4';
+      }
 
-        if (userForm.role === 'team_leader') {
-          formData.append('team', userForm.team || 'DEFAULT TEAM');
-          formData.append('defaultTeam', userForm.team || 'DEFAULT TEAM');
-          formData.append('managedTeams', JSON.stringify([userForm.team || 'DEFAULT TEAM']));
-        }
-        
-        formData.append('profileImage', profilePhoto);
-        
-        // For now, skip file upload and create user without photo
-        console.log('⚠️ File upload not implemented yet, creating user without photo');
-        const userData = {
-          first_name: userForm.firstName.trim(),
-          last_name: userForm.lastName.trim(),
-          email: userForm.email.trim().toLowerCase(),
-          password_hash: userForm.password,
-          role: userForm.role,
-          phone: userForm.phone.trim() || '',
-          is_active: userForm.isActive,
-          medical_info: {},
-          emergency_contact: {},
-          address: {}
-        };
-        
-        const { data, error } = await dataClient
-          .from('users')
-          .insert([userData])
-          .select()
-          .single();
-        
-        if (error) {
-          console.error('❌ Error creating user:', error);
-          setError('Failed to create user: ' + error.message);
-          return;
-        }
-        
-        setCreatedUser(data);
-      } else {
-        // Regular JSON request without photo
-        const userData = {
-          first_name: userForm.firstName.trim(),
-          last_name: userForm.lastName.trim(),
-          email: userForm.email.trim().toLowerCase(),
-          password_hash: userForm.password,
-          role: userForm.role,
-          phone: userForm.phone.trim() || '',
-          is_active: userForm.isActive,
-          specialty: userForm.role === 'clinician' ? userForm.specialty.trim() : null,
-          license_number: userForm.role === 'clinician' ? userForm.licenseNumber.trim() : null,
-          team: userForm.role === 'team_leader' ? userForm.team || 'DEFAULT TEAM' : null,
-          medical_info: {
-            allergies: [],
-            medications: [],
-            medicalConditions: []
-          },
-          emergency_contact: {},
-          address: {}
-        };
-
-        const { data, error } = await dataClient
-          .from('users')
-          .insert([userData])
-          .select()
-          .single();
-        
-        if (error) {
-          console.error('❌ Error creating user:', error);
-          setError('Failed to create user: ' + error.message);
-          return;
-        }
-        
-        setCreatedUser(data);
+      // Determine team based on role
+      let teamValue = null;
+      if (userForm.role === 'team_leader') {
+        // Team leaders should NOT have a default team - they create their own
+        // Only assign team if explicitly provided AND not empty
+        teamValue = userForm.team && userForm.team.trim() ? userForm.team.trim() : null;
+      } else if (userForm.role === 'worker') {
+        // Workers need a team - assign TEAM GEO as default only if no team provided
+        teamValue = userForm.team || 'TEAM GEO';
       }
       
-      setSuccessMessage('User created successfully!');
+      const userData = {
+        firstName: userForm.firstName.trim(),
+        lastName: userForm.lastName.trim(),
+        email: userForm.email.trim().toLowerCase(),
+        password: userForm.password,
+        role: userForm.role,
+        phone: userForm.phone.trim() || '',
+        isActive: userForm.isActive,
+        specialty: userForm.role === 'clinician' ? userForm.specialty.trim() : undefined,
+        licenseNumber: userForm.role === 'clinician' ? userForm.licenseNumber.trim() : undefined,
+        team: teamValue,
+        defaultTeam: userForm.role === 'team_leader' ? teamValue : undefined,
+        managedTeams: userForm.role === 'team_leader' ? (teamValue ? [teamValue] : []) : undefined,
+        package: packageValue
+      };
+
+      console.log('📤 Sending user data:', { ...userData, password: '***' });
+
+      const response = await api.post('/admin/users', userData);
+      
+      console.log('✅ User created successfully:', response.data.user);
+      console.log('✅ User can now login with their credentials');
+      
+      setCreatedUser(response.data.user);
+      setSuccessMessage('User created successfully and can now login!');
       setUserDialog(false);
       setSuccessDialog(true);
       resetUserForm();
       fetchUsers();
     } catch (err: any) {
-      const errorMessage = err.response?.data?.message || 'Failed to create user';
+      console.error('❌ Error creating user:', err);
+      const errorMessage = err.response?.data?.message || err.response?.data?.error || 'Failed to create user';
       setError(errorMessage);
     } finally {
       setLoading(false);
@@ -272,43 +207,64 @@ const AdminDashboard: React.FC = () => {
   };
 
   const handleUpdateUser = async () => {
+    // Validate clinician-specific fields
+    if (userForm.role === 'clinician') {
+      if (!userForm.specialty.trim() || !userForm.licenseNumber.trim()) {
+        setError('Specialty and license number are required for clinicians');
+        return;
+      }
+    }
+
     try {
       setLoading(true);
-      console.log('🔄 Updating user in Supabase...');
+      console.log('🔄 Updating user via backend API...');
+      
+      // Determine package based on role
+      let packageValue = 'package1';
+      if (userForm.role === 'team_leader') {
+        packageValue = 'package2';
+      } else if (userForm.role === 'admin') {
+        packageValue = 'package4';
+      }
+
+      // Determine team based on role
+      let teamValue = null;
+      if (userForm.role === 'team_leader') {
+        // Team leaders should NOT have a default team - they create their own
+        // Only assign team if explicitly provided AND not empty
+        teamValue = userForm.team && userForm.team.trim() ? userForm.team.trim() : null;
+      } else if (userForm.role === 'worker') {
+        // Workers need a team - assign TEAM GEO as default only if no team provided
+        teamValue = userForm.team || 'TEAM GEO';
+      }
       
       const updateData = {
-        first_name: userForm.firstName.trim(),
-        last_name: userForm.lastName.trim(),
+        firstName: userForm.firstName.trim(),
+        lastName: userForm.lastName.trim(),
         email: userForm.email.trim().toLowerCase(),
         role: userForm.role,
         phone: userForm.phone.trim() || '',
-        is_active: userForm.isActive,
-        specialty: userForm.role === 'clinician' ? userForm.specialty.trim() : null,
-        license_number: userForm.role === 'clinician' ? userForm.licenseNumber.trim() : null,
-        team: userForm.role === 'team_leader' ? userForm.team || 'DEFAULT TEAM' : null
+        isActive: userForm.isActive,
+        specialty: userForm.role === 'clinician' ? userForm.specialty.trim() : undefined,
+        licenseNumber: userForm.role === 'clinician' ? userForm.licenseNumber.trim() : undefined,
+        team: teamValue,
+        defaultTeam: userForm.role === 'team_leader' ? teamValue : undefined,
+        managedTeams: userForm.role === 'team_leader' ? (teamValue ? [teamValue] : []) : undefined,
+        package: packageValue
       };
+
+      const response = await api.put(`/admin/users/${editingUser.id}`, updateData);
       
-      const { data, error } = await dataClient
-        .from('users')
-        .update(updateData)
-        .eq('id', editingUser.id)
-        .select()
-        .single();
-      
-      if (error) {
-        console.error('❌ Error updating user:', error);
-        setError('Failed to update user: ' + error.message);
-        return;
-      }
-      
-      console.log('✅ User updated successfully:', data);
+      console.log('✅ User updated successfully:', response.data.user);
       setSuccessMessage('User updated successfully!');
       setUserDialog(false);
       setEditingUser(null);
       resetUserForm();
       fetchUsers();
     } catch (err: any) {
-      setError(err.message || 'Failed to update user');
+      console.error('❌ Error updating user:', err);
+      const errorMessage = err.response?.data?.message || err.response?.data?.error || 'Failed to update user';
+      setError(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -1121,7 +1077,7 @@ const AdminDashboard: React.FC = () => {
                   value={userForm.team}
                   onChange={(e) => setUserForm({ ...userForm, team: e.target.value })}
                   placeholder="Enter team name (e.g., TEAM ALPHA)"
-                  helperText="Team name for the team leader to manage"
+                  helperText="Team name for the team leader to manage (optional - can be set later)"
                   sx={{ mb: 2 }}
                 />
               )}
@@ -1171,8 +1127,18 @@ const AdminDashboard: React.FC = () => {
               <Typography variant="h5" sx={{ fontWeight: 600, color: '#2e7d32', mb: 1 }}>
                 User Created Successfully!
               </Typography>
-              <Typography variant="body1" color="text.secondary">
+              <Typography variant="body1" color="text.secondary" sx={{ mb: 1 }}>
                 The user has been created and added to the system.
+              </Typography>
+              <Typography variant="body2" sx={{ 
+                color: '#2e7d32', 
+                fontWeight: 500,
+                backgroundColor: '#e8f5e8',
+                p: 1.5,
+                borderRadius: 1,
+                display: 'inline-block'
+              }}>
+                ✓ User can now login with their email and password
               </Typography>
             </Box>
             
@@ -1181,7 +1147,7 @@ const AdminDashboard: React.FC = () => {
                 backgroundColor: '#f5f5f5', 
                 borderRadius: 2, 
                 p: 3, 
-                mb: 3,
+                mb: 2,
                 textAlign: 'left'
               }}>
                 <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2 }}>
@@ -1195,8 +1161,8 @@ const AdminDashboard: React.FC = () => {
                     </Typography>
                   </Box>
                   <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <Typography variant="body2" color="text.secondary">Email:</Typography>
-                    <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                    <Typography variant="body2" color="text.secondary">Email (Login):</Typography>
+                    <Typography variant="body2" sx={{ fontWeight: 500, color: '#7B68EE' }}>
                       {createdUser.email}
                     </Typography>
                   </Box>
@@ -1204,6 +1170,12 @@ const AdminDashboard: React.FC = () => {
                     <Typography variant="body2" color="text.secondary">Role:</Typography>
                     <Typography variant="body2" sx={{ fontWeight: 500, textTransform: 'capitalize' }}>
                       {createdUser.role.replace('_', ' ')}
+                    </Typography>
+                  </Box>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <Typography variant="body2" color="text.secondary">Package:</Typography>
+                    <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                      {createdUser.package || 'package1'}
                     </Typography>
                   </Box>
                   {createdUser.team && (
@@ -1214,9 +1186,32 @@ const AdminDashboard: React.FC = () => {
                       </Typography>
                     </Box>
                   )}
+                  {createdUser.specialty && (
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <Typography variant="body2" color="text.secondary">Specialty:</Typography>
+                      <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                        {createdUser.specialty}
+                      </Typography>
+                    </Box>
+                  )}
                 </Box>
               </Box>
             )}
+
+            <Alert severity="info" sx={{ textAlign: 'left' }}>
+              <Typography variant="body2" sx={{ fontWeight: 500, mb: 0.5 }}>
+                Login Instructions:
+              </Typography>
+              <Typography variant="caption" component="div">
+                • The user can login immediately using their email and password
+              </Typography>
+              <Typography variant="caption" component="div">
+                • No email verification required
+              </Typography>
+              <Typography variant="caption" component="div">
+                • Account is automatically activated in Supabase Auth
+              </Typography>
+            </Alert>
           </DialogContent>
           <DialogActions sx={{ justifyContent: 'center', pb: 3 }}>
             <Button 

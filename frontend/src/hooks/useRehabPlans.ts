@@ -1,30 +1,81 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import { dataClient } from '../lib/supabase';
 import { debugLog, errorLog } from '../utils/debugLog';
 import { extractErrorMessage } from '../utils/errorHandling';
+import { PostgrestError } from '@supabase/supabase-js';
+
+interface Exercise {
+  name: string;
+  sets: number;
+  reps: number;
+  completed: boolean;
+}
+
+interface Worker {
+  _id: string;
+  firstName: string;
+  lastName: string;
+}
+
+interface DatabaseWorker {
+  id: string;
+  first_name: string;
+  last_name: string;
+}
+
+interface DatabaseCase {
+  id: string;
+  case_number: string;
+  status: string;
+  worker?: DatabaseWorker;
+}
+
+interface DatabaseRehabPlan {
+  id: string;
+  plan_name: string;
+  status: RehabPlan['status'];
+  start_date: string;
+  end_date: string | null;
+  exercises: Exercise[];
+  progress_stats: Record<string, any>;
+  case?: DatabaseCase;
+}
+
+interface Case {
+  _id: string;
+  caseNumber: string;
+  status: string;
+  worker?: Worker;
+}
 
 interface RehabPlan {
   _id: string;
   planName: string;
-  status: string;
-  case?: {
-    _id: string;
-    caseNumber: string;
-    status: string;
-    worker: {
-      firstName: string;
-      lastName: string;
-    };
-  };
-  exercises: Array<{
-    name: string;
-    sets: number;
-    reps: number;
-    completed: boolean;
-  }>;
+  status: 'active' | 'completed' | 'cancelled';
+  case?: Case;
+  exercises: Exercise[];
   startDate: string;
-  endDate: string;
+  endDate: string | null;
   progress: number;
+  progressStats?: Record<string, any>;
+}
+
+interface CreateRehabPlanData {
+  plan_name: string;
+  clinician_id: string;
+  case_id?: string;
+  status: RehabPlan['status'];
+  exercises: Exercise[];
+  start_date: string;
+  end_date?: string;
+}
+
+interface UpdateRehabPlanData {
+  plan_name?: string;
+  status?: RehabPlan['status'];
+  exercises?: Exercise[];
+  end_date?: string | null;
+  progress_stats?: Record<string, any>;
 }
 
 interface UseRehabPlansReturn {
@@ -32,20 +83,62 @@ interface UseRehabPlansReturn {
   loading: boolean;
   error: string | null;
   fetchRehabPlans: () => Promise<void>;
-  addRehabPlan: (planData: any) => Promise<{ success: boolean; error?: string; data?: any }>;
-  editRehabPlan: (planId: string, updates: any) => Promise<{ success: boolean; error?: string }>;
+  addRehabPlan: (planData: CreateRehabPlanData) => Promise<{ success: boolean; error?: string; data?: RehabPlan }>;
+  editRehabPlan: (planId: string, updates: UpdateRehabPlanData) => Promise<{ success: boolean; error?: string }>;
   deleteRehabPlan: (planId: string) => Promise<{ success: boolean; error?: string }>;
+}
+
+interface LoadingState {
+  fetch: boolean;
+  add: boolean;
+  edit: boolean;
+  delete: boolean;
 }
 
 export const useRehabPlans = (clinicianId?: string): UseRehabPlansReturn => {
   const [rehabPlans, setRehabPlans] = useState<RehabPlan[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loadingStates, setLoadingStates] = useState<LoadingState>({
+    fetch: false,
+    add: false,
+    edit: false,
+    delete: false
+  });
   const [error, setError] = useState<string | null>(null);
 
-  const fetchRehabPlans = useCallback(async () => {
-    if (!clinicianId) return;
+  const loading = Object.values(loadingStates).some(state => state);
+
+  const setLoadingState = useCallback((operation: keyof LoadingState, isLoading: boolean) => {
+    setLoadingStates(prev => ({ ...prev, [operation]: isLoading }));
+  }, []);
+
+  const handleError = useCallback((error: unknown, context: string) => {
+    const errorMessage = extractErrorMessage(error);
+    errorLog(`Error ${context}:`, errorMessage);
+    setError(errorMessage);
     
-    setLoading(true);
+    if (error instanceof PostgrestError) {
+      // Handle specific Supabase errors
+      switch (error.code) {
+        case '42P01': // undefined_table
+          errorLog('Database table not found');
+          break;
+        case '42501': // insufficient_privilege
+          errorLog('Permission denied');
+          break;
+        default:
+          errorLog('Database error:', error.message);
+      }
+    }
+    return errorMessage;
+  }, []);
+
+  const fetchRehabPlans = useCallback(async () => {
+    if (!clinicianId) {
+      setError('Clinician ID is required');
+      return;
+    }
+    
+    setLoadingState('fetch', true);
     setError(null);
     
     try {
@@ -54,7 +147,13 @@ export const useRehabPlans = (clinicianId?: string): UseRehabPlansReturn => {
       const { data, error: fetchError } = await dataClient
         .from('rehabilitation_plans')
         .select(`
-          *,
+          id,
+          plan_name,
+          status,
+          start_date,
+          end_date,
+          exercises,
+          progress_stats,
           case:cases!case_id(
             id,
             case_number,
@@ -68,41 +167,41 @@ export const useRehabPlans = (clinicianId?: string): UseRehabPlansReturn => {
       if (fetchError) throw fetchError;
 
       // Transform data to match RehabPlan interface
-      const plans = (data || []).map(plan => ({
-        _id: plan.id,
-        planName: plan.plan_name,
-        status: plan.status,
-        startDate: plan.start_date,
-        endDate: plan.end_date || null,
-        progress: 0,
-        case: plan.case ? {
-          _id: plan.case.id,
-          caseNumber: plan.case.case_number,
-          status: plan.case.status,
-          worker: plan.case.worker ? {
-            _id: plan.case.worker.id,
-            firstName: plan.case.worker.first_name,
-            lastName: plan.case.worker.last_name
-          } : undefined
-        } : undefined,
-        exercises: plan.exercises || [],
-        progressStats: plan.progress_stats || {}
-      }));
+      const transformedPlans = useMemo(() => {
+        return (data || []).map((plan: any): RehabPlan => ({
+          _id: plan.id,
+          planName: plan.plan_name,
+          status: plan.status as RehabPlan['status'],
+          startDate: plan.start_date,
+          endDate: plan.end_date || null,
+          progress: 0,
+          case: plan.case ? {
+            _id: String((plan.case as DatabaseCase).id),
+            caseNumber: String((plan.case as DatabaseCase).case_number),
+            status: String((plan.case as DatabaseCase).status),
+            worker: (plan.case as DatabaseCase).worker && {
+              _id: String((plan.case as DatabaseCase).worker!.id),
+              firstName: String((plan.case as DatabaseCase).worker!.first_name),
+              lastName: String((plan.case as DatabaseCase).worker!.last_name)
+            }
+          } : undefined,
+          exercises: (plan.exercises || []) as Exercise[],
+          progressStats: plan.progress_stats || {}
+        }));
+      }, [data]);
 
-      setRehabPlans(plans as any);
-      debugLog('Successfully fetched', plans.length, 'rehabilitation plans');
+      setRehabPlans(transformedPlans);
+      debugLog('Successfully fetched', transformedPlans.length, 'rehabilitation plans');
     } catch (err) {
-      const errorMessage = extractErrorMessage(err);
-      errorLog('Error fetching rehabilitation plans:', errorMessage);
-      setError(errorMessage);
+      handleError(err, 'fetching rehabilitation plans');
       setRehabPlans([]);
     } finally {
-      setLoading(false);
+      setLoadingState('fetch', false);
     }
-  }, [clinicianId]);
+  }, [clinicianId, handleError]);
 
-  const addRehabPlan = useCallback(async (planData: any) => {
-    setLoading(true);
+  const addRehabPlan = useCallback(async (planData: CreateRehabPlanData) => {
+    setLoadingState('add', true);
     setError(null);
     
     try {
@@ -123,17 +222,15 @@ export const useRehabPlans = (clinicianId?: string): UseRehabPlansReturn => {
       
       return { success: true, data };
     } catch (err) {
-      const errorMessage = extractErrorMessage(err);
-      errorLog('Error creating rehabilitation plan:', errorMessage);
-      setError(errorMessage);
+      const errorMessage = handleError(err, 'creating rehabilitation plan');
       return { success: false, error: errorMessage };
     } finally {
-      setLoading(false);
+      setLoadingState('add', false);
     }
-  }, [fetchRehabPlans]);
+  }, [fetchRehabPlans, handleError]);
 
-  const editRehabPlan = useCallback(async (planId: string, updates: any) => {
-    setLoading(true);
+  const editRehabPlan = useCallback(async (planId: string, updates: UpdateRehabPlanData) => {
+    setLoadingState('edit', true);
     setError(null);
     
     try {
@@ -153,17 +250,15 @@ export const useRehabPlans = (clinicianId?: string): UseRehabPlansReturn => {
       
       return { success: true };
     } catch (err) {
-      const errorMessage = extractErrorMessage(err);
-      errorLog('Error updating rehabilitation plan:', errorMessage);
-      setError(errorMessage);
+      const errorMessage = handleError(err, 'updating rehabilitation plan');
       return { success: false, error: errorMessage };
     } finally {
-      setLoading(false);
+      setLoadingState('edit', false);
     }
-  }, [fetchRehabPlans]);
+  }, [fetchRehabPlans, handleError, setLoadingState]);
 
   const deleteRehabPlan = useCallback(async (planId: string) => {
-    setLoading(true);
+    setLoadingState('delete', true);
     setError(null);
     
     try {
@@ -183,14 +278,30 @@ export const useRehabPlans = (clinicianId?: string): UseRehabPlansReturn => {
       
       return { success: true };
     } catch (err) {
-      const errorMessage = extractErrorMessage(err);
-      errorLog('Error deleting rehabilitation plan:', errorMessage);
-      setError(errorMessage);
+      const errorMessage = handleError(err, 'deleting rehabilitation plan');
       return { success: false, error: errorMessage };
     } finally {
-      setLoading(false);
+      setLoadingState('delete', false);
     }
-  }, [fetchRehabPlans]);
+  }, [fetchRehabPlans, handleError, setLoadingState]);
+
+  // Auto-fetch on mount and clinicianId change
+  useEffect(() => {
+    if (clinicianId) {
+      fetchRehabPlans();
+    }
+    return () => {
+      // Cleanup on unmount
+      setRehabPlans([]);
+      setError(null);
+      setLoadingStates({
+        fetch: false,
+        add: false,
+        edit: false,
+        delete: false
+      });
+    };
+  }, [clinicianId, fetchRehabPlans]);
 
   return {
     rehabPlans,

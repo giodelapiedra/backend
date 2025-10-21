@@ -28,7 +28,7 @@ CREATE TABLE users (
   team_leader_id UUID REFERENCES users(id),
   default_team VARCHAR(100),
   managed_teams TEXT[],
-  package VARCHAR(20) DEFAULT 'package1' CHECK (package IN ('package1', 'package2', 'package3')),
+  package VARCHAR(20) DEFAULT 'package1' CHECK (package IN ('package1', 'package2', 'package3', 'package4')),
   
   -- Employment
   employer_id UUID REFERENCES users(id),

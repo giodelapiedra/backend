@@ -1,9 +1,8 @@
 import axios from 'axios';
 
 // Create axios instance with base configuration
-// DISABLED: Using Supabase instead of backend API
 const api = axios.create({
-  baseURL: process.env.REACT_APP_API_URL || 'http://localhost:5001/api', // DISABLED - Using Supabase
+  baseURL: process.env.REACT_APP_API_URL || 'http://localhost:5001/api',
   timeout: 15000,
   withCredentials: true, // Important for CSRF and cookie-based auth
   headers: {
@@ -11,55 +10,95 @@ const api = axios.create({
   },
 });
 
-// Override all API methods to throw error and redirect to Supabase usage
-const throwSupabaseError = () => {
-  throw new Error('This API endpoint has been migrated to Supabase. Please use Supabase client instead.');
-};
-
-api.get = throwSupabaseError;
-api.post = throwSupabaseError;
-api.put = throwSupabaseError;
-api.patch = throwSupabaseError;
-api.delete = throwSupabaseError;
-
-// Function to get CSRF token - DISABLED (using Supabase)
+// Function to get CSRF token
 export const getCSRFToken = async (): Promise<string> => {
-  throw new Error('CSRF token is not needed with Supabase. Please use Supabase client instead.');
+  try {
+    const response = await axios.get(`${process.env.REACT_APP_API_URL || 'http://localhost:5001/api'}/csrf-token`);
+    return response.data.csrfToken;
+  } catch (error) {
+    console.warn('Could not get CSRF token:', error);
+    return '';
+  }
 };
 
-// Request interceptor - DISABLED (using Supabase)
+// Request interceptor
 api.interceptors.request.use(
   async (config) => {
-    throw new Error('API interceptors disabled. Please use Supabase client instead.');
+    // Add auth token from Supabase session
+    try {
+      const { authClient } = await import('../lib/supabase');
+      const { data: { session } } = await authClient.auth.getSession();
+      
+      if (session?.access_token) {
+        config.headers.Authorization = `Bearer ${session.access_token}`;
+      }
+    } catch (e) {
+      console.warn('Could not get Supabase session:', e);
+    }
+    
+    // Add CSRF token for state-changing operations
+    if (config.method !== 'get' && !config.url?.includes('/auth/')) {
+      try {
+        const csrf = await getCSRFToken();
+        if (csrf) {
+          config.headers['X-CSRF-Token'] = csrf;
+        }
+      } catch (error) {
+        console.warn('Could not add CSRF token:', error);
+      }
+    }
+    
+    return config;
   },
   (error) => {
     return Promise.reject(error);
   }
 );
 
-// Response interceptor - DISABLED (using Supabase)
+// Response interceptor
 api.interceptors.response.use(
-  (response) => {
-    throw new Error('API interceptors disabled. Please use Supabase client instead.');
-  },
-  (error) => {
-    throw new Error('API interceptors disabled. Please use Supabase client instead.');
+  (response) => response,
+  async (error) => {
+    if (error.response?.status === 401) {
+      // Auto-redirect to login on auth failure
+      try {
+        const { authClient } = await import('../lib/supabase');
+        await authClient.auth.signOut();
+      } catch (e) {
+        console.warn('Could not sign out from Supabase:', e);
+      }
+      window.location.href = '/login';
+    }
+    return Promise.reject(error);
   }
 );
 
-// Helper to check if user is authenticated - DISABLED (using Supabase)
-export const isAuthenticated = () => {
-  throw new Error('isAuthenticated is not needed with Supabase. Please use Supabase auth client instead.');
+// Helper to check if user is authenticated
+export const isAuthenticated = async () => {
+  try {
+    const { authClient } = await import('../lib/supabase');
+    const { data: { session } } = await authClient.auth.getSession();
+    return !!(session?.access_token);
+  } catch {
+    return false;
+  }
 };
 
-// Helper to get current user from cookies - DISABLED (using Supabase)
-export const getCurrentUser = () => {
-  throw new Error('getCurrentUser is not needed with Supabase. Please use Supabase auth client instead.');
+// Helper to get current user from session
+export const getCurrentUser = async () => {
+  try {
+    const { authClient } = await import('../lib/supabase');
+    const { data: { session } } = await authClient.auth.getSession();
+    return session?.user || null;
+  } catch {
+    return null;
+  }
 };
 
-// Function to clear CSRF token - DISABLED (using Supabase)
+// Function to clear CSRF token
 export const clearCSRFToken = () => {
-  throw new Error('clearCSRFToken is not needed with Supabase. Please use Supabase auth client instead.');
+  // CSRF tokens are typically stored in cookies, not localStorage
+  // This is a placeholder for any cleanup needed
 };
 
 export default api;

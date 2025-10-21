@@ -1,22 +1,62 @@
 const { createClient } = require('@supabase/supabase-js');
+const jwt = require('jsonwebtoken');
 
-// Initialize Supabase client with environment variables
+// Initialize Supabase clients with environment variables
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
 
 // Validate required environment variables
-if (!supabaseUrl || !supabaseServiceKey) {
+if (!supabaseUrl || !supabaseServiceKey || !supabaseAnonKey) {
   console.error('❌ CRITICAL: Missing Supabase configuration in environment variables');
-  console.error('Required: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY');
+  console.error('Required: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, and SUPABASE_ANON_KEY');
   process.exit(1);
 }
 
+// Admin client for database operations
 const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
   auth: {
     autoRefreshToken: false,
     persistSession: false
   }
 });
+
+// Anon client for token verification
+const supabaseAnon = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false
+  }
+});
+
+// JWT verification function
+const verifySupabaseJWT = async (token) => {
+  try {
+    // First, try to verify the JWT token directly
+    const decoded = jwt.decode(token, { complete: true });
+    
+    if (!decoded || !decoded.header || !decoded.payload) {
+      throw new Error('Invalid JWT token format');
+    }
+
+    // Check if token is expired
+    const now = Math.floor(Date.now() / 1000);
+    if (decoded.payload.exp && decoded.payload.exp < now) {
+      throw new Error('Token has expired');
+    }
+
+    // Verify the token with Supabase using the admin client
+    const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
+    
+    if (error) {
+      throw error;
+    }
+
+    return { user, error: null };
+  } catch (error) {
+    return { user: null, error };
+  }
+};
 
 /**
  * Authentication middleware for Supabase
@@ -42,8 +82,8 @@ const authenticateToken = async (req, res, next) => {
     console.log('🔍 Token length:', token.length);
     console.log('🔍 Token preview:', token.substring(0, 50) + '...');
     
-    // Verify Supabase JWT token
-    const { data: { user: authUser }, error: authError } = await supabaseAdmin.auth.getUser(token);
+    // Verify Supabase JWT token using our custom verification function
+    const { user: authUser, error: authError } = await verifySupabaseJWT(token);
 
     if (authError || !authUser) {
       console.error('❌ Supabase auth error:', authError);
@@ -133,8 +173,8 @@ const optionalAuth = async (req, res, next) => {
     const token = authHeader && authHeader.split(' ')[1];
 
     if (token) {
-      // Verify Supabase JWT token
-      const { data: { user: authUser }, error: authError } = await supabaseAdmin.auth.getUser(token);
+      // Verify Supabase JWT token using our custom verification function
+      const { user: authUser, error: authError } = await verifySupabaseJWT(token);
       
       if (!authError && authUser) {
         // Create user data from auth metadata

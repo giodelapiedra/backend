@@ -59,11 +59,121 @@ function createFallbackDeadline(reason) {
 }
 
 /**
+ * Get team leader's next shift start time
+ * @param {string} teamLeaderId - Team leader ID
+ * @returns {Promise<{nextShiftStart: Date, shiftInfo: object}>} Next shift start time and shift info
+ */
+async function getNextShiftStartTime(teamLeaderId) {
+  const startTime = Date.now();
+  
+  try {
+    // Validate input
+    if (!validateUUID(teamLeaderId)) {
+      logger.error('Invalid team leader ID format', { teamLeaderId });
+      return { nextShiftStart: null, shiftInfo: null, error: 'Invalid team leader ID' };
+    }
+
+    // Get team leader's current active shift with timeout
+    const { data: currentShift, error: shiftError } = await Promise.race([
+      supabaseAdmin.rpc('get_current_shift', { team_leader_uuid: teamLeaderId }),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Shift fetch timeout')), 5000)
+      )
+    ]);
+
+    if (shiftError) {
+      logger.warn('Error fetching team leader shift', { 
+        teamLeaderId, 
+        error: shiftError.message 
+      });
+      return { nextShiftStart: null, shiftInfo: null, error: 'Shift fetch failed' };
+    }
+
+    if (!currentShift || currentShift.length === 0) {
+      logger.info('No active shift assigned', { teamLeaderId });
+      return { nextShiftStart: null, shiftInfo: null, error: 'No active shift assigned' };
+    }
+
+    const shift = currentShift[0];
+    
+    // Validate shift times
+    if (!validateShiftTime(shift.start_time) || !validateShiftTime(shift.end_time)) {
+      logger.error('Invalid shift time format', { 
+        shift_id: shift.shift_id,
+        start_time: shift.start_time,
+        end_time: shift.end_time 
+      });
+      return { nextShiftStart: null, shiftInfo: null, error: 'Invalid shift time format' };
+    }
+
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    
+    // Parse shift times
+    const [startHour, startMinute] = shift.start_time.split(':').map(Number);
+    const [endHour, endMinute] = shift.end_time.split(':').map(Number);
+    
+    // Calculate next shift start time (Manila time)
+    const nextShiftStart = new Date(today);
+    // Set the time directly (no timezone conversion needed)
+    nextShiftStart.setHours(startHour, startMinute, 0, 0);
+    
+    // If shift crosses midnight (end time is earlier than start time)
+    if (endHour < startHour) {
+      // If current time is past shift end, next shift starts tomorrow
+      const shiftEndToday = new Date(today);
+      shiftEndToday.setHours(endHour, endMinute, 0, 0);
+      shiftEndToday.setDate(shiftEndToday.getDate() + 1); // Cross midnight
+      
+      if (now > shiftEndToday) {
+        nextShiftStart.setDate(nextShiftStart.getDate() + 1);
+      }
+    } else {
+      // Regular shift - if current time is past shift end, next shift starts tomorrow
+      const shiftEndToday = new Date(today);
+      shiftEndToday.setHours(endHour, endMinute, 0, 0);
+      
+      if (now > shiftEndToday) {
+        nextShiftStart.setDate(nextShiftStart.getDate() + 1);
+      }
+    }
+
+    // Log performance
+    const duration = Date.now() - startTime;
+    logger.info('Next shift start time calculated', {
+      teamLeaderId,
+      duration,
+      nextShiftStart: nextShiftStart.toISOString(),
+      shiftName: shift.shift_name
+    });
+
+    if (duration > 1000) {
+      logger.warn('Slow next shift calculation', { teamLeaderId, duration });
+    }
+
+    return {
+      nextShiftStart,
+      shiftInfo: shift,
+      error: null
+    };
+
+  } catch (error) {
+    logger.error('Error calculating next shift start time', { 
+      teamLeaderId, 
+      error: error.message,
+      stack: error.stack 
+    });
+    return { nextShiftStart: null, shiftInfo: null, error: 'System error' };
+  }
+}
+
+/**
  * Get team leader's current shift and calculate deadline based on shift times
  * @param {string} teamLeaderId - Team leader ID
+ * @param {string} assignedDate - The date the assignment is being created for
  * @returns {Promise<{dueDateTime: Date, shiftInfo: object}>} Deadline and shift info
  */
-async function calculateShiftBasedDeadline(teamLeaderId) {
+async function calculateShiftBasedDeadline(teamLeaderId, assignedDate) {
   const startTime = Date.now();
   
   try {
@@ -107,39 +217,43 @@ async function calculateShiftBasedDeadline(teamLeaderId) {
     }
 
     const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const assignmentDate = new Date(assignedDate);
     
     // Parse shift times
     const [startHour, startMinute] = shift.start_time.split(':').map(Number);
     const [endHour, endMinute] = shift.end_time.split(':').map(Number);
     
-    // Calculate shift end time for today
-    const shiftEndToday = new Date(today);
-    shiftEndToday.setHours(endHour, endMinute, 0, 0);
+    // Calculate shift end time for the assignment date (Manila time)
+    const shiftEndDate = new Date(assignmentDate);
     
-    // If shift crosses midnight (end time is earlier than start time)
-    if (endHour < startHour) {
-      shiftEndToday.setDate(shiftEndToday.getDate() + 1);
+    // Convert Manila time to UTC (Manila is UTC+8)
+    // Manila time 14:00 = UTC 06:00 (subtract 8 hours)
+    let utcHour = endHour - 8;
+    let utcDate = shiftEndDate.getUTCDate();
+    
+    // Handle negative hours after UTC conversion
+    if (utcHour < 0) {
+      utcHour += 24;
+      utcDate += 1;
     }
+    
+    // For shifts that cross midnight, the due time is still on the same day
+    // Night Shift (20:00-05:00): Due at 05:00 Manila = 21:00 UTC same day
+    // Evening Shift (22:00-06:00): Due at 06:00 Manila = 22:00 UTC same day
+    // No need to add extra day for midnight-crossing shifts
+    
+    // Set the calculated UTC time
+    shiftEndDate.setUTCDate(utcDate);
+    shiftEndDate.setUTCHours(utcHour, endMinute, 0, 0);
     
     let result;
-    // If current time is past shift end, deadline is end of next shift day
-    if (now > shiftEndToday) {
-      const nextShiftEnd = new Date(shiftEndToday);
-      nextShiftEnd.setDate(nextShiftEnd.getDate() + 1);
-      result = {
-        dueDateTime: nextShiftEnd,
-        shiftInfo: shift,
-        deadlineType: 'next_shift_end'
-      };
-    } else {
-      // Current time is within shift - deadline is end of current shift
-      result = {
-        dueDateTime: shiftEndToday,
-        shiftInfo: shift,
-        deadlineType: 'current_shift_end'
-      };
-    }
+    // Always use the end of the shift on the assignment date as deadline
+    // This ensures assignments are due at the end of the team leader's shift on the assignment date
+    result = {
+      dueDateTime: shiftEndDate,
+      shiftInfo: shift,
+      deadlineType: 'assignment_date_shift_end'
+    };
 
     // Log performance
     const duration = Date.now() - startTime;
@@ -269,28 +383,32 @@ exports.createAssignments = async (req, res) => {
     if (allAssignments && allAssignments.length > 0) {
       for (const assignment of allAssignments) {
         if (assignment.status === 'completed') {
-          // Block if completed on the same date AND shift deadline hasn't passed
+          // Block if completed on the same date - NO DUPLICATE ASSIGNMENTS ALLOWED
           if (assignment.assigned_date === assignedDate) {
-            if (assignment.due_time) {
-              const dueDate = new Date(assignment.due_time);
-              if (now < dueDate) {
-                // Completed but shift deadline hasn't passed - BLOCK assignment
-                if (!completedWorkers.includes(assignment.worker_id)) {
-                  completedWorkers.push(assignment.worker_id);
-                }
-              }
-              // If shift deadline has passed, allow new assignment
-            } else {
-              // No due time set - BLOCK assignment
-              if (!completedWorkers.includes(assignment.worker_id)) {
-                completedWorkers.push(assignment.worker_id);
-              }
+            // Always block duplicate assignments on the same date
+            if (!completedWorkers.includes(assignment.worker_id)) {
+              completedWorkers.push(assignment.worker_id);
             }
           }
         } else if (assignment.status === 'overdue') {
-          // Allow overdue assignments to be reassigned (KPI penalty applies)
-          if (!overdueWorkers.includes(assignment.worker_id)) {
-            overdueWorkers.push(assignment.worker_id);
+          // Check if overdue assignment is on the same date AND if next shift has started
+          if (assignment.assigned_date === assignedDate) {
+            // Get team leader's next shift start time
+            const nextShiftInfo = await getNextShiftStartTime(teamLeaderId);
+            
+            if (nextShiftInfo.nextShiftStart && now >= nextShiftInfo.nextShiftStart) {
+              // Next shift has started - worker can be reassigned
+              req.logger.logBusiness('Overdue worker available for reassignment - next shift started', {
+                workerId: assignment.worker_id,
+                nextShiftStart: nextShiftInfo.nextShiftStart.toISOString(),
+                currentTime: now.toISOString()
+              });
+            } else {
+              // Next shift hasn't started yet - block assignment
+              if (!overdueWorkers.includes(assignment.worker_id)) {
+                overdueWorkers.push(assignment.worker_id);
+              }
+            }
           }
         } else if (assignment.status === 'pending') {
           // Check if pending assignment is due
@@ -346,22 +464,45 @@ exports.createAssignments = async (req, res) => {
       });
     }
 
-    // Block assignment if workers have completed assignments and shift deadline hasn't passed
+    // Block assignment if workers have completed assignments on the same date
     if (completedWorkers.length > 0) {
       return res.status(400).json({
         success: false,
-        error: `Some workers have already completed their work readiness assignment for ${assignedDate} but the shift deadline hasn't passed yet. Please wait until the shift deadline (e.g., Midnight Shift ends at 08:00 AM) before assigning new tasks.`,
+        error: `Some workers have already completed their work readiness assignment for ${assignedDate}. Duplicate assignments are not allowed on the same date.`,
         existingWorkers: allAssignments?.filter(a => a.assigned_date === assignedDate).map(a => a.worker_id) || [],
         completedWorkers: completedWorkers,
-        message: 'Workers who have completed their assessment cannot receive new assignments until the shift deadline passes.'
+        message: 'Workers who have completed their assessment cannot receive duplicate assignments on the same date.'
       });
     }
 
-    // Allow assignment if workers only have overdue assignments (they can be reassigned)
+    // Block assignment if workers have overdue assignments on the same date and next shift hasn't started
     if (overdueWorkers.length > 0) {
-      req.logger.logBusiness('Allowing reassignment for overdue workers', { 
-        overdueWorkers, 
-        assignedDate 
+      // Get next shift start time for better error message
+      const nextShiftInfo = await getNextShiftStartTime(teamLeaderId);
+      const nextShiftStart = nextShiftInfo.nextShiftStart;
+      
+      let errorMessage = `Cannot assign new work readiness tasks. Some workers have overdue assignments for ${assignedDate}.`;
+      let detailedMessage = 'Workers with overdue assignments cannot receive new assignments until the next shift starts.';
+      
+      if (nextShiftStart) {
+        const nextShiftTime = nextShiftStart.toLocaleString('en-PH', {
+          timeZone: 'Asia/Manila',
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+        errorMessage += ` They will be available when the next shift starts at ${nextShiftTime}.`;
+        detailedMessage += ` Next shift starts at ${nextShiftTime}.`;
+      }
+      
+      return res.status(400).json({
+        success: false,
+        error: errorMessage,
+        overdueWorkers: overdueWorkers,
+        message: detailedMessage,
+        nextShiftStart: nextShiftStart?.toISOString()
       });
     }
 
@@ -375,19 +516,12 @@ exports.createAssignments = async (req, res) => {
         const [hours, minutes] = dueTime.split(':').map(Number);
         dueDateTime = new Date(assignedDate);
         
-        // Handle timezone conversion properly
-        // If the time would be negative after subtracting 8 hours, adjust the date
-        let utcHours = hours - 8;
-        if (utcHours < 0) {
-          utcHours += 24;
-          dueDateTime.setDate(dueDateTime.getDate() - 1);
-        }
-        
-        dueDateTime.setHours(utcHours, minutes, 0, 0);
+        // Set the time directly (no timezone conversion needed)
+        dueDateTime.setHours(hours, minutes, 0, 0);
         deadlineInfo = { type: 'manual', providedTime: dueTime };
       } else {
         // Calculate deadline based on team leader's shift
-        const shiftDeadline = await calculateShiftBasedDeadline(teamLeaderId);
+        const shiftDeadline = await calculateShiftBasedDeadline(teamLeaderId, assignedDate);
         dueDateTime = shiftDeadline.dueDateTime;
         deadlineInfo = {
           type: 'shift_based',
@@ -398,8 +532,12 @@ exports.createAssignments = async (req, res) => {
         
         console.log('🕐 Shift-based deadline calculated:', {
           teamLeaderId,
+          assignedDate,
           dueDateTime: dueDateTime.toISOString(),
+          dueDateTimeManila: dueDateTime.toLocaleString('en-PH', { timeZone: 'Asia/Manila' }),
           shiftName: shiftDeadline.shiftInfo?.shift_name,
+          shiftStartTime: shiftDeadline.shiftInfo?.start_time,
+          shiftEndTime: shiftDeadline.shiftInfo?.end_time,
           deadlineType: shiftDeadline.deadlineType,
           fallbackReason: shiftDeadline.fallbackReason
         });
@@ -416,7 +554,7 @@ exports.createAssignments = async (req, res) => {
         reminder_sent: false
       }));
 
-      // Create assignments
+      // Create assignments with duplicate prevention
       const { data: createdAssignments, error: assignmentError } = await supabaseAdmin
         .from('work_readiness_assignments')
         .insert(assignments)
@@ -427,7 +565,23 @@ exports.createAssignments = async (req, res) => {
           )
         `);
 
-      if (assignmentError) throw assignmentError;
+      if (assignmentError) {
+        // Check if it's a duplicate constraint violation
+        if (assignmentError.code === '23505' && assignmentError.message.includes('unique_assignment_per_worker_per_day')) {
+          req.logger.error('Duplicate assignment attempt blocked by database constraint', { 
+            error: assignmentError, 
+            workerIds: validWorkerIds,
+            assignedDate,
+            teamLeaderId: req.user.id 
+          });
+          return res.status(400).json({
+            success: false,
+            error: 'Duplicate assignment detected. Some workers already have assignments for this date.',
+            message: 'Database constraint prevented duplicate assignment creation.'
+          });
+        }
+        throw assignmentError;
+      }
 
       // Send notifications to workers
       for (const assignment of createdAssignments) {
@@ -514,7 +668,9 @@ exports.createAssignments = async (req, res) => {
 exports.getAssignments = async (req, res) => {
   try {
     const teamLeaderId = req.user.id;
-    const { date, status } = req.query;
+    const { date, startDate, endDate, status } = req.query;
+    
+    console.log('📅 Backend getAssignments - Query params:', { date, startDate, endDate, status, teamLeaderId });
 
     let query = supabaseAdmin
       .from('work_readiness_assignments')
@@ -528,9 +684,16 @@ exports.getAssignments = async (req, res) => {
       .eq('team_leader_id', teamLeaderId)
       .order('assigned_date', { ascending: false });
 
-    // Filter by date if provided
-    if (date) {
+    // Filter by date range if provided
+    if (startDate && endDate) {
+      console.log('📅 Backend - Applying date range filter:', { startDate, endDate });
+      query = query.gte('assigned_date', startDate).lte('assigned_date', endDate);
+    } else if (date) {
+      console.log('📅 Backend - Applying single date filter:', { date });
+      // Single date filter (backward compatibility)
       query = query.eq('assigned_date', date);
+    } else {
+      console.log('📅 Backend - No date filter applied');
     }
 
     // Filter by status if provided
@@ -545,6 +708,16 @@ exports.getAssignments = async (req, res) => {
       console.error('Error fetching assignments:', error);
       return res.status(500).json({ error: 'Failed to fetch assignments' });
     }
+
+    console.log('📊 Backend - Query result:', {
+      totalAssignments: data?.length || 0,
+      assignments: data?.map(a => ({
+        id: a.id,
+        status: a.status,
+        assigned_date: a.assigned_date,
+        worker: a.worker?.first_name || 'Unknown'
+      })) || []
+    });
 
     res.json({ 
       success: true,
@@ -740,21 +913,26 @@ exports.updateAssignmentStatus = async (req, res) => {
       });
     }
 
-    // CRITICAL: Overdue assignments are PERMANENT RECORDS - No changes allowed
+    // Allow completion of overdue assignments
     if (assignment.status === 'overdue') {
-      return res.status(400).json({ 
-        error: 'Assignment is overdue - no changes allowed. This is a permanent record.',
-        message: 'Overdue assignments cannot be modified or completed. This reflects the true performance record.'
+      req.logger.logBusiness('Allowing completion of overdue assignment', {
+        assignmentId: assignment.id,
+        workerId: assignment.worker_id,
+        dueTime: assignment.due_time
       });
     }
 
-    // Check if assignment is past due time (should be overdue)
+    // Allow completion even if assignment is past due time
     const now = new Date();
     const dueTime = new Date(assignment.due_time);
-    if (now > dueTime && assignment.status === 'pending') {
-      return res.status(400).json({ 
-        error: 'Assignment is past due - cannot be completed. It will be marked as overdue.',
-        message: 'This assignment is past its deadline and cannot be completed. It will be automatically marked as overdue.'
+    const isPastDue = now > dueTime && assignment.status === 'pending';
+    
+    if (isPastDue) {
+      req.logger.logBusiness('Allowing completion of past due assignment', {
+        assignmentId: assignment.id,
+        workerId: assignment.worker_id,
+        dueTime: assignment.due_time,
+        currentTime: now.toISOString()
       });
     }
 
@@ -930,7 +1108,16 @@ exports.getUnselectedWorkers = async (req, res) => {
     const teamLeaderId = req.query.teamLeaderId || req.user.id;
     const { date } = req.query;
     
-    console.log('Getting unselected workers for team leader:', teamLeaderId);
+    // Get pagination parameters
+    const limit = parseInt(req.query.limit) || 10;
+    const offset = parseInt(req.query.offset) || 0;
+    const includeCount = req.query.includeCount === 'true';
+    
+    console.log('Getting unselected workers for team leader:', teamLeaderId, {
+      limit,
+      offset,
+      includeCount
+    });
 
     let query = supabaseAdmin
       .from('unselected_workers')
@@ -941,10 +1128,31 @@ exports.getUnselectedWorkers = async (req, res) => {
         )
       `)
       .eq('team_leader_id', teamLeaderId)
-      .order('assignment_date', { ascending: false });
+      .eq('case_status', 'open')
+      .order('created_at', { ascending: false });
 
     if (date) {
       query = query.eq('assignment_date', date);
+    }
+
+    // Add pagination
+    query = query.range(offset, offset + limit - 1);
+
+    // Get count if requested
+    let totalCount = 0;
+    if (includeCount) {
+      let countQuery = supabaseAdmin
+        .from('unselected_workers')
+        .select('*', { count: 'exact', head: true })
+        .eq('team_leader_id', teamLeaderId)
+        .eq('case_status', 'open');
+      
+      if (date) {
+        countQuery = countQuery.eq('assignment_date', date);
+      }
+      
+      const { count } = await countQuery;
+      totalCount = count || 0;
     }
 
     const { data, error } = await query;
@@ -954,18 +1162,178 @@ exports.getUnselectedWorkers = async (req, res) => {
       return res.status(500).json({ error: 'Failed to fetch unselected workers' });
     }
 
-    console.log('✅ Found', data?.length || 0, 'unselected workers');
-    console.log('📋 Workers:', data);
+    console.log(`✅ Found ${data?.length || 0} unselected workers (total: ${totalCount})`);
 
     res.json({ 
       success: true,
-      unselectedWorkers: data || [],
+      data: data || [],
+      totalCount: includeCount ? totalCount : undefined,
+      pagination: {
+        limit,
+        offset,
+        hasMore: includeCount ? (offset + limit) < totalCount : undefined
+      },
       count: data?.length || 0
     });
 
   } catch (error) {
     console.error('Error in getUnselectedWorkers:', error);
     res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+/**
+ * Save unselected worker reason
+ * POST /api/work-readiness-assignments/unselected/save
+ */
+exports.saveUnselectedWorkerReason = async (req, res) => {
+  try {
+    const { team_leader_id, worker_id, reason, notes } = req.body;
+    const teamLeaderId = req.user.id;
+
+    console.log('🔍 saveUnselectedWorkerReason called');
+    console.log('📊 Request body:', { team_leader_id, worker_id, reason, notes });
+    console.log('👤 Authenticated user:', teamLeaderId);
+
+    // Validate required fields
+    if (!team_leader_id || !worker_id || !reason) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: team_leader_id, worker_id, and reason are required'
+      });
+    }
+
+    // Validate reason is one of the allowed values
+    const allowedReasons = ['sick', 'on_leave_rdo', 'transferred', 'injured_medical', 'not_rostered'];
+    if (!allowedReasons.includes(reason)) {
+      return res.status(400).json({
+        success: false,
+        error: `Invalid reason: "${reason}". Must be one of: ${allowedReasons.join(', ')}`
+      });
+    }
+
+    // Verify the team leader can only save for their own team
+    if (team_leader_id !== teamLeaderId) {
+      return res.status(403).json({
+        success: false,
+        error: 'You can only save unselected reasons for your own team'
+      });
+    }
+
+    // Verify the worker exists and is assigned to this team leader
+        const { data: worker, error: workerError } = await supabaseAdmin
+      .from('users')
+          .select('id, first_name, last_name, role, team')
+      .eq('id', worker_id)
+      .eq('role', 'worker')
+      .single();
+
+    if (workerError || !worker) {
+      return res.status(404).json({
+        success: false,
+        error: 'Worker not found or not a valid worker'
+      });
+    }
+
+    // Verify team leader exists
+        const { data: teamLeader, error: teamLeaderError } = await supabaseAdmin
+      .from('users')
+          .select('id, first_name, last_name, role, team')
+      .eq('id', team_leader_id)
+      .eq('role', 'team_leader')
+      .single();
+
+    if (teamLeaderError || !teamLeader) {
+      return res.status(404).json({
+        success: false,
+        error: 'Team leader not found or not a valid team leader'
+      });
+    }
+
+    // Always create a new case for each incident
+    // This allows multiple incidents per worker (e.g., sick, then accident)
+    console.log('🆕 Creating new incident case for worker:', worker_id);
+    
+    // Add timestamp to notes to ensure uniqueness
+    const timestamp = new Date().toISOString();
+    const uniqueNotes = notes ? `${notes} (Reported: ${timestamp})` : `Incident reported at ${timestamp}`;
+    
+        const insertData = {
+      team_leader_id: team_leader_id,
+      worker_id: worker_id,
+      reason: reason,
+      notes: uniqueNotes,
+      assignment_date: new Date().toISOString().split('T')[0],
+      case_status: 'open',
+      created_at: timestamp,
+          updated_at: timestamp,
+          // Prefer worker's team; fallback to team leader's team if missing
+          team: worker?.team || teamLeader?.team || null
+    };
+
+    console.log('📝 Insert data:', insertData);
+
+    const insertResult = await supabaseAdmin
+      .from('unselected_workers')
+      .insert(insertData)
+      .select();
+    
+    const result = insertResult.data;
+    const error = insertResult.error;
+    
+    console.log('📋 Insert result:', { result, error });
+
+    if (error) {
+      console.error('❌ Supabase error details:', {
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+        code: error.code
+      });
+
+      // Provide more specific error messages
+      if (error.message.includes('relation "unselected_workers" does not exist')) {
+        return res.status(500).json({
+          success: false,
+          error: 'Table "unselected_workers" does not exist. Please run the SQL script to create it.'
+        });
+      } else if (error.message.includes('violates foreign key constraint')) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid team_leader_id or worker_id. Please check if the users exist.'
+        });
+      } else if (error.message.includes('violates check constraint')) {
+        return res.status(400).json({
+          success: false,
+          error: `Invalid reason: "${reason}". Must be one of: ${allowedReasons.join(', ')}`
+        });
+      } else if (error.message.includes('permission denied')) {
+        return res.status(403).json({
+          success: false,
+          error: 'Permission denied. Check Row Level Security policies.'
+        });
+      }
+
+      return res.status(500).json({
+        success: false,
+        error: 'Database error: ' + error.message
+      });
+    }
+
+    console.log('✅ Successfully saved unselected worker reason:', result);
+
+    res.json({
+      success: true,
+      data: result,
+      message: 'Unselected worker reason saved successfully'
+    });
+
+  } catch (error) {
+    console.error('❌ Error in saveUnselectedWorkerReason:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error: ' + (error.message || 'Unknown error')
+    });
   }
 };
 
@@ -993,19 +1361,38 @@ exports.closeUnselectedWorkerCase = async (req, res) => {
       });
     }
 
-    // Update the case status to closed
-    const { data: updatedCase, error: updateError } = await supabaseAdmin
-      .from('unselected_workers')
-      .update({ 
-        case_status: 'closed',
-        updated_at: new Date().toISOString()
+    // Move the case to closed_unselected_workers table
+    const { data: closedCase, error: insertError } = await supabaseAdmin
+      .from('closed_unselected_workers')
+      .insert({
+        original_case_id: id,
+        team_leader_id: unselectedWorker.team_leader_id,
+        worker_id: unselectedWorker.worker_id,
+        assignment_date: unselectedWorker.assignment_date,
+        reason: unselectedWorker.reason,
+        notes: unselectedWorker.notes,
+        closed_at: new Date().toISOString(),
+        closed_by: teamLeaderId
       })
-      .eq('id', id)
       .select()
       .single();
 
-    if (updateError) {
-      console.error('Error closing unselected worker case:', updateError);
+    if (insertError) {
+      console.error('Error inserting into closed_unselected_workers:', insertError);
+      return res.status(500).json({ 
+        success: false,
+        error: 'Failed to close case' 
+      });
+    }
+
+    // Delete the original case from unselected_workers table
+    const { error: deleteError } = await supabaseAdmin
+      .from('unselected_workers')
+      .delete()
+      .eq('id', id);
+
+    if (deleteError) {
+      console.error('Error deleting original case:', deleteError);
       return res.status(500).json({ 
         success: false,
         error: 'Failed to close case' 
@@ -1017,7 +1404,7 @@ exports.closeUnselectedWorkerCase = async (req, res) => {
     res.json({ 
       success: true,
       message: 'Case closed successfully',
-      unselectedWorker: updatedCase
+      closedCase: closedCase
     });
 
   } catch (error) {
@@ -1030,56 +1417,184 @@ exports.closeUnselectedWorkerCase = async (req, res) => {
 };
 
 /**
- * Mark overdue assignments (Cron job endpoint)
+ * Get closed unselected worker cases for history
+ * GET /api/work-readiness-assignments/unselected/closed/:workerId
+ */
+exports.getClosedUnselectedWorkerCases = async (req, res) => {
+  try {
+    const { workerId } = req.params;
+    const teamLeaderId = req.user.id;
+
+    // Get closed cases for the specific worker
+    const { data: closedCases, error } = await supabaseAdmin
+      .from('closed_unselected_workers')
+      .select('*')
+      .eq('worker_id', workerId)
+      .eq('team_leader_id', teamLeaderId)
+      .order('closed_at', { ascending: false });
+
+    if (error) {
+      console.error('Error fetching closed cases:', error);
+      return res.status(500).json({ 
+        success: false,
+        error: 'Failed to fetch closed cases' 
+      });
+    }
+
+    res.json({ 
+      success: true,
+      data: closedCases,
+      message: `Found ${closedCases.length} closed cases`
+    });
+
+  } catch (error) {
+    console.error('Error in getClosedUnselectedWorkerCases:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Internal server error' 
+    });
+  }
+};
+
+/**
+ * Get all closed unselected worker cases for team leader
+ * GET /api/work-readiness-assignments/unselected/closed-all
+ */
+exports.getAllClosedUnselectedWorkerCases = async (req, res) => {
+  try {
+    const teamLeaderId = req.user.id;
+    
+    // Get pagination parameters
+    const limit = parseInt(req.query.limit) || 10;
+    const offset = parseInt(req.query.offset) || 0;
+    const includeCount = req.query.includeCount === 'true';
+
+    console.log('📋 getAllClosedUnselectedWorkerCases called', {
+      teamLeaderId,
+      limit,
+      offset,
+      includeCount
+    });
+
+    // Build query
+    let query = supabaseAdmin
+      .from('closed_unselected_workers')
+      .select(`
+        *,
+        worker:worker_id (
+          id,
+          first_name,
+          last_name,
+          email
+        )
+      `)
+      .eq('team_leader_id', teamLeaderId)
+      .order('closed_at', { ascending: false });
+
+    // Add pagination
+    query = query.range(offset, offset + limit - 1);
+
+    // Get count if requested
+    let totalCount = 0;
+    if (includeCount) {
+      const { count } = await supabaseAdmin
+        .from('closed_unselected_workers')
+        .select('*', { count: 'exact', head: true })
+        .eq('team_leader_id', teamLeaderId);
+      totalCount = count || 0;
+    }
+
+    const { data: closedCases, error } = await query;
+
+    if (error) {
+      console.error('Error fetching all closed cases:', error);
+      return res.status(500).json({ 
+        success: false,
+        error: 'Failed to fetch closed cases' 
+      });
+    }
+
+    console.log(`✅ Found ${closedCases?.length || 0} closed cases (total: ${totalCount})`);
+
+    res.json({ 
+      success: true,
+      data: closedCases || [],
+      totalCount: includeCount ? totalCount : undefined,
+      pagination: {
+        limit,
+        offset,
+        hasMore: includeCount ? (offset + limit) < totalCount : undefined
+      },
+      message: `Found ${closedCases?.length || 0} closed cases`
+    });
+
+  } catch (error) {
+    console.error('Error in getAllClosedUnselectedWorkerCases:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Internal server error' 
+    });
+  }
+};
+
+/**
+ * Mark overdue assignments (Manual endpoint for team leaders)
  * POST /api/work-readiness-assignments/mark-overdue
  */
 exports.markOverdueAssignments = async (req, res) => {
   try {
-    // Only allow admin or system calls
-    if (req.user.role !== 'admin' && req.headers['x-api-key'] !== process.env.SYSTEM_API_KEY) {
+    // Debug: Log user info
+    req.logger.info('Mark overdue assignments called', {
+      userId: req.user?.id,
+      userRole: req.user?.role,
+      userEmail: req.user?.email
+    });
+    
+    // Allow admin or team leaders only (manual overdue marking)
+    if (req.user.role !== 'admin' && req.user.role !== 'team_leader') {
+      req.logger.warn('Unauthorized access attempt', {
+        userId: req.user?.id,
+        userRole: req.user?.role,
+        requiredRoles: ['admin', 'team_leader']
+      });
       return res.status(403).json({ error: 'Unauthorized' });
     }
 
-    // Get current time for shift-based checking
+    // Get current time for manual overdue marking
     const now = new Date();
-    const currentHour = now.getHours();
-    const jobId = `mark-overdue-${now.toISOString().split('T')[0]}-${currentHour}`;
 
-    // Check if job already ran this hour (idempotency)
-    const { data: existingJob, error: jobCheckError } = await supabaseAdmin
-      .from('system_jobs')
-      .select('id, status, created_at')
-      .eq('job_id', jobId)
-      .eq('status', 'completed')
-      .gte('created_at', `${now.toISOString().split('T')[0]}T${currentHour.toString().padStart(2, '0')}:00:00.000Z`)
-      .single();
-
-    if (jobCheckError && jobCheckError.code !== 'PGRST116') {
-      req.logger.error(jobCheckError, { context: 'markOverdueAssignments', userId: req.user.id });
-      return res.status(500).json({ success: false, error: 'Failed to check job status' });
-    }
-
-    if (existingJob) {
-      return res.json({ 
-        success: true, 
-        message: `Overdue assignments already processed this hour (${currentHour}:00)`,
-        count: 0,
-        alreadyProcessed: true
-      });
-    }
-
-    // OPTIMIZED: Mark overdue assignments using database-level filtering
-    // This is 90% faster than fetching all and filtering in app
+    // MANUAL OVERDUE MARKING: Only mark assignments that are past due time
+    // Team leaders can manually mark overdue assignments after due time
     const nowISO = now.toISOString();
     
+    // First, get assignments that are past due time
+    const { data: overdueCandidates, error: fetchError } = await supabaseAdmin
+      .from('work_readiness_assignments')
+      .select('id, worker_id, due_time, assigned_date, status')
+      .eq('status', 'pending')
+      .lt('due_time', nowISO);  // Only assignments past due time
+    
+    if (fetchError) {
+      req.logger.error(fetchError, { context: 'markOverdueAssignments', userId: req.user.id });
+      return res.status(500).json({ success: false, error: 'Failed to fetch overdue candidates' });
+    }
+    
+    if (!overdueCandidates || overdueCandidates.length === 0) {
+      return res.json({ 
+        success: true, 
+        count: 0,
+        message: 'No assignments are past due time yet'
+      });
+    }
+    
+    // Mark the overdue candidates as overdue
     const { data, error } = await supabaseAdmin
       .from('work_readiness_assignments')
       .update({ 
         status: 'overdue', 
         updated_at: new Date().toISOString() 
       })
-      .eq('status', 'pending')
-      .lt('due_time', nowISO)  // Database-level filtering - much faster!
+      .in('id', overdueCandidates.map(a => a.id))
       .select();
 
     if (error) {
@@ -1098,23 +1613,12 @@ exports.markOverdueAssignments = async (req, res) => {
       });
     }
 
-    // Record job completion for idempotency
-    await supabaseAdmin
-      .from('system_jobs')
-      .insert({
-        job_id: jobId,
-        job_type: 'mark_overdue_assignments',
-        status: 'completed',
-        processed_count: markedCount,
-        created_at: new Date().toISOString()
-      });
-
     req.logger.logBusiness('Marked assignments as overdue', { count: markedCount, userId: req.user.id });
 
     res.json({ 
       success: true,
       count: markedCount,
-      message: `Marked ${markedCount} assignments as overdue (hourly shift-based deadline check)`
+      message: `Marked ${markedCount} assignments as overdue (manual overdue marking)`
     });
 
   } catch (error) {

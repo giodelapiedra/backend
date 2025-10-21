@@ -13,18 +13,19 @@ import {
 import {
   NavigateNext,
   Assignment as AssignmentIcon,
-  Schedule as ScheduleIcon,
-  PersonOff as PersonOffIcon
+  Schedule as ScheduleIcon
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext.supabase';
-import { authClient } from '../../lib/supabase';
+import { authClient, dataClient } from '../../lib/supabase';
 import WorkReadinessAssignmentManager from '../../components/WorkReadinessAssignmentManager';
-import UnselectedWorkersManager from '../../components/UnselectedWorkersManager';
 
 const WorkReadinessAssignments: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
+  
+  // Fetch team leader data from database (not cached auth)
+  const [teamLeaderData, setTeamLeaderData] = useState<any>(null);
   
   // Tab state
   const [activeTab, setActiveTab] = useState(0);
@@ -42,6 +43,34 @@ const WorkReadinessAssignments: React.FC = () => {
 
   // API configuration
   const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001/api';
+
+  // Fetch team leader data from database on mount
+  useEffect(() => {
+    const fetchTeamLeaderData = async () => {
+      if (!user?.id) return;
+      
+      try {
+        console.log('🔍 Fetching team leader data from database...');
+        const { data, error } = await dataClient
+          .from('users')
+          .select('id, team, managed_teams')
+          .eq('id', user.id)
+          .single();
+        
+        if (error) {
+          console.error('❌ Error fetching team leader data:', error);
+          return;
+        }
+        
+        console.log('✅ Team leader data from DATABASE:', data);
+        setTeamLeaderData(data);
+      } catch (err) {
+        console.error('❌ Error:', err);
+      }
+    };
+    
+    fetchTeamLeaderData();
+  }, [user?.id]);
 
   // Helper function to get auth token
   const getAuthToken = async () => {
@@ -182,7 +211,7 @@ const WorkReadinessAssignments: React.FC = () => {
   }, [user?.id]);
 
   return (
-    <Box sx={{ bgcolor: '#f5f7fa', minHeight: '100vh', py: 4 }}>
+    <Box sx={{ bgcolor: '#F8FAFB', minHeight: '100vh', py: 4 }}>
       <Container maxWidth="xl">
         {/* Breadcrumbs */}
         <Breadcrumbs 
@@ -194,25 +223,28 @@ const WorkReadinessAssignments: React.FC = () => {
             onClick={() => navigate('/team-leader')}
             sx={{ 
               cursor: 'pointer',
-              '&:hover': { color: '#1976d2' },
+              color: '#6B7280',
+              '&:hover': { color: '#14B8A6' },
               transition: 'color 0.2s'
             }}
           >
             Dashboard
           </MuiLink>
-          <Typography color="text.primary" fontWeight={600}>
+          <Typography color="#1E3A5F" fontWeight={600}>
             Work Readiness Assignments
           </Typography>
         </Breadcrumbs>
 
-        {/* Header */}
+        {/* Header - Clean Corporate Design */}
         <Paper
           elevation={0}
           sx={{
             p: 4,
             mb: 4,
-            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-            borderRadius: 3,
+            background: 'linear-gradient(135deg, #1E3A5F 0%, #0F2942 100%)',
+            borderRadius: 2,
+            border: '1px solid #E5E7EB',
+            boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
             position: 'relative',
             overflow: 'hidden',
             '&::before': {
@@ -223,7 +255,7 @@ const WorkReadinessAssignments: React.FC = () => {
               width: 200,
               height: 200,
               borderRadius: '50%',
-              background: 'rgba(255, 255, 255, 0.1)',
+              background: 'rgba(20, 184, 166, 0.1)',
             },
             '&::after': {
               content: '""',
@@ -233,7 +265,7 @@ const WorkReadinessAssignments: React.FC = () => {
               width: 150,
               height: 150,
               borderRadius: '50%',
-              background: 'rgba(255, 255, 255, 0.1)',
+              background: 'rgba(20, 184, 166, 0.08)',
             }
           }}
         >
@@ -276,7 +308,7 @@ const WorkReadinessAssignments: React.FC = () => {
                 </Box>
               </Box>
               
-              {/* Next Shift Timer */}
+              {/* Next Shift Timer - Clean Corporate Style */}
               {nextShiftTime && (
                 <Tooltip 
                   title={
@@ -307,7 +339,7 @@ const WorkReadinessAssignments: React.FC = () => {
                     gap: 2,
                     p: 2,
                     borderRadius: 2,
-                    bgcolor: isNextShiftActive ? 'rgba(16, 185, 129, 0.2)' : 'rgba(59, 130, 246, 0.2)',
+                    bgcolor: isNextShiftActive ? 'rgba(20, 184, 166, 0.2)' : 'rgba(20, 184, 166, 0.15)',
                     border: '1px solid rgba(255,255,255,0.3)',
                     backdropFilter: 'blur(10px)',
                     color: 'white',
@@ -316,7 +348,7 @@ const WorkReadinessAssignments: React.FC = () => {
                     transition: 'all 0.2s ease-in-out',
                     '&:hover': {
                       transform: 'translateY(-2px)',
-                      boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
+                      boxShadow: '0 4px 12px rgba(20, 184, 166, 0.3)'
                     }
                   }}>
                     <ScheduleIcon sx={{ fontSize: 20 }} />
@@ -343,7 +375,7 @@ const WorkReadinessAssignments: React.FC = () => {
               }}
             >
               {[
-                { label: 'Team', value: user?.team || 'N/A' },
+                { label: 'Team', value: teamLeaderData?.team || user?.team || 'N/A' },
                 { label: 'Role', value: 'Team Leader' },
                 { label: 'Status', value: 'Active' },
               ].map((stat, index) => (
@@ -379,19 +411,41 @@ const WorkReadinessAssignments: React.FC = () => {
           </Box>
         </Paper>
 
-        {/* Tabs */}
-        <Paper sx={{ mb: 3 }}>
+        {/* Tabs - Clean Corporate Style */}
+        <Paper 
+          elevation={0}
+          sx={{ 
+            mb: 3,
+            bgcolor: '#FFFFFF',
+            borderRadius: 2,
+            border: '1px solid #E5E7EB',
+            boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)'
+          }}
+        >
           <Tabs
             value={activeTab}
             onChange={(e, newValue) => setActiveTab(newValue)}
             sx={{
               borderBottom: 1,
-              borderColor: 'divider',
+              borderColor: '#E5E7EB',
               '& .MuiTab-root': {
                 textTransform: 'none',
                 fontWeight: 600,
-                fontSize: '1rem',
-                minHeight: 64
+                fontSize: '0.9375rem',
+                minHeight: 64,
+                color: '#6B7280',
+                transition: 'all 0.2s ease',
+                '&.Mui-selected': {
+                  color: '#14B8A6'
+                },
+                '&:hover': {
+                  color: '#14B8A6',
+                  bgcolor: 'rgba(20, 184, 166, 0.04)'
+                }
+              },
+              '& .MuiTabs-indicator': {
+                backgroundColor: '#14B8A6',
+                height: 3
               }
             }}
           >
@@ -399,31 +453,19 @@ const WorkReadinessAssignments: React.FC = () => {
               icon={<AssignmentIcon />}
               iconPosition="start"
               label="Work Readiness Assignments"
-              sx={{ color: activeTab === 0 ? '#4F46E5' : '#64748B' }}
-            />
-            <Tab
-              icon={<PersonOffIcon />}
-              iconPosition="start"
-              label="Unselected Workers"
-              sx={{ color: activeTab === 1 ? '#4F46E5' : '#64748B' }}
             />
           </Tabs>
         </Paper>
 
-        {/* Tab Content */}
-        {activeTab === 0 && user?.id && user?.team && (
+        {/* Tab Content - USE DATABASE DATA, NOT CACHED AUTH DATA */}
+        {activeTab === 0 && user?.id && teamLeaderData?.team && (
           <WorkReadinessAssignmentManager 
             teamLeaderId={user.id} 
-            team={user.team} 
+            team={teamLeaderData.team} 
           />
         )}
         
-        {activeTab === 1 && user?.id && user?.team && (
-          <UnselectedWorkersManager 
-            teamLeaderId={user.id} 
-            team={user.team} 
-          />
-        )}
+        {/* Removed Unselected Workers Manager */}
       </Container>
     </Box>
   );

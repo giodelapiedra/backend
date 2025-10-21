@@ -1,287 +1,349 @@
-import axios from 'axios';
+import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import { authClient } from '../lib/supabase';
 
-// API Response Types
-interface BaseAPIResponse {
-  success: boolean;
-  message?: string;
+// OPTIMIZATION: Request cache to prevent duplicate simultaneous requests
+const requestCache = new Map<string, Promise<any>>();
+const cacheTimeout = 5000; // Cache requests for 5 seconds
+
+// Request metadata interface for performance tracking
+interface RequestMetadata {
+  startTime: number;
 }
 
-interface AssignmentKPIData {
-  rating: string;
-  color: string;
-  description: string;
-  score: number;
-  completionRate: number;
-  onTimeRate: number;
-  lateRate: number;
-  qualityScore: number;
-  pendingBonus: number;
-  overduePenalty: number;
-  completedAssignments: number;
-  pendingAssignments: number;
-  overdueAssignments: number;
-  totalAssignments: number;
+// Extend Axios config to include metadata
+interface ExtendedAxiosRequestConfig extends InternalAxiosRequestConfig {
+  metadata?: RequestMetadata;
 }
 
-interface AssignmentMetrics {
-  totalAssignments: number;
-  completedAssignments: number;
-  onTimeSubmissions: number;
-  pendingAssignments: number;
-  overdueAssignments: number;
-  qualityScore: number;
-  completionRate: number;
-  onTimeRate: number;
-  lateRate: number;
-  totalMembers: number;
+// Environment validation
+if (!process.env.REACT_APP_API_URL) {
+  console.warn('⚠️ Missing REACT_APP_API_URL. Falling back to localhost.');
 }
 
-interface RecentAssignment {
-  id: string;
-  assignedDate: string;
-  status: string;
-  dueTime: string;
-  completedAt?: string;
-  isOnTime: boolean;
-}
-
-export interface AssignmentKPIResponse extends BaseAPIResponse {
-  kpi: AssignmentKPIData;
-  metrics: AssignmentMetrics;
-  recentAssignments: RecentAssignment[];
-  period: {
-    start: string;
-    end: string;
-    month: string;
-  };
-}
-
-interface IndividualAssignmentKPI {
-  workerId: string;
-  workerName: string;
-  workerEmail: string;
-  kpi: AssignmentKPIData;
-  assignments: {
-    total: number;
-    completed: number;
-    onTime: number;
-    pending: number;
-    overdue: number;
-  };
-}
-
-interface TeamAssignmentKPIResponse extends BaseAPIResponse {
-  teamKPI: AssignmentKPIData;
-  teamMetrics: AssignmentMetrics;
-  individualKPIs: IndividualAssignmentKPI[];
-  period: {
-    start: string;
-    end: string;
-    month: string;
-  };
-}
-
-interface AssessmentSubmissionResponse extends BaseAPIResponse {
-  assessmentData: any;
-  cycleInfo?: any;
-  message: string; // Make message required since it's used in components
-}
-
-// Backend API base URL from environment variables
-const BACKEND_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001/api';
-
-// Create axios instance for backend API
+// Create axios instance for backend API calls (appointments, etc.)
 const backendApi = axios.create({
-  baseURL: BACKEND_URL,
-  timeout: 15000,
+  baseURL: process.env.REACT_APP_API_URL || 'http://localhost:5001/api',
+  timeout: 15000, // OPTIMIZED: Reduced from 30s to 15s
   headers: {
     'Content-Type': 'application/json',
   },
 });
 
-// Request interceptor - add auth token with refresh
+// Request interceptor to add auth token and performance tracking
 backendApi.interceptors.request.use(
-  async (config) => {
+  async (config: ExtendedAxiosRequestConfig) => {
+    const startTime = Date.now();
+    config.metadata = { startTime };
+    
     try {
-      // Get Supabase session token
+      // Get the current session from Supabase
       const { data: { session } } = await authClient.auth.getSession();
       
       if (session?.access_token) {
-        config.headers['Authorization'] = `Bearer ${session.access_token}`;
-        console.log('🔑 Token added to request:', session.access_token.substring(0, 20) + '...');
-      } else {
-        console.warn('⚠️ No access token found in session');
+        config.headers.Authorization = `Bearer ${session.access_token}`;
       }
-      
-      return config;
-    } catch (error) {
-      console.error('❌ Error getting auth token:', error);
-      return config;
+    } catch (error: any) {
+      console.error('Error getting auth token:', error);
     }
+    
+    return config;
   },
   (error) => {
     return Promise.reject(error);
   }
 );
 
-// Response interceptor - handle errors with token refresh
+// Response interceptor for error handling and performance tracking
 backendApi.interceptors.response.use(
-  (response) => response,
-  async (error) => {
-    const originalRequest = error.config;
-    
-    if (error.response?.status === 401 && !originalRequest._retry) {
-      console.log('🔐 401 Unauthorized - attempting token refresh...');
-      originalRequest._retry = true;
-      
-      try {
-        // Try to refresh the session
-        const { data: { session }, error: refreshError } = await authClient.auth.refreshSession();
-        
-        if (refreshError) {
-          console.error('❌ Token refresh failed:', refreshError);
-          // Redirect to login
-          window.location.href = '/login';
-          return Promise.reject(error);
-        }
-        
-        if (session?.access_token) {
-          console.log('✅ Token refreshed successfully');
-          // Update the original request with new token
-          originalRequest.headers['Authorization'] = `Bearer ${session.access_token}`;
-          // Retry the original request
-          return backendApi(originalRequest);
-        }
-      } catch (refreshError) {
-        console.error('❌ Error during token refresh:', refreshError);
-        window.location.href = '/login';
-        return Promise.reject(error);
+  (response) => {
+    // OPTIMIZATION: Log performance
+    const config = response.config as ExtendedAxiosRequestConfig;
+    if (config.metadata?.startTime) {
+      const duration = Date.now() - config.metadata.startTime;
+      if (duration > 1000) {
+        console.warn(`⚠️ Slow API request (${duration}ms):`, config.url);
+      } else {
+        console.log(`✅ API request completed (${duration}ms):`, config.url);
       }
     }
     
-    // Log network errors for debugging
-    if (error.code === 'ERR_NETWORK' || error.message?.includes('Network Error')) {
-      console.error('🌐 Network error detected:', {
-        message: error.message,
-        code: error.code,
-        url: error.config?.url,
-        method: error.config?.method
+    return response;
+  },
+  async (error: AxiosError) => {
+    const config = error.config as ExtendedAxiosRequestConfig;
+    
+    if (error.response) {
+      // The request was made and the server responded with a status code
+      // that falls out of the range of 2xx
+      console.error('❌ API Error Response:', {
+        status: error.response.status,
+        data: error.response.data,
+        url: config?.url,
+        method: config?.method
       });
+      
+      // Handle 401 Unauthorized
+      if (error.response.status === 401) {
+        console.warn('🔒 Unauthorized request - token may have expired');
+        // Optionally redirect to login or refresh token
+      }
+    } else if (error.request) {
+      // The request was made but no response was received
+      console.error('📡 API No Response - Request sent but no response received');
+      console.error('URL:', config?.url);
+      console.error('Possible causes: Network error, CORS issue, or server down');
+    } else {
+      // Something happened in setting up the request that triggered an Error
+      console.error('⚠️ API Request Setup Error:', error.message);
     }
     
     return Promise.reject(error);
   }
 );
 
-// Retry helper function with proper generic typing
-const retryRequest = async <T>(requestFn: () => Promise<T>, maxRetries = 3, delay = 1000): Promise<T> => {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      return await requestFn();
-    } catch (error: any) {
-      console.log(`🔄 Attempt ${attempt}/${maxRetries} failed:`, error.message);
-      
-      if (attempt === maxRetries) {
+// OPTIMIZATION: Utility function for request caching
+function cacheRequest<T>(key: string, requestFn: () => Promise<T>): Promise<T> {
+  if (requestCache.has(key)) {
+    console.log('⚡ Using cached in-flight request:', key);
+    return requestCache.get(key)!;
+  }
+
+  const promise = requestFn();
+  requestCache.set(key, promise);
+
+  // Auto-clear cache after timeout
+  setTimeout(() => {
+    requestCache.delete(key);
+  }, cacheTimeout);
+
+  // Also clear on error
+  promise.catch(() => {
+    requestCache.delete(key);
+  });
+
+  return promise;
+}
+
+// ============================================================================
+// TYPE DEFINITIONS
+// ============================================================================
+
+export interface AssignmentKPIResponse {
+  success: boolean;
+  kpi: {
+    goal: number;
+    completed: number;
+    percentage: number;
+    completionRate?: number;
+    rating?: string;
+    color?: string;
+    description?: string;
+    score?: number;
+  };
+  metrics: {
+    totalAssignments: number;
+    completedAssignments: number;
+    overdueAssignments: number;
+    onTimeSubmissions?: number;
+    qualityScore?: number;
+    onTimeRate?: number;
+    lateRate?: number;
+    completionRate?: number;
+  };
+  cycle: {
+    cycleNumber: number;
+    startDate: string;
+    endDate: string;
+  };
+  message?: string;
+  period?: {
+    start: string;
+    end: string;
+    month?: string;
+  };
+  recentAssignments?: Array<{
+    id: string;
+    title: string;
+    status: string;
+    dueDate: string;
+    assignedDate?: string;
+    isOnTime?: boolean;
+  }>;
+}
+
+export interface WorkerWeeklyProgressResponse {
+  success: boolean;
+  progress: {
+    weekNumber: number;
+    completed: number;
+    total: number;
+    percentage: number;
+  };
+  assignments: Array<{
+    id: string;
+    title: string;
+    status: string;
+    completedAt?: string;
+  }>;
+}
+
+export interface TeamAssignmentSummaryResponse {
+  success: boolean;
+  message?: string;
+  teamKPI: any;
+  teamMetrics: any;
+  individualKPIs: any[];
+  period: {
+    start: string;
+    end: string;
+    month: string;
+  };
+  summary?: {
+    totalWorkers: number;
+    totalAssignments: number;
+    completedAssignments: number;
+    overdueAssignments: number;
+    averageCompletionRate: number;
+  };
+  workers?: Array<{
+    id: string;
+    name: string;
+    completedAssignments: number;
+    totalAssignments: number;
+  }>;
+}
+
+export interface TeamWeeklySummaryResponse {
+  success: boolean;
+  weekly: {
+    weekNumber: number;
+    startDate: string;
+    endDate: string;
+    completedAssignments: number;
+    totalAssignments: number;
+  };
+  trends: Array<{
+    week: number;
+    completed: number;
+    total: number;
+  }>;
+}
+
+export interface AssessmentPayload {
+  workerId: string;
+  assessmentData: {
+    readiness_level: string;
+    fatigue_level: number;
+    mood: string;
+    pain_discomfort: string;
+    notes?: string;
+  };
+}
+
+export interface SubmitAssessmentResponse {
+  success: boolean;
+  message: string;
+  assessmentData?: any;
+  assessment?: {
+    id: string;
+    workerId: string;
+    score: number;
+    createdAt: string;
+  };
+}
+
+// ============================================================================
+// KPI API METHODS
+// ============================================================================
+
+export const kpiAPI = {
+  // Worker KPI methods
+  async getWorkerAssignmentKPI(workerId: string): Promise<AssignmentKPIResponse> {
+    const cacheKey = `getWorkerAssignmentKPI:${workerId}`;
+    return cacheRequest(cacheKey, async () => {
+      try {
+        const response = await backendApi.get(`/goal-kpi/worker/assignment-kpi?workerId=${workerId}`);
+        return response.data;
+      } catch (error) {
+        console.error(`Error fetching assignment KPI for worker ${workerId}:`, error);
         throw error;
       }
-      
-      // Wait before retrying (exponential backoff)
-      await new Promise(resolve => setTimeout(resolve, delay * attempt));
+    });
+  },
+
+  async getWorkerWeeklyProgress(workerId: string): Promise<WorkerWeeklyProgressResponse> {
+    const cacheKey = `getWorkerWeeklyProgress:${workerId}`;
+    return cacheRequest(cacheKey, async () => {
+      try {
+        const response = await backendApi.get(`/goal-kpi/worker/${workerId}/weekly-progress`);
+        return response.data;
+      } catch (error) {
+        console.error(`Error fetching weekly progress for worker ${workerId}:`, error);
+        throw error;
+      }
+    });
+  },
+
+  // Team Leader KPI methods
+  async getTeamAssignmentSummary(teamLeaderId: string): Promise<TeamAssignmentSummaryResponse> {
+    const cacheKey = `getTeamAssignmentSummary:${teamLeaderId}`;
+    return cacheRequest(cacheKey, async () => {
+      try {
+        const response = await backendApi.get(`/goal-kpi/team-leader/${teamLeaderId}/assignment-summary`);
+        return response.data;
+      } catch (error) {
+        console.error(`Error fetching assignment summary for team leader ${teamLeaderId}:`, error);
+        throw error;
+      }
+    });
+  },
+
+  async getTeamWeeklySummary(teamLeaderId: string): Promise<TeamWeeklySummaryResponse> {
+    const cacheKey = `getTeamWeeklySummary:${teamLeaderId}`;
+    return cacheRequest(cacheKey, async () => {
+      try {
+        const response = await backendApi.get(`/goal-kpi/team-leader/${teamLeaderId}/weekly-summary`);
+        return response.data;
+      } catch (error) {
+        console.error(`Error fetching weekly summary for team leader ${teamLeaderId}:`, error);
+        throw error;
+      }
+    });
+  },
+
+  // Submit assessment (for work readiness)
+  async submitAssessment(data: AssessmentPayload): Promise<SubmitAssessmentResponse> {
+    try {
+      const response = await backendApi.post(`/goal-kpi/submit-assessment`, data);
+      return response.data;
+    } catch (error) {
+      console.error(`Error submitting assessment for worker ${data.workerId}:`, error);
+      throw error;
     }
-  }
-  
-  // This should never be reached, but TypeScript requires it
-  throw new Error('Retry function exhausted all attempts');
-};
-
-// KPI API helper functions
-export const kpiAPI = {
-  // Health check
-  async checkHealth() {
-    const response = await backendApi.get('/health');
-    return response.data;
-  },
-
-  // Worker KPI endpoints
-  async getWorkerWeeklyProgress(workerId: string): Promise<any> {
-    return retryRequest(async () => {
-      const response = await backendApi.get(`/goal-kpi/worker/weekly-progress?workerId=${workerId}`);
-      return response.data;
-    });
-  },
-
-  async getWorkerAssignmentKPI(workerId: string): Promise<AssignmentKPIResponse> {
-    return retryRequest(async () => {
-      const response = await backendApi.get(`/goal-kpi/worker/assignment-kpi?workerId=${workerId}`);
-      return response.data;
-    });
-  },
-
-  // Team Leader KPI endpoints
-  async getTeamWeeklySummary(teamLeaderId: string): Promise<any> {
-    return retryRequest(async () => {
-      const response = await backendApi.get(`/goal-kpi/team-leader/weekly-summary?teamLeaderId=${teamLeaderId}`);
-      return response.data;
-    });
-  },
-
-  async getTeamAssignmentSummary(teamLeaderId: string): Promise<TeamAssignmentKPIResponse> {
-    return retryRequest(async () => {
-      const response = await backendApi.get(`/goal-kpi/team-leader/assignment-summary?teamLeaderId=${teamLeaderId}`);
-      return response.data;
-    });
-  },
-
-  async getTeamMonitoringDashboard(teamLeaderId: string): Promise<any> {
-    return retryRequest(async () => {
-      const response = await backendApi.get(`/goal-kpi/team-leader/monitoring-dashboard?teamLeaderId=${teamLeaderId}`);
-      return response.data;
-    });
-  },
-
-  async getMonthlyPerformanceTracking(teamLeaderId: string): Promise<any> {
-    return retryRequest(async () => {
-      const response = await backendApi.get(`/goal-kpi/team-leader/monthly-performance?teamLeaderId=${teamLeaderId}`);
-      return response.data;
-    });
-  },
-
-  // Assessment submission
-  async submitAssessment(assessmentData: any): Promise<AssessmentSubmissionResponse> {
-    return retryRequest(async () => {
-      const response = await backendApi.post('/goal-kpi/submit-assessment', assessmentData);
-      return response.data;
-    });
-  },
-
-  // Login cycle tracking
-  async trackLoginCycle(loginData: any): Promise<any> {
-    return retryRequest(async () => {
-      const response = await backendApi.post('/goal-kpi/login-cycle', loginData);
-      return response.data;
-    });
   },
 };
 
-// Test connection function
-export async function testBackendConnection() {
-  try {
-    console.log('🔄 Testing backend connection...');
-    
-    // Test health endpoint
-    const health = await kpiAPI.checkHealth();
-    console.log('✅ Health check passed:', health);
-    
-    // Test API root endpoint to see all available endpoints
-    const apiRoot = await backendApi.get('/');
-    console.log('✅ API root endpoint:', apiRoot.data);
-    
-    return true;
-  } catch (error) {
-    console.error('❌ Backend connection failed:', error);
-    return false;
-  }
+// ============================================================================
+// HEALTH CHECK
+// ============================================================================
+
+export interface HealthCheckResponse {
+  success: boolean;
+  data?: any;
+  error?: any;
 }
+
+export const testBackendConnection = async (): Promise<HealthCheckResponse> => {
+  try {
+    // Health check endpoint is at the root level, not under /api
+    const response = await backendApi.get('/health', {
+      baseURL: process.env.REACT_APP_API_URL?.replace('/api', '') || 'http://localhost:5001',
+    });
+    return { success: true, data: response.data };
+  } catch (error) {
+    console.error('Backend health check failed:', error);
+    return { success: false, error };
+  }
+};
 
 export default backendApi;

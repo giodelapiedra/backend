@@ -1,4 +1,4 @@
-import React, { useEffect, useCallback, useState, useMemo } from 'react';
+import React, { useEffect, useCallback, useState, useMemo, memo } from 'react';
 import {
   Box,
   Alert,
@@ -20,12 +20,14 @@ import {
   Grid,
   Chip,
   LinearProgress,
+  Avatar,
 } from '@mui/material';
 import {
   Add,
   Close,
   People,
   CheckCircle,
+  Cancel,
 } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext.supabase';
 import { dataClient } from '../../lib/supabase';
@@ -46,16 +48,99 @@ import RehabPlansSection from '../../components/clinician/RehabPlansSection';
 import CasesTable from '../../components/clinician/CasesTable';
 import NotificationsList from '../../components/clinician/NotificationsList';
 
+// Security utilities
+const sanitizeInput = (input: string): string => {
+  return input.replace(/[<>"'&]/g, (match) => {
+    const escapeMap: { [key: string]: string } = {
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#x27;',
+      '&': '&amp;'
+    };
+    return escapeMap[match];
+  });
+};
+
+// Allowed video platforms for security
+const ALLOWED_VIDEO_DOMAINS = [
+  'youtube.com',
+  'youtu.be',
+  'vimeo.com',
+  'cloudinary.com',
+  'res.cloudinary.com',
+  'drive.google.com',
+  'dropbox.com'
+];
+
+const validateVideoUrl = (url: string): boolean => {
+  try {
+    const urlObj = new URL(url);
+    
+    // Must be HTTPS for security
+    if (urlObj.protocol !== 'https:') {
+      return false;
+    }
+    
+    // Check if hostname is in allowed domains
+    return ALLOWED_VIDEO_DOMAINS.some(domain => 
+      urlObj.hostname === domain || urlObj.hostname.endsWith(`.${domain}`)
+    );
+  } catch {
+    return false;
+  }
+};
+
+const validatePlanForm = (form: any): { isValid: boolean; errors: string[] } => {
+  const errors: string[] = [];
+  
+  if (!form.caseId || typeof form.caseId !== 'string') {
+    errors.push('Please select a valid case');
+  }
+  
+  if (!form.planName || typeof form.planName !== 'string' || form.planName.trim().length < 3) {
+    errors.push('Plan name must be at least 3 characters long');
+  }
+  
+  // FIXED: Make duration required
+  if (!form.duration || typeof form.duration !== 'number' || form.duration < 1 || form.duration > 365) {
+    errors.push('Duration is required and must be between 1 and 365 days');
+  }
+  
+  if (!form.exercises || !Array.isArray(form.exercises) || form.exercises.length === 0) {
+    errors.push('At least one exercise is required');
+  } else {
+    form.exercises.forEach((exercise: any, index: number) => {
+      if (!exercise.name || typeof exercise.name !== 'string' || exercise.name.trim().length < 2) {
+        errors.push(`Exercise ${index + 1} name must be at least 2 characters long`);
+      }
+      
+      // CRITICAL FIX: Strengthen video URL validation
+      if (exercise.videoUrl && typeof exercise.videoUrl === 'string' && exercise.videoUrl.trim().length > 0) {
+        if (!validateVideoUrl(exercise.videoUrl.trim())) {
+          errors.push(
+            `Exercise ${index + 1} video URL must be a valid HTTPS URL from allowed platforms (YouTube, Vimeo, Cloudinary, Google Drive, Dropbox)`
+          );
+        }
+      }
+    });
+  }
+  
+  return { isValid: errors.length === 0, errors };
+};
+
 export interface RehabPlan {
   _id: string;
   planName: string;
   status: string;
   duration?: number; // Number of days the plan should last
+  worker_id?: string; // Direct worker ID from rehabilitation_plans table
   case?: {
     _id: string;
     caseNumber: string;
     status: string;
     worker: {
+      _id: string;
       firstName: string;
       lastName: string;
     };
@@ -65,6 +150,8 @@ export interface RehabPlan {
     sets: number;
     reps: number;
     completed: boolean;
+    painLevel?: number;
+    painNotes?: string;
   }>;
   startDate: string;
   endDate: string | null;
@@ -80,13 +167,9 @@ interface DashboardStats {
   activeCases: number;
   completedCases: number;
   pendingAssessments: number;
-  upcomingAppointments: number;
-  avgCaseDuration: number;
-  complianceRate: number;
-  exerciseRateChange?: number;
 }
 
-const ClinicianDashboardRedux: React.FC = () => {
+const ClinicianDashboardRedux: React.FC = memo(() => {
   const { user } = useAuth();
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
@@ -97,12 +180,13 @@ const ClinicianDashboardRedux: React.FC = () => {
     successMessage,
   } = useAppSelector((state: any) => state.ui);
 
-  // Local state
+  // Local state - optimized with better initial values
   const [rehabPlans, setRehabPlans] = useState<RehabPlan[]>([]);
   const [notifications, setNotifications] = useState<any[]>([]);
   const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [hasNewData, setHasNewData] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   
   // Rehabilitation plan states
   const [selectedPlan, setSelectedPlan] = useState<RehabPlan | null>(null);
@@ -110,10 +194,13 @@ const ClinicianDashboardRedux: React.FC = () => {
   const [progressDialog, setProgressDialog] = useState(false);
   const [editPlanDialog, setEditPlanDialog] = useState(false);
   const [completePlanDialog, setCompletePlanDialog] = useState(false);
+  const [cancelPlanDialog, setCancelPlanDialog] = useState(false);
   const [planToComplete, setPlanToComplete] = useState<RehabPlan | null>(null);
+  const [planToCancel, setPlanToCancel] = useState<RehabPlan | null>(null);
   const [isCreatingPlan, setIsCreatingPlan] = useState(false);
   const [isSavingPlan, setIsSavingPlan] = useState(false);
   const [isCompletingPlan, setIsCompletingPlan] = useState(false);
+  const [isCancellingPlan, setIsCancellingPlan] = useState(false);
   
   // Rehabilitation plan form state
   const [planForm, setPlanForm] = useState({
@@ -131,14 +218,16 @@ const ClinicianDashboardRedux: React.FC = () => {
     ]
   });
 
-  // RTK Query hooks (exactly like Case Manager)
+  // RTK Query hooks with optimized caching
   const {
     data: clinicianCasesData,
     isLoading: casesLoading,
     error: casesError,
     refetch: refetchClinicianCases
   } = useGetClinicianCasesQuery(user?.id || '', {
-    skip: !user?.id, // Skip query if no user ID
+    skip: !user?.id,
+    // Optimize polling - only refetch every 60 seconds instead of 10
+    pollingInterval: 60000,
   });
 
   const {
@@ -146,55 +235,91 @@ const ClinicianDashboardRedux: React.FC = () => {
     isLoading: incidentsLoading,
     error: incidentsError,
     refetch: refetchIncidents
-  } = useGetIncidentsQuery({});
+  } = useGetIncidentsQuery({}, {
+    // Reduce polling frequency
+    pollingInterval: 120000, // 2 minutes
+  });
 
-  // Derived data from RTK Query (exactly like Case Manager) - MEMOIZED
-  const clinicianCases = useMemo(() => clinicianCasesData?.cases || [], [clinicianCasesData?.cases]);
-  const totalCasesCount = useMemo(() => clinicianCases.length, [clinicianCases.length]);
+  // Derived data from RTK Query - OPTIMIZED MEMOIZATION
+  const clinicianCases = useMemo(() => {
+    return clinicianCasesData?.cases || [];
+  }, [clinicianCasesData?.cases]);
   
-  // Memoized calculations for rehabilitation plans
-  const activeRehabPlans = useMemo(() => 
-    rehabPlans.filter(plan => 
-    plan.status === 'active' && 
-    plan.case && 
-    plan.case.status !== 'closed'
-    ), [rehabPlans]
-  );
+  const totalCasesCount = useMemo(() => {
+    return clinicianCases.length;
+  }, [clinicianCases.length]);
+  
+  // Memoized calculations for rehabilitation plans - OPTIMIZED
+  const activeRehabPlans = useMemo(() => {
+    return rehabPlans.filter(plan => 
+      plan.status === 'active' && 
+      plan.case && 
+      plan.case.status !== 'closed'
+    );
+  }, [rehabPlans]);
 
-  // Get case IDs that already have active plans
-  const caseIdsWithActivePlans = useMemo(() => 
-    new Set(activeRehabPlans.map(plan => plan.case?._id).filter(Boolean)),
-    [activeRehabPlans]
-  );
+  // Get case IDs that have ANY rehabilitation plan (active, completed, or cancelled) - OPTIMIZED
+  // Cases with any existing plan cannot have new plans created
+  const caseIdsWithAnyPlan = useMemo(() => {
+    return new Set(
+      rehabPlans
+        .filter(plan => {
+          // Include ALL plans regardless of status
+          return plan.case;
+        })
+        .map(plan => plan.case?._id)
+        .filter(Boolean)
+    );
+  }, [rehabPlans]);
 
-  // Filter available cases (cases without active plans)
-  const availableCasesForPlan = useMemo(() => 
-    clinicianCases.filter((caseItem: any) => 
-      !caseIdsWithActivePlans.has(caseItem.id) && 
-      caseItem.status !== 'closed'
-    ),
-    [clinicianCases, caseIdsWithActivePlans]
-  );
+  // Filter available cases for creating new rehabilitation plans - OPTIMIZED
+  // Cases are available if:
+  // 1. Not closed (closed cases cannot be modified)
+  // 2. Does NOT have ANY rehabilitation plan (prevents multiple plans per case)
+  const availableCasesForPlan = useMemo(() => {
+    return clinicianCases.filter((caseItem: any) => {
+      // Exclude cases that are closed - closed cases cannot be updated
+      const isClosed = caseItem.status === 'closed';
+      
+      // Check if case has ANY rehabilitation plan
+      const hasAnyPlan = caseIdsWithAnyPlan.has(caseItem.id);
+      
+      // Show case if:
+      // 1. Not closed, AND
+      // 2. Does NOT have any existing rehabilitation plan
+      return !isClosed && !hasAnyPlan;
+    });
+  }, [clinicianCases, caseIdsWithAnyPlan]);
 
-  // Calculate stats directly from RTK Query data (like Case Manager) - MEMOIZED
-  const stats: DashboardStats = useMemo(() => ({
-    totalCases: totalCasesCount,
-    activeCases: clinicianCases.filter((c: any) => 
-      c.status && ['triaged', 'assessed', 'in_rehab'].includes(c.status)
-    ).length,
-    completedCases: clinicianCases.filter((c: any) => 
-      c.status && ['return_to_work', 'closed'].includes(c.status)
-    ).length,
-    pendingAssessments: clinicianCases.filter((c: any) => c.status === 'new').length,
-    upcomingAppointments: 0, // Mock data
-    avgCaseDuration: 45, // Mock data
-    complianceRate: 92, // Mock data
-    exerciseRateChange: 5.2
-  }), [totalCasesCount, clinicianCases]);
+  // Calculate stats - OPTIMIZED with better performance
+  const stats: DashboardStats = useMemo(() => {
+    const statusCounts = clinicianCases.reduce((acc, c: any) => {
+      const status = c.status;
+      if (['triaged', 'assessed', 'in_rehab'].includes(status)) {
+        acc.active++;
+      } else if (['return_to_work', 'closed'].includes(status)) {
+        acc.completed++;
+      } else if (status === 'new') {
+        acc.pending++;
+      }
+      return acc;
+    }, { active: 0, completed: 0, pending: 0 });
 
-  // Fetch rehabilitation plans
+    const completedPlansCount = rehabPlans.filter((p: any) => 
+      (p.status || '').toLowerCase() === 'completed'
+    ).length;
+
+    return {
+      totalCases: totalCasesCount,
+      activeCases: statusCounts.active,
+      completedCases: statusCounts.completed + completedPlansCount,
+      pendingAssessments: statusCounts.pending,
+    } as DashboardStats;
+  }, [totalCasesCount, clinicianCases, rehabPlans]);
+
+  // Fetch rehabilitation plans - OPTIMIZED with error handling
   const fetchRehabPlans = useCallback(async () => {
-    if (!user?.id) return;
+    if (!user?.id || isRefreshing) return;
     
     try {
       const { data, error } = await dataClient
@@ -209,63 +334,105 @@ const ClinicianDashboardRedux: React.FC = () => {
           )
         `)
         .eq('clinician_id', user.id)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(50); // Limit results for performance
 
       if (error) throw error;
 
-      // Transform data to match RehabPlan interface
+      // Transform data to match RehabPlan interface - OPTIMIZED with error handling
       const plans = (data || []).map(plan => {
-        // Calculate completed days based on daily_completions
-        const dailyCompletions = plan.daily_completions || [];
-        const completedDays = dailyCompletions.filter((dc: any) => {
-          // A day is "completed" if all exercises for that day are marked as completed
-          const dayExercises = dc.exercises || [];
-          const totalExercises = plan.exercises ? plan.exercises.length : 0;
-          const completedExercises = dayExercises.filter((e: any) => e.status === 'completed').length;
-          return totalExercises > 0 && completedExercises === totalExercises;
-        }).length;
-        
-        // Calculate overall progress based on days (not today's exercises)
-        const duration = plan.duration || 7;
-        const progressPercentage = duration > 0 ? Math.round((completedDays / duration) * 100) : 0;
+        try {
+          // Safe array access with type checking
+          const dailyCompletions = Array.isArray(plan.daily_completions) ? plan.daily_completions : [];
+          const completedDays = dailyCompletions.filter((dc: any) => {
+            if (!dc || typeof dc !== 'object') return false;
+            
+            const dayExercises = Array.isArray(dc.exercises) ? dc.exercises : [];
+            const totalExercises = Array.isArray(plan.exercises) ? plan.exercises.length : 0;
+            
+            if (totalExercises === 0) return false;
+            
+            const completedExercises = dayExercises.filter((e: any) => 
+              e && typeof e === 'object' && e.status === 'completed'
+            ).length;
+            
+            return completedExercises === totalExercises;
+          }).length;
+          
+          const duration = Math.max(1, plan.duration || 7); // Ensure minimum duration of 1
+          const progressPercentage = duration > 0 ? Math.min(100, Math.round((completedDays / duration) * 100)) : 0;
 
-        return {
-        _id: plan.id,
-        planName: plan.plan_name,
-        status: plan.status,
-        duration: plan.duration || 7,
-        startDate: plan.start_date,
-        endDate: plan.end_date || null,
-          progress: progressPercentage,
-        case: plan.case ? {
-          _id: plan.case.id,
-          caseNumber: plan.case.case_number,
-          status: plan.case.status,
-          worker: plan.case.worker ? {
-            _id: plan.case.worker.id,
-            firstName: plan.case.worker.first_name,
-            lastName: plan.case.worker.last_name
-          } : undefined
-        } : undefined,
-        exercises: plan.exercises || [],
-        progressStats: {
-          completedDays,
-          totalDays: duration,
-          ...(plan.progress_stats || {})
+          return {
+            _id: plan.id,
+            planName: sanitizeInput(plan.plan_name || ''),
+            status: plan.status,
+            duration,
+            worker_id: plan.worker_id, // Include worker_id from rehabilitation_plans table
+            startDate: plan.start_date,
+            endDate: plan.end_date || null,
+            progress: progressPercentage,
+            case: plan.case ? {
+              _id: plan.case.id,
+              caseNumber: sanitizeInput(plan.case.case_number || ''),
+              status: plan.case.status,
+              worker: plan.case.worker ? {
+                _id: plan.case.worker.id,
+                firstName: sanitizeInput(plan.case.worker.first_name || ''),
+                lastName: sanitizeInput(plan.case.worker.last_name || '')
+              } : undefined
+            } : undefined,
+            exercises: Array.isArray(plan.exercises) ? plan.exercises.map((exercise: any, index: number) => {
+              // Get today's completion data for this exercise
+              const today = new Date().toISOString().split('T')[0];
+              const todayCompletion = dailyCompletions.find((dc: any) => dc.date === today);
+              const exerciseCompletion = todayCompletion?.exercises?.find((e: any) => e.exerciseId === `${plan.id}-ex-${index}`);
+              
+              return {
+                name: exercise.name || '',
+                sets: exercise.sets || 1,
+                reps: exercise.reps || 10,
+                completed: exerciseCompletion?.status === 'completed' || false,
+                painLevel: exerciseCompletion?.painLevel,
+                painNotes: exerciseCompletion?.painNotes
+              };
+            }) : [],
+            progressStats: {
+              completedDays,
+              totalDays: duration,
+              ...(plan.progress_stats || {})
+            }
+          };
+        } catch (planError) {
+          console.error('Error processing individual plan:', planError);
+          // Return a safe fallback plan object
+          return {
+            _id: plan.id,
+            planName: sanitizeInput(plan.plan_name || 'Unknown Plan'),
+            status: plan.status || 'unknown',
+            duration: 7,
+            startDate: plan.start_date,
+            endDate: plan.end_date || null,
+            progress: 0,
+            exercises: [],
+            progressStats: {
+              completedDays: 0,
+              totalDays: 7
+            }
+          };
         }
-        };
       });
 
       setRehabPlans(plans as any);
     } catch (err) {
       console.error('Error fetching rehabilitation plans:', err);
       setRehabPlans([]);
+      dispatch(setError('Failed to load rehabilitation plans'));
     }
-  }, [user?.id]);
+  }, [user?.id, isRefreshing]); // Removed dispatch - it's stable from Redux
 
-  // Fetch notifications
+  // Fetch notifications - OPTIMIZED
   const fetchNotifications = useCallback(async () => {
-    if (!user?.id) return;
+    if (!user?.id || isRefreshing) return;
     
     try {
       const { data: notificationsData, error: notificationsError } = await dataClient
@@ -280,470 +447,87 @@ const ClinicianDashboardRedux: React.FC = () => {
         return;
       }
 
-      setNotifications(notificationsData || []);
-      setUnreadNotificationCount(notificationsData?.filter(n => !n.is_read).length || 0);
+      // Sanitize notification data
+      const sanitizedNotifications = (notificationsData || []).map(notification => ({
+        ...notification,
+        message: sanitizeInput(notification.message || ''),
+        title: sanitizeInput(notification.title || '')
+      }));
+
+      setNotifications(sanitizedNotifications);
+      setUnreadNotificationCount(sanitizedNotifications.filter(n => !n.is_read).length);
     } catch (err) {
       console.error('Error fetching notifications:', err);
+      dispatch(setError('Failed to load notifications'));
     }
-  }, [user?.id]);
+  }, [user?.id, isRefreshing]); // Removed dispatch - it's stable
 
-  // Smart cache clear function
-  const smartCacheClear = useCallback(async () => {
-    try {
-      console.log('🧹 SMART CACHE CLEAR TRIGGERED FOR CLINICIAN DASHBOARD');
-      
-      // Clear local state
-      setRehabPlans([]);
-      setNotifications([]);
-      setUnreadNotificationCount(0);
-      setHasNewData(false);
-      
-      // Clear RTK Query cache
-      dispatch(casesApi.util.resetApiState());
-      dispatch(incidentsApi.util.resetApiState());
-      
-      // Invalidate all tags to force refetch
-      dispatch(casesApi.util.invalidateTags(['Case']));
-      dispatch(incidentsApi.util.invalidateTags(['Incident']));
-      
-      // Clear browser cache
-      if ('caches' in window) {
-        const cacheNames = await caches.keys();
-        await Promise.all(
-          cacheNames.map(cacheName => caches.delete(cacheName))
-        );
-        console.log('✅ Browser cache cleared:', cacheNames.length, 'caches');
-      }
-      
-      // Clear localStorage cache
-      const keysToRemove = [];
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && (
-          key.includes('rtk') || 
-          key.includes('cache') || 
-          key.includes('supabase') || 
-          key.includes('clinician') ||
-          key.includes('case') ||
-          key.includes('notification') ||
-          key.includes('incident') ||
-          key.includes('rehab') ||
-          key.includes('dashboard')
-        )) {
-          keysToRemove.push(key);
-        }
-      }
-      keysToRemove.forEach(key => localStorage.removeItem(key));
-      
-      // Clear sessionStorage cache
-      const sessionKeysToRemove = [];
-      for (let i = 0; i < sessionStorage.length; i++) {
-        const key = sessionStorage.key(i);
-        if (key && (
-          key.includes('rtk') || 
-          key.includes('cache') || 
-          key.includes('supabase') || 
-          key.includes('clinician') ||
-          key.includes('case') ||
-          key.includes('notification') ||
-          key.includes('incident') ||
-          key.includes('rehab') ||
-          key.includes('dashboard')
-        )) {
-          sessionKeysToRemove.push(key);
-        }
-      }
-      sessionKeysToRemove.forEach(key => sessionStorage.removeItem(key));
-      
-      // Show visual indicator
-      dispatch(setSuccessMessage('🧹 Smart cache clear completed! Refreshing data...'));
-      
-      // Force refetch all data (using RTK Query like Case Manager)
-      await refetchClinicianCases();
-      await refetchIncidents();
-      await fetchNotifications();
-      await fetchRehabPlans();
-      
-      // Update indicators
-      setHasNewData(true);
-      setLastUpdated(new Date());
-      
-      // Clear success message after 3 seconds
-      setTimeout(() => {
-        dispatch(clearMessages());
-        setHasNewData(false);
-      }, 3000);
-      
-      console.log('✅ SMART CACHE CLEAR COMPLETED SUCCESSFULLY');
-    } catch (err) {
-      console.error('❌ Smart cache clear failed:', err);
-      dispatch(setError('Cache clear failed. Please refresh the page manually.'));
+
+  // Effects - OPTIMIZED (Fixed: Removed unstable dependencies)
+  useEffect(() => {
+    if (user?.id && !isRefreshing) {
+      // Use Promise.all for parallel execution
+      Promise.all([
+        fetchNotifications(),
+        fetchRehabPlans()
+      ]).catch(err => {
+        console.error('Error in initial data fetch:', err);
+        dispatch(setError('Failed to load initial data'));
+      });
     }
-  }, [dispatch, refetchClinicianCases, refetchIncidents, fetchNotifications, fetchRehabPlans]);
+  }, [user?.id, isRefreshing]); // Fixed: Only depend on primitive values
 
-  // Effects
+
+
+  // Handle errors - OPTIMIZED
   useEffect(() => {
-    if (user?.id) {
-      fetchNotifications();
-      fetchRehabPlans();
-    }
-  }, [user?.id, fetchNotifications, fetchRehabPlans]);
-
-  // Real-time subscription for cases - AUTOMATIC DATA REFRESH
-  useEffect(() => {
-    if (!user?.id) return;
-    
-    console.log('🔄 Setting up real-time subscription for clinician:', user.id);
-    
-    const subscription = dataClient
-      .channel('clinician-dashboard-updates')
-      .on('postgres_changes', {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'cases',
-        filter: `clinician_id=eq.${user.id}`
-      }, async (payload) => {
-        console.log('📡 Real-time case update received:', payload);
-        if (payload.new && payload.new.clinician_id === user.id) {
-          console.log('🔄 AUTOMATICALLY refreshing clinician dashboard due to case update...');
-          
-          // Show visual feedback
-          dispatch(setSuccessMessage('🔄 Case updated! Refreshing data...'));
-          
-          // Clear local state
-          setRehabPlans([]);
-          setNotifications([]);
-          setUnreadNotificationCount(0);
-          setHasNewData(false);
-          
-          // Clear RTK Query cache
-          dispatch(casesApi.util.resetApiState());
-          dispatch(incidentsApi.util.resetApiState());
-          
-          // Invalidate all tags
-          dispatch(casesApi.util.invalidateTags(['Case']));
-          dispatch(incidentsApi.util.invalidateTags(['Incident']));
-          
-          // Force refetch all data (using RTK Query like Case Manager)
-          await refetchClinicianCases();
-          await refetchIncidents();
-          await fetchNotifications();
-          await fetchRehabPlans();
-          
-          // Update indicators
-          setHasNewData(true);
-          setLastUpdated(new Date());
-          
-          // Clear success message after 3 seconds
-          setTimeout(() => {
-            dispatch(clearMessages());
-            setHasNewData(false);
-          }, 3000);
-        }
-      })
-      .on('postgres_changes', {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'cases',
-        filter: `clinician_id=eq.${user.id}`
-      }, async (payload) => {
-        console.log('📡 Real-time case assignment received:', payload);
-        if (payload.new && payload.new.clinician_id === user.id) {
-          console.log('🔄 AUTOMATICALLY refreshing clinician dashboard due to new case assignment...');
-          
-          // Show visual feedback
-          dispatch(setSuccessMessage('🔄 New case assigned! Refreshing data...'));
-          
-          // Clear local state
-          setRehabPlans([]);
-          setNotifications([]);
-          setUnreadNotificationCount(0);
-          setHasNewData(false);
-          
-          // Clear RTK Query cache
-          dispatch(casesApi.util.resetApiState());
-          dispatch(incidentsApi.util.resetApiState());
-          
-          // Invalidate all tags
-          dispatch(casesApi.util.invalidateTags(['Case']));
-          dispatch(incidentsApi.util.invalidateTags(['Incident']));
-          
-          // Force refetch all data (using RTK Query like Case Manager)
-          await refetchClinicianCases();
-          await refetchIncidents();
-          await fetchNotifications();
-          await fetchRehabPlans();
-          
-          // Update indicators
-          setHasNewData(true);
-          setLastUpdated(new Date());
-          
-          // Clear success message after 3 seconds
-          setTimeout(() => {
-            dispatch(clearMessages());
-            setHasNewData(false);
-          }, 3000);
-        }
-      })
-      .on('postgres_changes', {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'notifications',
-        filter: `recipient_id=eq.${user.id}`
-      }, async (payload) => {
-        console.log('📡 Real-time notification update received:', payload);
-        if (payload.new && payload.new.recipient_id === user.id) {
-          console.log('🔄 AUTOMATICALLY refreshing notifications...');
-          
-          // Show visual feedback
-          dispatch(setSuccessMessage('🔄 New notification! Refreshing data...'));
-          
-          // Clear local state
-          setNotifications([]);
-          setUnreadNotificationCount(0);
-          setHasNewData(false);
-          
-          // Force refetch notifications
-          await fetchNotifications();
-          
-          // Update indicators
-          setHasNewData(true);
-          setLastUpdated(new Date());
-          
-          // Clear success message after 3 seconds
-          setTimeout(() => {
-            dispatch(clearMessages());
-            setHasNewData(false);
-          }, 3000);
-        }
-      })
-      .subscribe((status) => {
-        console.log('📡 Real-time subscription status:', status);
-      });
-
-    return () => {
-      console.log('🧹 Cleaning up real-time subscription');
-      subscription.unsubscribe();
-    };
-  }, [user?.id, dispatch, refetchClinicianCases, refetchIncidents, fetchNotifications, fetchRehabPlans]);
-
-  // Global cache clear event listener - AUTOMATIC DATA REFRESH
-  useEffect(() => {
-    const handleGlobalCacheClear = async (event: any) => {
-      console.log('🔄 CLINICIAN DASHBOARD: Global cache clear event received!');
-      console.log('🔄 CLINICIAN DASHBOARD: Event detail:', event.detail);
+    if (casesError || incidentsError) {
+      const errorMessage = casesError || incidentsError;
+      let errorString = 'Failed to fetch data';
       
-      const { reason, caseId, caseNumber, clinicianId, clinicianName, clinicianEmail, timestamp } = event.detail;
-      console.log('🔄 CLINICIAN DASHBOARD: Parsed details:', { 
-        reason, 
-        caseId, 
-        caseNumber, 
-        clinicianId, 
-        clinicianName, 
-        clinicianEmail, 
-        timestamp 
-      });
-      console.log('🔄 CLINICIAN DASHBOARD: Current user details:', {
-        id: user?.id,
-        name: `${user?.firstName} ${user?.lastName}`,
-        email: user?.email
-      });
-      console.log('🔄 CLINICIAN DASHBOARD: User ID comparison:', clinicianId === user?.id);
-      console.log('🔄 CLINICIAN DASHBOARD: Reason check:', reason === 'case_assignment');
-      console.log('🔄 CLINICIAN DASHBOARD: Email comparison:', clinicianEmail === user?.email);
-      
-      if (reason === 'case_assignment' && clinicianId === user?.id) {
-        console.log('🔄 CLINICIAN DASHBOARD: ✅ Case assigned to this clinician, AUTOMATICALLY refreshing data...');
-        
-        // Show immediate visual feedback
-        dispatch(setSuccessMessage('🔄 New case assigned! Refreshing data...'));
-        
-        // Clear local state to force fresh data
-        setRehabPlans([]);
-        setNotifications([]);
-        setUnreadNotificationCount(0);
-        setHasNewData(false);
-        
-        // Clear RTK Query cache
-        dispatch(casesApi.util.resetApiState());
-        dispatch(incidentsApi.util.resetApiState());
-        
-        // Invalidate all tags to force refetch
-        dispatch(casesApi.util.invalidateTags(['Case']));
-        dispatch(incidentsApi.util.invalidateTags(['Incident']));
-        
-        // Force refetch all data immediately (using RTK Query like Case Manager)
-        console.log('🔄 CLINICIAN DASHBOARD: Starting data refetch...');
-        await refetchClinicianCases();
-        await refetchIncidents();
-        await fetchNotifications();
-        await fetchRehabPlans();
-        console.log('🔄 CLINICIAN DASHBOARD: Data refetch completed');
-        
-        // Update indicators
-        setHasNewData(true);
-        setLastUpdated(new Date());
-        
-        // Clear success message after 3 seconds
-        setTimeout(() => {
-          dispatch(clearMessages());
-          setHasNewData(false);
-        }, 3000);
-        
-        console.log('✅ CLINICIAN DASHBOARD: Automatic data refresh completed');
-      } else {
-        console.log('🔄 CLINICIAN DASHBOARD: ❌ Global cache clear event received but not for this clinician');
-        console.log('🔄 CLINICIAN DASHBOARD: Reason:', reason, 'Expected: case_assignment');
-        console.log('🔄 CLINICIAN DASHBOARD: Assigned to clinician:', {
-          id: clinicianId,
-          name: clinicianName,
-          email: clinicianEmail
-        });
-        console.log('🔄 CLINICIAN DASHBOARD: Current user:', {
-          id: user?.id,
-          name: `${user?.firstName} ${user?.lastName}`,
-          email: user?.email
-        });
-        console.log('🔄 CLINICIAN DASHBOARD: Case details:', {
-          id: caseId,
-          number: caseNumber
-        });
-      }
-    };
-
-    console.log('🔄 CLINICIAN DASHBOARD: Setting up global cache clear event listener');
-    window.addEventListener('globalCacheClear', handleGlobalCacheClear);
-    
-    return () => {
-      console.log('🔄 CLINICIAN DASHBOARD: Cleaning up global cache clear event listener');
-      window.removeEventListener('globalCacheClear', handleGlobalCacheClear);
-    };
-  }, [user?.id, dispatch, refetchClinicianCases, refetchIncidents, fetchNotifications, fetchRehabPlans]);
-
-  // Listen for refresh events when cases are assigned (exactly like Case Manager)
-  useEffect(() => {
-    const handleRefresh = async (event: any) => {
-      console.log('🔄 CLINICIAN DASHBOARD: Received clinicianDataRefresh event:', event.detail);
-      const { clinicianId, cacheCleared, triggeredBy } = event.detail;
-      console.log('🔄 CLINICIAN DASHBOARD: Current user ID:', user?.id);
-      console.log('🔄 CLINICIAN DASHBOARD: Event clinician ID:', clinicianId);
-      
-      if (clinicianId === user?.id) {
-        console.log('🔄 CLINICIAN DASHBOARD: Event is for this clinician, processing...');
-        console.log('Cache cleared:', cacheCleared);
-        console.log('Triggered by:', triggeredBy);
-        console.log('🎯 CLINICIAN DASHBOARD: Received assignment notification - refreshing data immediately!');
-        
-        // Clear local state to force fresh data
-        setRehabPlans([]);
-        setNotifications([]);
-        setUnreadNotificationCount(0);
-        setHasNewData(false);
-        
-        // Clear browser cache for clinician dashboard
-        if ('caches' in window) {
-          const cacheNames = await caches.keys();
-          await Promise.all(
-            cacheNames.map(cacheName => caches.delete(cacheName))
-          );
-          console.log('🧹 Browser cache cleared for clinician dashboard:', cacheNames.length, 'caches');
-        }
-        
-        // Clear localStorage cache
-        const keysToRemove = [];
-        for (let i = 0; i < localStorage.length; i++) {
-          const key = localStorage.key(i);
-          if (key && (key.includes('rtk') || key.includes('cache') || key.includes('supabase') || key.includes('clinician'))) {
-            keysToRemove.push(key);
+      if (typeof errorMessage === 'string') {
+        errorString = errorMessage;
+      } else if (errorMessage && typeof errorMessage === 'object') {
+        if ('message' in errorMessage) {
+          errorString = (errorMessage as any).message;
+        } else if ('data' in errorMessage) {
+          const data = (errorMessage as any).data;
+          if (typeof data === 'string') {
+            errorString = data;
+          } else if (data && typeof data === 'object' && 'message' in data) {
+            errorString = data.message;
+          } else {
+            errorString = String(data);
           }
+        } else {
+          errorString = errorMessage.toString();
         }
-        keysToRemove.forEach(key => localStorage.removeItem(key));
-        
-        // Clear sessionStorage cache
-        const sessionKeysToRemove = [];
-        for (let i = 0; i < sessionStorage.length; i++) {
-          const key = sessionStorage.key(i);
-          if (key && (key.includes('rtk') || key.includes('cache') || key.includes('supabase') || key.includes('clinician'))) {
-            sessionKeysToRemove.push(key);
-          }
-        }
-        sessionKeysToRemove.forEach(key => sessionStorage.removeItem(key));
-        
-        console.log('✅ All storage cleared, refetching clinician data...');
-        // Use RTK Query refetch for immediate data update
-        await refetchClinicianCases();
-        console.log('✅ CLINICIAN DASHBOARD: Data refresh completed');
-      } else {
-        console.log('🔄 CLINICIAN DASHBOARD: Event not for this clinician, ignoring');
       }
-    };
+      
+      dispatch(setError(errorString));
+    }
+  }, [casesError, incidentsError, dispatch]);
 
-    window.addEventListener('clinicianDataRefresh', handleRefresh);
-    
-    return () => {
-      window.removeEventListener('clinicianDataRefresh', handleRefresh);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id]);
-
-  // Window focus listener
-  useEffect(() => {
-    const handleWindowFocus = () => {
-      console.log('🔄 Window focused, refreshing data...');
-      refetchClinicianCases();
-      fetchNotifications();
-      fetchRehabPlans();
-    };
-
-    window.addEventListener('focus', handleWindowFocus);
-    
-    return () => {
-      window.removeEventListener('focus', handleWindowFocus);
-    };
-  }, [refetchClinicianCases, fetchNotifications, fetchRehabPlans]);
-
-  // Additional fallback: Listen for any window events that might indicate data changes
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (!document.hidden) {
-        console.log('🔄 Page became visible, refreshing data...');
-        refetchClinicianCases();
-        fetchNotifications();
-        fetchRehabPlans();
-      }
-    };
-
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key && (e.key.includes('case') || e.key.includes('notification'))) {
-        console.log('🔄 Storage change detected, refreshing data...');
-        refetchClinicianCases();
-        fetchNotifications();
-        fetchRehabPlans();
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    window.addEventListener('storage', handleStorageChange);
-    
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('storage', handleStorageChange);
-    };
-  }, [refetchClinicianCases, fetchNotifications, fetchRehabPlans]);
-
-  // Auto-refresh every 10 seconds (more frequent for better responsiveness)
+  // Auto-refresh - OPTIMIZED with better interval (Fixed: Stable dependencies)
   useEffect(() => {
     const interval = setInterval(() => {
-      console.log('🔄 Auto-refreshing clinician dashboard...');
-      refetchClinicianCases();
-      fetchNotifications();
-      fetchRehabPlans();
-    }, 10000); // Changed from 30 seconds to 10 seconds
+      if (!isRefreshing) {
+        console.log('🔄 Auto-refreshing clinician dashboard...');
+        // Use Promise.all for parallel execution
+        Promise.all([
+          refetchClinicianCases(),
+          fetchNotifications(),
+          fetchRehabPlans()
+        ]).catch(err => {
+          console.error('Error in auto-refresh:', err);
+        });
+      }
+    }, 30000); // Increased to 30 seconds for better performance
 
     return () => clearInterval(interval);
-  }, [refetchClinicianCases, fetchNotifications, fetchRehabPlans]);
+  }, [isRefreshing]); // Fixed: Removed function dependencies to prevent recreating interval
 
-  // Rehabilitation Plan Handlers (memoized to prevent lag)
+  // Rehabilitation Plan Handlers - OPTIMIZED with security
   const handleAddExercise = useCallback(() => {
     setPlanForm(prev => ({
       ...prev,
@@ -760,33 +544,45 @@ const ClinicianDashboardRedux: React.FC = () => {
   }, []);
 
   const handleRemoveExercise = useCallback((index: number) => {
-    setPlanForm(prev => ({
-      ...prev,
-      exercises: prev.exercises.filter((_, i) => i !== index)
-    }));
-  }, []);
+    setPlanForm(prev => {
+      // Validate index within the current state
+      if (index >= 0 && index < prev.exercises.length) {
+        return {
+          ...prev,
+          exercises: prev.exercises.filter((_, i) => i !== index)
+        };
+      }
+      // Return unchanged state if index is invalid
+      return prev;
+    });
+  }, []); // Fixed: No dependencies needed - uses functional update pattern
 
   const handleExerciseChange = useCallback((index: number, field: string, value: string) => {
-    setPlanForm(prev => ({
-      ...prev,
-      exercises: prev.exercises.map((ex, i) => 
-        i === index ? { ...ex, [field]: value } : ex
-      )
-    }));
-  }, []);
+    setPlanForm(prev => {
+      // Validate index within the current state
+      if (index >= 0 && index < prev.exercises.length) {
+        // Validate and sanitize input
+        const sanitizedValue = field === 'videoUrl' ? value : sanitizeInput(value);
+        return {
+          ...prev,
+          exercises: prev.exercises.map((ex, i) => 
+            i === index ? { ...ex, [field]: sanitizedValue } : ex
+          )
+        };
+      }
+      // Return unchanged state if index is invalid
+      return prev;
+    });
+  }, []); // Fixed: No dependencies needed - uses functional update pattern
 
   const handleCreateRehabilitationPlan = useCallback(async () => {
     try {
       setIsCreatingPlan(true);
 
-      // Validation
-      if (!planForm.caseId) {
-        dispatch(setError('Please select a case'));
-        return;
-      }
-
-      if (planForm.exercises.length === 0 || !planForm.exercises[0].name) {
-        dispatch(setError('Please add at least one exercise with a name'));
+      // Enhanced validation with security
+      const validation = validatePlanForm(planForm);
+      if (!validation.isValid) {
+        dispatch(setError(validation.errors.join(', ')));
         return;
       }
 
@@ -804,14 +600,14 @@ const ClinicianDashboardRedux: React.FC = () => {
         return;
       }
 
-      // Prepare exercises data
+      // Prepare exercises data with sanitization
       const exercisesData = planForm.exercises
-        .filter(ex => ex.name) // Only include exercises with names
+        .filter(ex => ex.name && ex.name.trim().length > 0)
         .map((ex, index) => ({
-          name: ex.name,
-          repetitions: ex.repetitions || '10 reps',
-          instructions: ex.instructions || '',
-          videoUrl: ex.videoUrl || '',
+          name: sanitizeInput(ex.name.trim()),
+          repetitions: sanitizeInput(ex.repetitions || '10 reps'),
+          instructions: sanitizeInput(ex.instructions || ''),
+          videoUrl: ex.videoUrl ? sanitizeInput(ex.videoUrl.trim()) : '',
           order: index
         }));
 
@@ -830,9 +626,17 @@ const ClinicianDashboardRedux: React.FC = () => {
           worker_id: selectedCase.worker_id,
           clinician_id: user?.id,
           exercises: exercisesData,
-          duration: planForm.duration || 7, // Duration in days
-          plan_name: planForm.planName,
-          plan_description: planForm.planDescription
+          duration: Math.min(Math.max(planForm.duration || 7, 1), 365), // Clamp between 1-365 days
+          plan_name: sanitizeInput(planForm.planName.trim()),
+          plan_description: sanitizeInput(planForm.planDescription.trim()),
+          daily_completions: [], // Start with empty daily completions
+          progress_stats: {
+            totalDays: Math.min(Math.max(planForm.duration || 7, 1), 365),
+            completedDays: 0,
+            skippedDays: 0,
+            consecutiveCompletedDays: 0,
+            consecutiveSkippedDays: 0
+          }
         })
         .select()
         .single();
@@ -844,15 +648,34 @@ const ClinicianDashboardRedux: React.FC = () => {
 
       console.log('Plan created successfully:', data);
 
+      // Notify worker about new plan
+      try {
+        await dataClient.from('notifications').insert({
+          recipient_id: selectedCase.worker_id,
+          sender_id: user?.id,
+          type: 'rehab_plan_assigned',
+          title: 'New Rehabilitation Plan Assigned',
+          message: `Your clinician has assigned you a new rehabilitation plan: "${sanitizeInput(planForm.planName.trim())}" for case ${selectedCase.case_number}. Please review and start your exercises.`,
+          priority: 'high',
+          metadata: {
+            plan_id: data.id,
+            plan_name: sanitizeInput(planForm.planName.trim()),
+            case_number: selectedCase.case_number
+          }
+        });
+      } catch (error) {
+        console.error('Failed to send plan assignment notification:', error);
+      }
+
       // Success!
-      dispatch(setSuccessMessage(`Rehabilitation plan created successfully for ${selectedCase.worker?.first_name} ${selectedCase.worker?.last_name}!`));
+      dispatch(setSuccessMessage(`Rehabilitation plan created successfully for ${selectedCase.worker?.firstName} ${selectedCase.worker?.lastName}! The worker has been notified about their new rehabilitation plan.`));
       
       // Reset form
       setPlanForm({
         caseId: '',
         planName: 'Recovery Plan',
         planDescription: 'Daily recovery exercises and activities',
-        duration: 7, // Reset to default 7 days
+        duration: 7,
         exercises: [{ name: '', repetitions: '', instructions: '', videoUrl: '' }]
       });
       
@@ -872,17 +695,19 @@ const ClinicianDashboardRedux: React.FC = () => {
   }, [planForm, clinicianCases, activeRehabPlans, user?.id, dispatch, fetchRehabPlans]);
 
   const handleEditPlan = useCallback((plan: RehabPlan) => {
+    if (!plan || !plan._id) return;
+    
     setSelectedPlan(plan);
-    // Populate form with existing plan data
+    // Populate form with existing plan data - sanitized
     setPlanForm({
       caseId: plan.case?._id || '',
-      planName: plan.planName || 'Recovery Plan',
+      planName: sanitizeInput(plan.planName || 'Recovery Plan'),
       planDescription: 'Daily recovery exercises and activities',
-      duration: plan.duration || 7, // Include duration from existing plan
+      duration: Math.min(Math.max(plan.duration || 7, 1), 365), // Clamp duration
       exercises: plan.exercises && plan.exercises.length > 0 
         ? plan.exercises.map(ex => ({
-            name: ex.name || '',
-            repetitions: String(ex.reps || ''),
+            name: sanitizeInput(ex.name || ''),
+            repetitions: sanitizeInput(String(ex.reps || '')),
             instructions: '',
             videoUrl: ''
           }))
@@ -892,25 +717,26 @@ const ClinicianDashboardRedux: React.FC = () => {
   }, []);
 
   const handleSaveEditedPlan = useCallback(async () => {
-    if (!selectedPlan) return;
+    if (!selectedPlan || !selectedPlan._id) return;
     
     try {
       setIsSavingPlan(true);
 
-      // Validation
-      if (planForm.exercises.length === 0 || !planForm.exercises[0].name) {
-        dispatch(setError('Please add at least one exercise with a name'));
+      // Enhanced validation with security
+      const validation = validatePlanForm(planForm);
+      if (!validation.isValid) {
+        dispatch(setError(validation.errors.join(', ')));
         return;
       }
 
-      // Prepare exercises data
+      // Prepare exercises data with sanitization
       const exercisesData = planForm.exercises
-        .filter(ex => ex.name)
+        .filter(ex => ex.name && ex.name.trim().length > 0)
         .map((ex, index) => ({
-          name: ex.name,
-          repetitions: ex.repetitions || '10 reps',
-          instructions: ex.instructions || '',
-          videoUrl: ex.videoUrl || '',
+          name: sanitizeInput(ex.name.trim()),
+          repetitions: sanitizeInput(ex.repetitions || '10 reps'),
+          instructions: sanitizeInput(ex.instructions || ''),
+          videoUrl: ex.videoUrl ? sanitizeInput(ex.videoUrl.trim()) : '',
           order: index
         }));
 
@@ -918,8 +744,9 @@ const ClinicianDashboardRedux: React.FC = () => {
       const { error } = await dataClient
         .from('rehabilitation_plans')
         .update({
-          plan_name: planForm.planName,
-          exercises: exercisesData
+          plan_name: sanitizeInput(planForm.planName.trim()),
+          exercises: exercisesData,
+          duration: Math.min(Math.max(planForm.duration || 7, 1), 365) // Clamp between 1-365 days
         })
         .eq('id', selectedPlan._id);
 
@@ -958,14 +785,19 @@ const ClinicianDashboardRedux: React.FC = () => {
   }, []);
 
   const handleConfirmCompletePlan = useCallback(async () => {
-    if (!planToComplete) return;
+    if (!planToComplete || !planToComplete._id) return;
 
     try {
       setIsCompletingPlan(true);
 
+      const caseId = planToComplete.case?._id;
+      if (!caseId) {
+        throw new Error('Case ID not found for this rehabilitation plan');
+      }
+
       // Update plan status to completed
       const currentDate = new Date().toISOString().split('T')[0]; // Format as YYYY-MM-DD
-      const { error } = await dataClient
+      const { error: planError } = await dataClient
         .from('rehabilitation_plans')
         .update({
           status: 'completed',
@@ -973,13 +805,90 @@ const ClinicianDashboardRedux: React.FC = () => {
         })
         .eq('id', planToComplete._id);
 
-      if (error) {
-        console.error('Error completing plan:', error);
-        throw error;
+      if (planError) {
+        console.error('Error completing plan:', planError);
+        throw planError;
+      }
+
+      // CRITICAL FIX: Verify case status was updated by trigger
+      console.log('✅ Plan completed, verifying case status update...');
+      
+      // Wait a moment for trigger to execute
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Verify the case status was updated
+      const { data: updatedCase, error: caseError } = await dataClient
+        .from('cases')
+        .select('status')
+        .eq('id', caseId)
+        .single();
+
+      if (caseError) {
+        console.error('Error checking case status:', caseError);
+        // Don't throw - plan was completed successfully
+      } else if (updatedCase) {
+        console.log('📋 Case status after plan completion:', updatedCase.status);
+        
+        // Check if case status was updated to return_to_work
+        if (updatedCase.status !== 'return_to_work' && updatedCase.status !== 'closed') {
+          console.warn('⚠️ Case status was not automatically updated to return_to_work');
+          console.warn('Current status:', updatedCase.status);
+          
+          // Attempt manual fallback update
+          const { error: manualUpdateError } = await dataClient
+            .from('cases')
+            .update({ status: 'return_to_work' })
+            .eq('id', caseId);
+          
+          if (manualUpdateError) {
+            console.error('Error manually updating case status:', manualUpdateError);
+            dispatch(setError('Plan completed but case status update failed. Please manually update the case status.'));
+            } else {
+              console.log('✅ Manually updated case status to return_to_work');
+            }
+          } else {
+            console.log('✅ Case status correctly updated by trigger');
+          }
+      }
+
+      // Refresh the cases data to show updated status
+      console.log('🔄 Refreshing cases data...');
+      await refetchClinicianCases();
+
+      // Create notification for plan completion
+      try {
+        const notificationData = {
+          recipient_id: planToComplete.worker_id,
+          sender_id: user?.id,
+          type: 'rehabilitation_plan_completed',
+          title: '🎉 Rehabilitation Plan Completed!',
+          message: `Congratulations! Your rehabilitation plan "${planToComplete.planName}" has been completed successfully. You can now return to work.`,
+          priority: 'high',
+          metadata: {
+            plan_id: planToComplete._id,
+            case_id: caseId,
+            plan_name: planToComplete.planName,
+            completion_date: currentDate
+          }
+        };
+
+        const { error: notificationError } = await dataClient
+          .from('notifications')
+          .insert(notificationData);
+
+        if (notificationError) {
+          console.error('Error creating completion notification:', notificationError);
+          // Don't throw error - notification failure shouldn't break plan completion
+        } else {
+          console.log('✅ Completion notification sent to worker successfully');
+        }
+      } catch (notificationErr) {
+        console.error('Error in completion notification creation:', notificationErr);
+        // Don't throw error - notification failure shouldn't break plan completion
       }
 
       // Success!
-      dispatch(setSuccessMessage(`✅ Rehabilitation plan completed successfully for ${planToComplete.case?.worker?.firstName} ${planToComplete.case?.worker?.lastName}!`));
+      dispatch(setSuccessMessage(`✅ Rehabilitation plan completed successfully for ${planToComplete.case?.worker?.firstName} ${planToComplete.case?.worker?.lastName}! Case status has been updated. The worker has been notified.`));
       
       // Close dialog and reset
       setCompletePlanDialog(false);
@@ -995,7 +904,58 @@ const ClinicianDashboardRedux: React.FC = () => {
     } finally {
       setIsCompletingPlan(false);
     }
-  }, [planToComplete, dispatch, fetchRehabPlans]);
+  }, [planToComplete, dispatch, fetchRehabPlans, refetchClinicianCases]);
+
+  // Handle cancel plan dialog
+  const handleOpenCancelPlanDialog = useCallback((plan: RehabPlan) => {
+    setPlanToCancel(plan);
+    setCancelPlanDialog(true);
+  }, []);
+
+  const handleCloseCancelPlanDialog = useCallback(() => {
+    setCancelPlanDialog(false);
+    setPlanToCancel(null);
+  }, []);
+
+  const handleConfirmCancelPlan = useCallback(async () => {
+    if (!planToCancel || !planToCancel._id) return;
+
+    try {
+      setIsCancellingPlan(true);
+
+      // Delete the rehabilitation plan completely from the database
+      const { error } = await dataClient
+        .from('rehabilitation_plans')
+        .delete()
+        .eq('id', planToCancel._id);
+
+      if (error) {
+        console.error('Error cancelling plan:', error);
+        throw error;
+      }
+
+      // Refresh cases data
+      console.log('🔄 Rehabilitation plan cancelled and deleted, refreshing data...');
+      await refetchClinicianCases();
+
+      // Success!
+      dispatch(setSuccessMessage(`✅ Rehabilitation plan cancelled and removed successfully for ${planToCancel.case?.worker?.firstName} ${planToCancel.case?.worker?.lastName}. You can now create a new plan if needed.`));
+      
+      // Close dialog and reset
+      setCancelPlanDialog(false);
+      setPlanToCancel(null);
+      
+      // Refresh plans
+      fetchRehabPlans();
+      
+      setTimeout(() => dispatch(clearMessages()), 5000);
+    } catch (error: any) {
+      console.error('Error cancelling rehabilitation plan:', error);
+      dispatch(setError(error.message || 'Failed to cancel rehabilitation plan'));
+    } finally {
+      setIsCancellingPlan(false);
+    }
+  }, [planToCancel, dispatch, fetchRehabPlans, refetchClinicianCases]);
 
   // Memoized dialog handlers
   const handleCloseProgressDialog = useCallback(() => {
@@ -1149,11 +1109,20 @@ const ClinicianDashboardRedux: React.FC = () => {
           onEditPlan={handleEditPlan}
           onViewProgress={handleOpenProgressDialog}
           onClosePlan={handleOpenCompletePlanDialog}
-          onRefresh={smartCacheClear}
+          onCancelPlan={handleOpenCancelPlanDialog}
+          onRefresh={() => {
+            refetchClinicianCases();
+            fetchRehabPlans();
+            fetchNotifications();
+          }}
         />
 
         {/* Cases Table */}
-        <CasesTable cases={clinicianCases} onRefresh={smartCacheClear} />
+        <CasesTable cases={clinicianCases} onRefresh={() => {
+          refetchClinicianCases();
+          fetchRehabPlans();
+          fetchNotifications();
+        }} />
 
         {/* Notifications */}
         <NotificationsList 
@@ -1205,7 +1174,7 @@ const ClinicianDashboardRedux: React.FC = () => {
               
               {availableCasesForPlan.length === 0 ? (
                 <Alert severity="warning" sx={{ mb: 3 }}>
-                  All your assigned cases already have active rehabilitation plans. Please complete or close existing plans before creating new ones.
+                  All your assigned cases already have rehabilitation plans. Please complete or cancel existing plans before creating new ones.
                 </Alert>
               ) : (
                 <>
@@ -1224,9 +1193,9 @@ const ClinicianDashboardRedux: React.FC = () => {
                     </Select>
                   </FormControl>
                   
-                  {caseIdsWithActivePlans.size > 0 && (
+                  {caseIdsWithAnyPlan.size > 0 && (
                     <Alert severity="info" sx={{ mb: 2, fontSize: '0.875rem' }}>
-                      📋 {caseIdsWithActivePlans.size} case(s) already have active plans and are not shown in the list above.
+                      📋 {caseIdsWithAnyPlan.size} case(s) have existing rehabilitation plans and cannot have new plans created until the current plan is completed or cancelled.
                     </Alert>
                   )}
                 </>
@@ -1424,7 +1393,7 @@ const ClinicianDashboardRedux: React.FC = () => {
                           {selectedPlan.case?.caseNumber || 'N/A'}
                         </Typography>
                       </Grid>
-                      <Grid item xs={12}>
+                      <Grid item xs={12} md={6}>
                         <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
                           Overall Progress
                         </Typography>
@@ -1447,36 +1416,218 @@ const ClinicianDashboardRedux: React.FC = () => {
                             {selectedPlan.progress || 0}%
                           </Typography>
                         </Box>
-                  </Grid>
+                      </Grid>
+                      <Grid item xs={12} md={6}>
+                        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                          Day Progress
+                        </Typography>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <Typography variant="h6" sx={{ fontWeight: 600, color: '#10b981' }}>
+                            Day {selectedPlan.progressStats?.completedDays || 0} of {selectedPlan.progressStats?.totalDays || selectedPlan.duration || 7}
+                          </Typography>
+                          <Typography variant="body2" sx={{ color: '#6b7280' }}>
+                            ({selectedPlan.progressStats?.completedDays || 0} completed)
+                          </Typography>
+                        </Box>
+                        <Typography variant="body2" sx={{ color: '#4a5568', fontSize: '0.875rem', mt: 0.5 }}>
+                          {selectedPlan.progressStats?.completedDays === 0 ? 
+                            'Starting Day 1' : 
+                            `Current: Day ${(selectedPlan.progressStats?.completedDays || 0) + 1}`
+                          }
+                        </Typography>
+                      </Grid>
               </Grid>
           </CardContent>
         </Card>
 
                 <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>
+                  Daily Progress & Pain Ratings
+                </Typography>
+                
+                {/* Daily Progress Timeline */}
+                {selectedPlan.progressStats && (
+                  <Card sx={{ mb: 3, bgcolor: '#f8fafc' }}>
+                    <CardContent>
+                      <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2 }}>
+                        📊 Progress Timeline
+                      </Typography>
+                      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        {/* Calculate pain statistics */}
+                        {(() => {
+                          const completedExercises = selectedPlan.exercises.filter(ex => ex.completed);
+                          const painLevels = completedExercises.map(ex => ex.painLevel).filter(level => level !== undefined);
+                          const averagePain = painLevels.length > 0 ? 
+                            Math.round((painLevels.reduce((sum, level) => sum + level!, 0) / painLevels.length) * 10) / 10 : 0;
+                          const maxPain = painLevels.length > 0 ? Math.max(...painLevels) : 0;
+                          const minPain = painLevels.length > 0 ? Math.min(...painLevels) : 0;
+                          
+                          return (
+                            <Box sx={{ 
+                              p: 2, 
+                              bgcolor: averagePain <= 3 ? '#f0fdf4' : averagePain <= 6 ? '#fef3c7' : '#fef2f2', 
+                              borderRadius: 2, 
+                              border: `1px solid ${averagePain <= 3 ? '#bbf7d0' : averagePain <= 6 ? '#fde68a' : '#fecaca'}` 
+                            }}>
+                              <Typography variant="body2" sx={{ 
+                                fontWeight: 600, 
+                                color: averagePain <= 3 ? '#166534' : averagePain <= 6 ? '#92400e' : '#991b1b'
+                              }}>
+                                Today's Pain Assessment
+                                <Typography component="span" sx={{ 
+                                  fontSize: '0.75rem', 
+                                  fontWeight: 500, 
+                                  color: averagePain <= 3 ? '#15803d' : averagePain <= 6 ? '#b45309' : '#dc2626',
+                                  ml: 1
+                                }}>
+                                  (Day {selectedPlan.progressStats?.completedDays || 0})
+                                </Typography>
+                              </Typography>
+                              <Typography variant="caption" sx={{ 
+                                color: averagePain <= 3 ? '#15803d' : averagePain <= 6 ? '#b45309' : '#dc2626',
+                                display: 'block',
+                                mt: 0.5
+                              }}>
+                                {completedExercises.length > 0 ? (
+                                  <>
+                                    Average: {averagePain}/10 • Range: {minPain}-{maxPain}/10 • 
+                                    {averagePain <= 3 ? ' Excellent progress!' : 
+                                     averagePain <= 6 ? ' Manageable pain levels' : 
+                                     ' Monitor closely - high pain levels'}
+                                  </>
+                                ) : (
+                                  'No exercises completed today'
+                                )}
+                              </Typography>
+                            </Box>
+                          );
+                        })()}
+                      </Box>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Daily Progress Timeline */}
+                <Card sx={{ mb: 3, bgcolor: '#f8fafc' }}>
+                  <CardContent>
+                    <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2 }}>
+                      📅 Daily Progress Timeline
+                    </Typography>
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                      {Array.from({ length: selectedPlan.progressStats?.totalDays || selectedPlan.duration || 7 }, (_, index) => {
+                        const dayNumber = index + 1;
+                        const isCompleted = dayNumber <= (selectedPlan.progressStats?.completedDays || 0);
+                        const isCurrent = dayNumber === (selectedPlan.progressStats?.completedDays || 0) + 1;
+                        
+                        return (
+                          <Box key={dayNumber} sx={{ 
+                            display: 'flex', 
+                            alignItems: 'center', 
+                            gap: 2, 
+                            p: 1.5,
+                            borderRadius: 1,
+                            bgcolor: isCompleted ? '#f0fdf4' : isCurrent ? '#fef3c7' : '#f8fafc',
+                            border: `1px solid ${isCompleted ? '#bbf7d0' : isCurrent ? '#fde68a' : '#e2e8f0'}`
+                          }}>
+                            <Box sx={{ 
+                              width: 24, 
+                              height: 24, 
+                              borderRadius: '50%', 
+                              display: 'flex', 
+                              alignItems: 'center', 
+                              justifyContent: 'center',
+                              bgcolor: isCompleted ? '#10b981' : isCurrent ? '#f59e0b' : '#e5e7eb',
+                              color: 'white',
+                              fontSize: '0.75rem',
+                              fontWeight: 600
+                            }}>
+                              {isCompleted ? '✓' : dayNumber}
+                            </Box>
+                            <Typography variant="body2" sx={{ 
+                              fontWeight: isCurrent ? 600 : 500,
+                              color: isCompleted ? '#166534' : isCurrent ? '#92400e' : '#6b7280'
+                            }}>
+                              Day {dayNumber}
+                            </Typography>
+                            <Typography variant="caption" sx={{ 
+                              color: isCompleted ? '#15803d' : isCurrent ? '#b45309' : '#9ca3af',
+                              ml: 'auto'
+                            }}>
+                              {isCompleted ? 'Completed' : isCurrent ? 'Current' : 'Pending'}
+                            </Typography>
+                          </Box>
+                        );
+                      })}
+                    </Box>
+                  </CardContent>
+                </Card>
+
+                <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>
                   Exercises
-              </Typography>
+                </Typography>
                 
                 {selectedPlan.exercises && selectedPlan.exercises.length > 0 ? (
                   <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                     {selectedPlan.exercises.map((exercise, index) => (
                       <Card key={index} sx={{ border: '1px solid #e2e8f0' }}>
-          <CardContent>
+                        <CardContent>
                           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1 }}>
                             <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
                               {index + 1}. {exercise.name}
-              </Typography>
-                            {exercise.completed && (
-                <Chip
-                                label="Completed"
-                  size="small"
-                                color="success"
-                                icon={<CheckCircle />}
-                />
-              )}
-            </Box>
-                          <Typography variant="body2" color="text.secondary">
+                            </Typography>
+                            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                              {exercise.completed && (
+                                <Chip
+                                  label="Completed"
+                                  size="small"
+                                  color="success"
+                                  icon={<CheckCircle />}
+                                />
+                              )}
+                              {/* Pain Rating Display */}
+                              {exercise.completed && exercise.painLevel !== undefined && (
+                                <Chip
+                                  label={`Pain: ${exercise.painLevel}/10`}
+                                  size="small"
+                                  color={
+                                    exercise.painLevel <= 3 ? 'success' : 
+                                    exercise.painLevel <= 6 ? 'warning' : 
+                                    'error'
+                                  }
+                                  sx={{ 
+                                    fontWeight: 600,
+                                    '& .MuiChip-label': {
+                                      fontSize: '0.75rem'
+                                    }
+                                  }}
+                                />
+                              )}
+                            </Box>
+                          </Box>
+                          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
                             Sets: {exercise.sets || 'N/A'} | Reps: {exercise.reps || 'N/A'}
-                </Typography>
+                          </Typography>
+                          {/* Pain Notes Display */}
+                          {exercise.completed && exercise.painNotes && (
+                            <Box sx={{ 
+                              mt: 1, 
+                              p: 1.5, 
+                              bgcolor: '#f8fafc', 
+                              borderRadius: 1, 
+                              border: '1px solid #e2e8f0' 
+                            }}>
+                              <Typography variant="caption" sx={{ 
+                                fontWeight: 600, 
+                                color: '#64748b',
+                                display: 'block',
+                                mb: 0.5
+                              }}>
+                                💬 Pain Notes:
+                              </Typography>
+                              <Typography variant="body2" sx={{ color: '#374151' }}>
+                                {exercise.painNotes}
+                              </Typography>
+                            </Box>
+                          )}
                         </CardContent>
                       </Card>
                     ))}
@@ -1519,6 +1670,17 @@ const ClinicianDashboardRedux: React.FC = () => {
                 label="Plan Name"
                 value={planForm.planName}
                 onChange={(e) => setPlanForm(prev => ({ ...prev, planName: e.target.value }))}
+                sx={{ mb: 2 }}
+              />
+
+              <TextField
+                fullWidth
+                type="number"
+                label="Duration (Days)"
+                value={planForm.duration}
+                onChange={(e) => setPlanForm(prev => ({ ...prev, duration: parseInt(e.target.value) || 7 }))}
+                inputProps={{ min: 1, max: 365 }}
+                helperText="How many days should this plan last? (e.g., 7 days)"
                 sx={{ mb: 2 }}
               />
 
@@ -1730,25 +1892,205 @@ const ClinicianDashboardRedux: React.FC = () => {
               onClick={handleConfirmCompletePlan}
               startIcon={isCompletingPlan ? null : <CheckCircle />}
               sx={{
-                background: 'linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)',
-                color: 'white',
+                background: '#ffffff',
+                color: '#2d3748',
+                border: '1px solid #e2e8f0',
                 px: 3,
                 '&:hover': {
-                  background: 'linear-gradient(135deg, #38d66c 0%, #2de0c8 100%)'
+                  background: '#f8fafc',
+                  borderColor: '#cbd5e0'
                 },
                 '&:disabled': {
-                  background: '#e2e8f0',
-                  color: '#a0aec0'
+                  background: '#f1f5f9',
+                  color: '#94a3b8',
+                  borderColor: '#e2e8f0'
                 }
               }}
             >
-              {isCompletingPlan ? <CircularProgress size={20} sx={{ color: 'white' }} /> : 'Complete Plan'}
+              {isCompletingPlan ? <CircularProgress size={20} sx={{ color: '#2d3748' }} /> : 'Complete Plan'}
+            </Button>
+          </DialogActions>
+        </Dialog>
+
+        {/* Cancel Plan Confirmation Dialog */}
+        <Dialog
+          open={cancelPlanDialog}
+          onClose={handleCloseCancelPlanDialog}
+          maxWidth="sm"
+          fullWidth
+          PaperProps={{
+            sx: {
+              borderRadius: 2,
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)'
+            }
+          }}
+        >
+          <DialogTitle sx={{ 
+            color: '#111827',
+            fontWeight: 600,
+            fontSize: '1.25rem',
+            borderBottom: '1px solid #f3f4f6',
+            pb: 2
+          }}>
+            Cancel Rehabilitation Plan
+          </DialogTitle>
+          <DialogContent sx={{ mt: 3 }}>
+            <Alert 
+              severity="warning" 
+              sx={{ 
+                mb: 3,
+                backgroundColor: '#fffbeb',
+                border: '1px solid #fef3c7',
+                '& .MuiAlert-icon': {
+                  color: '#f59e0b'
+                }
+              }}
+            >
+              Are you sure you want to cancel this rehabilitation plan? This action will permanently delete the plan and all its data.
+            </Alert>
+            
+            {planToCancel && (
+              <Box>
+                <Card sx={{ 
+                  border: '1px solid #e5e7eb', 
+                  borderRadius: 2,
+                  backgroundColor: 'white',
+                  boxShadow: 'none'
+                }}>
+                  <CardContent sx={{ p: 3 }}>
+                    <Grid container spacing={3}>
+                      <Grid item xs={12}>
+                        <Box sx={{ mb: 2 }}>
+                          <Typography variant="h6" sx={{ fontWeight: 600, color: '#111827', mb: 0.5 }}>
+                            {planToCancel.planName}
+                          </Typography>
+                          <Typography variant="body2" sx={{ color: '#6b7280' }}>
+                            Case: {planToCancel.case?.caseNumber}
+                          </Typography>
+                        </Box>
+                      </Grid>
+
+                      <Grid item xs={6}>
+                        <Typography variant="caption" sx={{ color: '#6b7280', textTransform: 'uppercase', fontWeight: 600, letterSpacing: '0.05em' }}>
+                          Worker
+                        </Typography>
+                        <Typography variant="body1" sx={{ fontWeight: 500, color: '#111827', mt: 0.5 }}>
+                          {planToCancel.case?.worker?.firstName} {planToCancel.case?.worker?.lastName}
+                        </Typography>
+                      </Grid>
+
+                      <Grid item xs={6}>
+                        <Typography variant="caption" sx={{ color: '#6b7280', textTransform: 'uppercase', fontWeight: 600, letterSpacing: '0.05em' }}>
+                          Status
+                        </Typography>
+                        <Box sx={{ mt: 0.5 }}>
+                          <Chip 
+                            label={planToCancel.status.toUpperCase()} 
+                            size="small"
+                            sx={{
+                              backgroundColor: '#f3f4f6',
+                              color: '#374151',
+                              fontWeight: 500,
+                              fontSize: '0.75rem',
+                              border: '1px solid #e5e7eb'
+                            }}
+                          />
+                        </Box>
+                      </Grid>
+
+                      <Grid item xs={12}>
+                        <Typography variant="caption" sx={{ color: '#6b7280', textTransform: 'uppercase', fontWeight: 600, letterSpacing: '0.05em', display: 'block', mb: 1 }}>
+                          Progress
+                        </Typography>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                          <LinearProgress 
+                            variant="determinate" 
+                            value={planToCancel.progress || 0}
+                            sx={{
+                              flex: 1,
+                              height: 6,
+                              borderRadius: 3,
+                              backgroundColor: '#f3f4f6',
+                              '& .MuiLinearProgress-bar': {
+                                borderRadius: 3,
+                                backgroundColor: '#3b82f6'
+                              }
+                            }}
+                          />
+                          <Typography variant="body2" sx={{ fontWeight: 500, color: '#6b7280', minWidth: 45 }}>
+                            {planToCancel.progress || 0}%
+                          </Typography>
+                        </Box>
+                      </Grid>
+                    </Grid>
+
+                    <Alert 
+                      severity="info"
+                      sx={{ 
+                        mt: 3,
+                        backgroundColor: '#eff6ff',
+                        border: '1px solid #dbeafe',
+                        '& .MuiAlert-icon': {
+                          color: '#3b82f6'
+                        }
+                      }}
+                    >
+                      After cancelling, this case will become available for creating a new rehabilitation plan.
+                    </Alert>
+                  </CardContent>
+                </Card>
+              </Box>
+            )}
+          </DialogContent>
+          <DialogActions sx={{ px: 3, pb: 3, pt: 2, borderTop: '1px solid #f3f4f6', gap: 1 }}>
+            <Button 
+              onClick={handleCloseCancelPlanDialog}
+              variant="outlined"
+              disabled={isCancellingPlan}
+              sx={{
+                borderColor: '#e5e7eb',
+                color: '#6b7280',
+                textTransform: 'none',
+                fontWeight: 500,
+                '&:hover': {
+                  borderColor: '#d1d5db',
+                  backgroundColor: '#f9fafb'
+                }
+              }}
+            >
+              Go Back
+            </Button>
+            <Button 
+              variant="contained"
+              disabled={isCancellingPlan}
+              onClick={handleConfirmCancelPlan}
+              startIcon={isCancellingPlan ? null : <Cancel />}
+              sx={{
+                px: 3,
+                backgroundColor: '#ef4444',
+                color: 'white',
+                textTransform: 'none',
+                fontWeight: 500,
+                boxShadow: 'none',
+                '&:hover': {
+                  backgroundColor: '#dc2626',
+                  boxShadow: 'none'
+                },
+                '&:disabled': {
+                  backgroundColor: '#f3f4f6',
+                  color: '#9ca3af'
+                }
+              }}
+            >
+              {isCancellingPlan ? <CircularProgress size={20} sx={{ color: '#9ca3af' }} /> : 'Cancel Plan'}
             </Button>
           </DialogActions>
         </Dialog>
       </Box>
     </LayoutWithSidebar>
   );
-};
+});
+
+ClinicianDashboardRedux.displayName = 'ClinicianDashboardRedux';
 
 export default ClinicianDashboardRedux;

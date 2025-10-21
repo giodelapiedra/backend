@@ -11,6 +11,8 @@ import {
   Badge,
   Divider,
 } from '@mui/material';
+// Import backendApi utility with auth token handling
+import backendApi from '../utils/backendApi';
 import {
   Dashboard,
   Assessment,
@@ -31,6 +33,7 @@ import {
   AssignmentTurnedIn,
   Analytics,
   Schedule,
+  Warning as WarningIcon,
 } from '@mui/icons-material';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext.supabase';
@@ -60,6 +63,7 @@ const ModernSidebar: React.FC = () => {
   const location = useLocation();
   const { user } = useAuth();
   const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
+  const [pendingAppointmentsCount, setPendingAppointmentsCount] = useState(0);
   const [hoveredItem, setHoveredItem] = useState<string | null>(null);
 
   const handleSectionToggle = (sectionKey: string) => {
@@ -79,6 +83,29 @@ const ModernSidebar: React.FC = () => {
   useEffect(() => {
     setUnreadNotificationCount(0);
   }, [user]);
+
+  // Fetch pending appointments count for workers
+  useEffect(() => {
+    if (user?.role === 'worker') {
+      const fetchPendingAppointments = async () => {
+        try {
+          // Use backendApi utility with auth token handling
+          const response = await backendApi.get('/appointments?status=scheduled&limit=100');
+          const pendingCount = response.data.appointments?.filter((apt: any) => apt.status === 'scheduled').length || 0;
+          setPendingAppointmentsCount(pendingCount);
+        } catch (error) {
+          console.error('Error fetching pending appointments:', error);
+          // Set to 0 on error to avoid showing stale data
+          setPendingAppointmentsCount(0);
+        }
+      };
+      
+      fetchPendingAppointments();
+      // Refresh every 30 seconds
+      const interval = setInterval(fetchPendingAppointments, 30000);
+      return () => clearInterval(interval);
+    }
+  }, [user?.role]);
 
   const getSidebarSections = (): SidebarSection[] => {
     if (!user) return [];
@@ -128,6 +155,7 @@ const ModernSidebar: React.FC = () => {
             items: [
               { text: 'Cases', icon: <Assignment />, path: '/cases' },
               { text: 'Users', icon: <People />, path: '/users' },
+              { text: 'Analytics', icon: <TrendingUp />, path: '/case-manager/analytics' },
               { text: 'Reports', icon: <Report />, path: '/reports' },
             ]
           }
@@ -145,7 +173,6 @@ const ModernSidebar: React.FC = () => {
               { text: 'Cases', icon: <Assignment />, path: '/cases' },
               { text: 'Appointments', icon: <CalendarToday />, path: '/appointments' },
               { text: 'Calendar View', icon: <Event />, path: '/clinician/calendar' },
-              { text: 'Check-ins', icon: <History />, path: '/check-ins' },
             ]
           }
         ];
@@ -172,8 +199,7 @@ const ModernSidebar: React.FC = () => {
             items: [
               { text: 'Dashboard', icon: <Dashboard />, path: '/worker' },
               { text: 'My Cases', icon: <Assignment />, path: '/cases' },
-              { text: 'Appointments', icon: <CalendarToday />, path: '/appointments' },
-              { text: 'Check-ins', icon: <History />, path: '/check-ins' },
+              { text: 'Appointments', icon: <CalendarToday />, path: '/appointments', badge: pendingAppointmentsCount },
             ]
           }
         ];
@@ -187,8 +213,9 @@ const ModernSidebar: React.FC = () => {
               { text: 'Dashboard', icon: <Dashboard />, path: '/team-leader' },
               { text: 'Analytics', icon: <TrendingUp />, path: '/team-leader/analytics' },
               { text: 'Assignments', icon: <AssignmentTurnedIn />, path: '/team-leader/assignments' },
-              { text: 'Work Readiness', icon: <Assessment />, path: '/team-leader/work-readiness' },
+              { text: 'Work Readiness KPI', icon: <Assessment />, path: '/team-leader/work-readiness-kpi' },
               { text: 'Assessment Logs', icon: <Report />, path: '/team-leader/assessment-logs' },
+              { text: 'Incident Management', icon: <WarningIcon />, path: '/team-leader/incidents' },
             ]
           }
         ];
@@ -200,7 +227,6 @@ const ModernSidebar: React.FC = () => {
             title: 'SITE SUPERVISOR',
             items: [
               { text: 'Dashboard', icon: <Dashboard />, path: '/site-supervisor' },
-              { text: 'Team Monitoring', icon: <Group />, path: '/site-supervisor/team-monitoring' },
               { text: 'Multi-Team Analytics', icon: <Analytics />, path: '/site-supervisor/multi-team-analytics' },
               { text: 'Shift Management', icon: <Schedule />, path: '/site-supervisor/shift-management' },
             ]

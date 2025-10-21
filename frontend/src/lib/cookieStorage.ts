@@ -28,18 +28,31 @@ export class CookieStorageAdapter {
     const expires = new Date();
     expires.setTime(expires.getTime() + (7 * 24 * 60 * 60 * 1000)); // 7 days
     
-    document.cookie = `${key}=${encodeURIComponent(value)}; expires=${expires.toUTCString()}; path=/; SameSite=Strict; Secure=${window.location.protocol === 'https:'}`;
+    // SECURITY: Always use Secure flag in production, SameSite=Strict to prevent CSRF
+    const isProduction = process.env.NODE_ENV === 'production';
+    const secureFlag = isProduction ? 'Secure' : (window.location.protocol === 'https:' ? 'Secure' : '');
+    
+    document.cookie = `${key}=${encodeURIComponent(value)}; expires=${expires.toUTCString()}; path=/; SameSite=Strict; ${secureFlag}`;
   }
 
   removeItem(key: string): void {
     if (typeof document === 'undefined') return;
     
-    document.cookie = `${key}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; SameSite=Strict; Secure=${window.location.protocol === 'https:'}`;
+    // SECURITY: Match setItem security flags when removing cookies
+    const isProduction = process.env.NODE_ENV === 'production';
+    const secureFlag = isProduction ? 'Secure' : (window.location.protocol === 'https:' ? 'Secure' : '');
+    
+    document.cookie = `${key}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; SameSite=Strict; ${secureFlag}`;
   }
 }
 
 // Create storage instance
 export const cookieStorage = new CookieStorageAdapter();
+
+
+
+
+
 
 
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useCallback, useState, useRef } from 'react';
+import React, { useEffect, useCallback, useState, useRef, useMemo, memo } from 'react';
 import {
   Box,
   Typography,
@@ -33,6 +33,8 @@ import {
   ListItemIcon,
   LinearProgress,
   Grid,
+  Pagination,
+  Stack,
 } from '@mui/material';
 import {
   Add,
@@ -77,6 +79,35 @@ import {
   clearMessages,
 } from '../../store/slices/uiSlice';
 
+// Utility functions for performance optimization
+const debounce = (func: Function, wait: number) => {
+  let timeout: NodeJS.Timeout;
+  return function executedFunction(...args: any[]) {
+    const later = () => {
+      clearTimeout(timeout);
+      func(...args);
+    };
+    clearTimeout(timeout);
+    timeout = setTimeout(later, wait);
+  };
+};
+
+// Simple cache for API responses
+const apiCache = new Map<string, { data: any; timestamp: number; ttl: number }>();
+
+const getCachedData = (key: string, ttl: number = 5 * 60 * 1000) => {
+  const cached = apiCache.get(key);
+  if (cached && Date.now() - cached.timestamp < ttl) {
+    return cached.data;
+  }
+  apiCache.delete(key);
+  return null;
+};
+
+const setCachedData = (key: string, data: any, ttl: number = 5 * 60 * 1000) => {
+  apiCache.set(key, { data, timestamp: Date.now(), ttl });
+};
+
 interface Incident {
   id: string;
   incident_number?: string;
@@ -93,6 +124,8 @@ interface Incident {
     email: string;
   };
   created_at: string;
+  return_to_work?: boolean;
+  case_id?: string;
 }
 
 interface Case {
@@ -145,7 +178,80 @@ interface DashboardStats {
   complianceRate: number;
   restrictedWorkers: number;
   incidentsThisMonth: number;
+  returnedToWork: number;
+  onRestrictedDuty: number;
 }
+
+// Memoized incident row component for better performance
+const IncidentRow = memo(({ incident, onViewDetails }: { incident: Incident; onViewDetails: (incident: Incident) => void }) => {
+  const handleClick = useCallback(() => {
+    onViewDetails(incident);
+  }, [incident, onViewDetails]);
+
+  return (
+    <TableRow 
+      key={incident.id}
+      sx={{
+        cursor: 'pointer',
+        transition: 'all 0.15s ease',
+        '&:hover': {
+          background: 'rgba(255, 107, 107, 0.06)',
+          transform: 'scale(1.001)'
+        }
+      }}
+    >
+      <TableCell>{incident.incident_number || `INC-${incident.id.slice(-8)}`}</TableCell>
+      <TableCell>
+        {incident.incident_date ? new Date(incident.incident_date).toLocaleDateString() : 
+         incident.created_at ? new Date(incident.created_at).toLocaleDateString() : 'N/A'}
+      </TableCell>
+      <TableCell>
+        {(() => {
+          if (!incident.worker) return 'N/A';
+          const w: any = incident.worker as any;
+          const first = w.first_name || w.firstName || '';
+          const last = w.last_name || w.lastName || '';
+          const name = `${first} ${last}`.trim();
+          return name || 'N/A';
+        })()}
+      </TableCell>
+      <TableCell>{incident.incident_type || 'N/A'}</TableCell>
+      <TableCell>
+        <Chip
+          label={incident.severity || 'unknown'}
+          color={
+            incident.severity === 'high' || incident.severity === 'lost_time' || incident.severity === 'fatality' ? 'error' :
+            incident.severity === 'medium' || incident.severity === 'medical_treatment' ? 'warning' : 'success'
+          }
+          size="small"
+        />
+      </TableCell>
+      <TableCell>
+        <Chip
+          label={incident.status || 'reported'}
+          color={incident.status === 'reported' ? 'info' : 'success'}
+          size="small"
+        />
+      </TableCell>
+      <TableCell>
+        <Chip
+          label={incident.return_to_work ? 'Returned' : 'Restricted'}
+          color={incident.return_to_work ? 'success' : 'warning'}
+          size="small"
+          icon={incident.return_to_work ? <CheckCircle /> : <Warning />}
+        />
+      </TableCell>
+      <TableCell>
+        <IconButton 
+          size="small"
+          onClick={handleClick}
+        >
+          <Visibility />
+        </IconButton>
+      </TableCell>
+    </TableRow>
+  );
+});
 
 const SiteSupervisorDashboardRedux: React.FC = () => {
   const { user } = useAuth();
@@ -160,6 +266,14 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
   
   // Team leader ID state
   const [selectedTeamLeaderId, setSelectedTeamLeaderId] = useState<string>('');
+  
+  // Pagination state for incidents - optimized for large datasets
+  const [incidentsPagination, setIncidentsPagination] = useState({
+    page: 1,
+    limit: 20, // Increased for better performance
+    total: 0,
+    totalPages: 0
+  });
   
   // Redux state
   const { 
@@ -177,16 +291,21 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
     activeTab 
   } = useAppSelector((state: any) => state.ui);
 
-  // RTK Query hooks
+  // RTK Query hooks - optimized for large datasets
   const { 
     data: incidentsData, 
     isLoading: incidentsLoading, 
     error: incidentsError,
     refetch: refetchIncidents 
   } = useGetIncidentsQuery({ 
-    // Add pagination to reduce initial load
-    page: 1, 
-    limit: 20 
+    page: incidentsPagination.page, 
+    limit: incidentsPagination.limit 
+  }, {
+    // Cache for 2 minutes
+    pollingInterval: 0,
+    refetchOnMountOrArgChange: 30,
+    refetchOnFocus: false,
+    refetchOnReconnect: true
   });
   
   const { 
@@ -194,9 +313,13 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
     isLoading: casesLoading, 
     error: casesError 
   } = useGetCasesQuery({ 
-    // Add pagination to reduce initial load
+    // Optimized pagination for large datasets
     page: 1, 
-    limit: 10 
+    limit: 25 
+  }, {
+    pollingInterval: 0,
+    refetchOnMountOrArgChange: 60,
+    refetchOnFocus: false
   });
   
   const { 
@@ -205,7 +328,10 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
     error: teamsError,
     refetch: refetchTeams
   } = useGetTeamsQuery(user?.id || '', {
-    skip: !user?.id
+    skip: !user?.id,
+    pollingInterval: 0,
+    refetchOnMountOrArgChange: 300, // Cache for 5 minutes
+    refetchOnFocus: false
   });
   
   const { 
@@ -213,8 +339,13 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
     isLoading: unselectedWorkersLoading, 
     error: unselectedWorkersError 
   } = useGetUnselectedWorkersQuery(
-    { teamLeaderId: selectedTeamLeaderId || '', date: undefined }, // Remove date filter to see all records
-    { skip: !selectedTeamLeaderId }
+    { teamLeaderId: selectedTeamLeaderId || '', date: undefined },
+    { 
+      skip: !selectedTeamLeaderId,
+      pollingInterval: 0,
+      refetchOnMountOrArgChange: 30,
+      refetchOnFocus: false
+    }
   );
 
   // Combined loading state for better UX
@@ -227,6 +358,21 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
   const cases = casesData?.cases || [];
   const teams = teamsData?.teams || [];
   const currentTeam = teamsData?.currentTeam || null;
+  
+  // Update pagination state when incidents data changes
+  useEffect(() => {
+    if (incidentsData) {
+      // Use pagination data from API if available, otherwise calculate from total
+      const total = incidentsData.pagination?.total || incidentsData.total || 0;
+      const totalPages = incidentsData.pagination?.totalPages || Math.ceil(total / incidentsPagination.limit);
+      
+      setIncidentsPagination(prev => ({
+        ...prev,
+        total,
+        totalPages
+      }));
+    }
+  }, [incidentsData, incidentsPagination.limit]);
   
   // Use ref to prevent infinite loop
   const casesRef = useRef(cases);
@@ -243,18 +389,162 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
     teamMembers 
   } = useAppSelector((state: any) => state.teams);
   
-  // Debug logging for unselected workers
+  // Optimized team members loading with caching
+  const loadTeamMembers = useCallback(async (teamLeaderId: string, teamName: string) => {
+    const cacheKey = `team-members-${teamLeaderId}-${teamName}`;
+    const cached = getCachedData(cacheKey, 2 * 60 * 1000); // 2 minutes cache
+    
+    if (cached) {
+      dispatch(setTeamMembers(cached));
+      return;
+    }
+
+    if (unselectedWorkersData?.unselectedWorkers && teamLeaderId) {
+      
+      // Optimized filtering with security validation
+      // For incident reporting: Only show workers with OPEN incidents for the selected team leader
+      const transformedTeamMembers = unselectedWorkersData.unselectedWorkers
+        .filter((unselected: any) => unselected.case_status === 'open')
+        .filter((unselected: any) => {
+          // Security: Validate required fields
+          if (!unselected?.worker?.id || !unselected?.worker?.first_name || !unselected?.worker?.last_name) {
+            console.warn('⚠️ Skipping invalid worker data:', unselected);
+            return false;
+          }
+
+          // Security: Validate UUID format for worker ID
+          const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+          if (!uuidRegex.test(unselected.worker.id)) {
+            console.warn('⚠️ Invalid worker ID format:', unselected.worker.id);
+            return false;
+          }
+
+          // All workers with open case status should be included
+          return true;
+        })
+        .map((unselected: any) => {
+          // Worker has OPEN case by filter above
+          const hasOpenCase = true;
+          
+          // Security: Sanitize and validate data
+          const sanitizedWorker = {
+            id: unselected.worker.id,
+            first_name: unselected.worker.first_name?.trim() || '',
+            last_name: unselected.worker.last_name?.trim() || '',
+            name: `${unselected.worker.first_name?.trim() || ''} ${unselected.worker.last_name?.trim() || ''}`.trim(),
+            email: unselected.worker.email?.trim() || '',
+            reason: unselected.reason || 'unknown',
+            notes: unselected.notes?.trim() || 'No notes provided',
+            caseStatus: unselected.case_status || 'open',
+            hasOpenCase: hasOpenCase, // Always true here
+            warningMessage: hasOpenCase ? 'This worker has an open case' : null
+          };
+
+          // Security: Validate reason against allowed values
+          const allowedReasons = ['sick', 'on_leave_rdo', 'transferred', 'injured_medical', 'not_rostered'];
+          if (!allowedReasons.includes(sanitizedWorker.reason)) {
+            console.warn('⚠️ Invalid reason, defaulting to unknown:', sanitizedWorker.reason);
+            sanitizedWorker.reason = 'unknown';
+          }
+
+          return sanitizedWorker;
+        });
+      
+      // Update Redux state with the transformed data
+      dispatch(setTeamMembers(transformedTeamMembers));
+      setCachedData(cacheKey, transformedTeamMembers);
+    } else if (!unselectedWorkersLoading && (teamLeaderId || teamName)) {
+      // Fallbacks: try direct Supabase fetch
+      (async () => {
+        try {
+          const { SupabaseAPI } = await import('../../utils/supabaseApi');
+          const api = new SupabaseAPI();
+          const res: any = selectedTeamLeaderId ? await api.getUnselectedWorkerReasons(selectedTeamLeaderId, {
+            limit: 100,
+            offset: 0,
+            includeCount: false
+          }) : { success: false };
+
+          const data = (res && res.success && Array.isArray(res.data)) ? res.data : [];
+
+          if (data.length > 0) {
+            const transformed = data
+              .filter((u: any) => u.case_status === 'open' && u.worker_id)
+              .map((u: any) => ({
+                id: u.worker_id,
+                first_name: (u.worker?.first_name || '').trim(),
+                last_name: (u.worker?.last_name || '').trim(),
+                name: `${(u.worker?.first_name || '').trim()} ${(u.worker?.last_name || '').trim()}`.trim(),
+                email: (u.worker?.email || '').trim(),
+                reason: u.reason || 'unknown',
+                notes: (u.notes || '').trim() || 'No notes provided',
+                caseStatus: u.case_status || 'open',
+                hasOpenCase: true,
+                warningMessage: 'This worker has an open case'
+              }));
+
+            dispatch(setTeamMembers(transformed));
+            return;
+          }
+
+          // Second fallback: fetch by TEAM (workers' team), regardless of team_leader_id
+          // Load open incidents and join worker to filter by selected team name
+          if (!selectedTeam) {
+            dispatch(setTeamMembers([]));
+            return;
+          }
+          const { data: openByTeam, error } = await dataClient
+            .from('unselected_workers')
+            .select(`
+              *,
+              worker:worker_id (id, first_name, last_name, email, team)
+            `)
+            .eq('case_status', 'open')
+            .order('created_at', { ascending: false });
+
+          if (!error && Array.isArray(openByTeam)) {
+            const transformedTeam = openByTeam
+              .filter((row: any) => (row.worker?.team || '').toLowerCase() === (selectedTeam || '').toLowerCase())
+              .map((u: any) => ({
+                id: u.worker_id,
+                first_name: (u.worker?.first_name || '').trim(),
+                last_name: (u.worker?.last_name || '').trim(),
+                name: `${(u.worker?.first_name || '').trim()} ${(u.worker?.last_name || '').trim()}`.trim(),
+                email: (u.worker?.email || '').trim(),
+                reason: u.reason || 'unknown',
+                notes: (u.notes || '').trim() || 'No notes provided',
+                caseStatus: u.case_status || 'open',
+                hasOpenCase: true,
+                warningMessage: 'This worker has an open case'
+              }));
+
+            dispatch(setTeamMembers(transformedTeam));
+            return;
+          }
+        } catch (_) {
+          // ignore fallback errors
+        }
+        // Nothing found even after fallback; clear list
+        dispatch(setTeamMembers([]));
+        setCachedData(cacheKey, []);
+      })();
+    }
+  }, [unselectedWorkersData, selectedTeamLeaderId, selectedTeam, unselectedWorkersLoading, dispatch]);
+
+  // Debounced team selection handler
+  const debouncedLoadTeamMembers = useMemo(
+    () => debounce((teamLeaderId: string, teamName: string) => {
+      loadTeamMembers(teamLeaderId, teamName);
+    }, 300),
+    [loadTeamMembers]
+  );
+
+  // Optimized effect for team members loading
   useEffect(() => {
-    console.log('🔍 Unselected Workers Debug:', {
-      selectedTeamLeaderId,
-      unselectedWorkersData,
-      unselectedWorkersLoading,
-      unselectedWorkersError,
-      today: new Date().toISOString().split('T')[0],
-      teamMembers: teamMembers,
-      teamMembersLength: teamMembers?.length || 0
-    });
-  }, [selectedTeamLeaderId, unselectedWorkersData, unselectedWorkersLoading, unselectedWorkersError, teamMembers]);
+    if (selectedTeamLeaderId && selectedTeam) {
+      debouncedLoadTeamMembers(selectedTeamLeaderId, selectedTeam);
+    }
+  }, [selectedTeamLeaderId, selectedTeam, debouncedLoadTeamMembers]);
 
   // Fetch notifications (same logic as /notifications page)
   const fetchNotifications = useCallback(async () => {
@@ -278,53 +568,32 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
     }
   }, [user?.id]);
 
-  // Fetch new data when real-time events occur
-  const fetchNewData = useCallback(async () => {
-    if (!user?.id) return;
-    
-    try {
-      console.log('🔄 Real-time: Fetching new data...');
-      
-      // Light cache invalidation for better performance
-      console.log('🧹 Light cache invalidation...');
-      
-      // Only invalidate specific tags instead of clearing entire cache
-      dispatch(incidentsApi.util.invalidateTags(['Incident']));
-      
-      // Skip aggressive cache clearing for better performance
-      
-      // Fetch notifications (same as /notifications page)
-      await fetchNotifications();
-      
-      // Force refetch incidents and teams data with fresh cache
-      refetchIncidents();
-      refetchTeams();
-      
-      console.log('✅ Real-time: Data updated successfully with cache cleared');
-    } catch (error) {
-      console.error('Error in real-time data fetch:', error);
-    }
-  }, [user?.id, dispatch, fetchNotifications, refetchIncidents, refetchTeams]);
+  // Removed auto refresh functionality - manual refresh only
 
-  // Calculate stats
-  const stats: DashboardStats = {
-    totalWorkers: teamMembers.length,
-    activeCases: cases.filter(c => ['triaged', 'assessed', 'in_rehab'].includes(c.status)).length,
-    recentIncidents: incidents.filter(i => {
-      const incidentDate = new Date(i.incident_date || i.created_at);
-      const thirtyDaysAgo = new Date();
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-      return incidentDate >= thirtyDaysAgo;
-    }).length,
-    complianceRate: 85, // Mock data
-    restrictedWorkers: cases.filter(c => c.status === 'in_rehab').length,
-    incidentsThisMonth: incidents.filter(i => {
-      const incidentDate = new Date(i.incident_date || i.created_at);
-      const now = new Date();
-      return incidentDate.getMonth() === now.getMonth() && 
-             incidentDate.getFullYear() === now.getFullYear();
-    }).length,
-  };
+  // Optimized stats calculation with memoization
+  const stats: DashboardStats = useMemo(() => {
+    const now = new Date();
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    
+    return {
+      totalWorkers: teamMembers.length,
+      activeCases: cases.filter(c => ['triaged', 'assessed', 'in_rehab'].includes(c.status)).length,
+      recentIncidents: incidents.filter(i => {
+        const incidentDate = new Date(i.incident_date || i.created_at);
+        return incidentDate >= thirtyDaysAgo;
+      }).length,
+      complianceRate: 85, // Mock data - could be calculated from actual data
+      restrictedWorkers: cases.filter(c => c.status === 'in_rehab').length,
+      incidentsThisMonth: incidents.filter(i => {
+        const incidentDate = new Date(i.incident_date || i.created_at);
+        return incidentDate.getMonth() === now.getMonth() && 
+               incidentDate.getFullYear() === now.getFullYear();
+      }).length,
+      returnedToWork: incidents.filter(i => i.return_to_work === true).length,
+      onRestrictedDuty: incidents.filter(i => i.return_to_work === false).length,
+    };
+  }, [teamMembers.length, cases, incidents]);
 
   // Initial data fetch (same as /notifications page)
   useEffect(() => {
@@ -352,7 +621,7 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
     };
   }, [user?.id, fetchNotifications]);
 
-  // Real-time subscription for notifications (same logic as /notifications page)
+  // Real-time subscription for notifications - essential for receiving new notifications
   useEffect(() => {
     if (!user?.id) return;
 
@@ -370,10 +639,8 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
         },
         (payload) => {
           console.log('New notification received:', payload);
-          // Refresh notifications when new one is added
+          // Only refresh notifications, not all data
           fetchNotifications();
-          // Also refresh incidents data
-          refetchIncidents();
         }
       )
       .on(
@@ -386,7 +653,7 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
         },
         (payload) => {
           console.log('Notification updated:', payload);
-          // Refresh notifications when one is updated
+          // Only refresh notifications
           fetchNotifications();
         }
       )
@@ -395,13 +662,13 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
     return () => {
       subscription.unsubscribe();
     };
-  }, [user?.id, fetchNotifications, refetchIncidents]);
+  }, [user?.id, fetchNotifications]);
 
-  // Real-time subscription for incidents
+  // Lightweight real-time subscription for incidents - just to notify of changes
   useEffect(() => {
     if (!user?.id) return;
 
-    console.log('🚀 Initializing real-time incidents...');
+    console.log('🚀 Initializing lightweight real-time incidents...');
 
     const incidentsSubscription = dataClient
       .channel('incidents-changes')
@@ -413,11 +680,9 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
           table: 'incidents'
         },
         (payload) => {
-          console.log('🔄 Real-time: New incident detected:', payload);
-          console.log('📊 Incident data:', payload.new);
-          // Light invalidation instead of aggressive cache clearing
+          console.log('🔄 New incident detected:', payload);
+          // Just invalidate cache, don't aggressively refetch
           dispatch(incidentsApi.util.invalidateTags(['Incident']));
-          // Skip fetching notifications on every incident update
         }
       )
       .on(
@@ -428,68 +693,24 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
           table: 'incidents'
         },
         (payload) => {
-          console.log('🔄 Real-time: Incident updated:', payload);
-          console.log('📊 Updated incident data:', payload.new);
-          // Light invalidation instead of aggressive clearing
+          console.log('🔄 Incident updated:', payload);
+          // Just invalidate cache, don't aggressively refetch
           dispatch(incidentsApi.util.invalidateTags(['Incident']));
         }
       )
       .subscribe((status) => {
-        console.log('📡 Real-time incidents subscription status:', status);
+        console.log('📡 Lightweight real-time incidents subscription status:', status);
       });
 
     return () => {
-      console.log('🧹 Cleaning up real-time incidents subscription...');
+      console.log('🧹 Cleaning up lightweight real-time incidents subscription...');
       incidentsSubscription.unsubscribe();
     };
-  }, [user?.id, dispatch, refetchIncidents, fetchNotifications]);
+  }, [user?.id, dispatch]);
 
 
-  // Effects
-  useEffect(() => {
-    console.log('🔄 Unselected workers effect triggered');
-    console.log('📊 selectedTeamLeaderId:', selectedTeamLeaderId);
-    console.log('📊 unselectedWorkersData:', unselectedWorkersData);
-    
-    if (unselectedWorkersData?.unselectedWorkers) {
-      console.log('📋 Processing unselected workers:', unselectedWorkersData.unselectedWorkers.length);
-      console.log('📋 Raw unselected workers data:', unselectedWorkersData.unselectedWorkers);
-      
-      // Transform unselected workers data to match the expected format
-      const formattedWorkers = unselectedWorkersData.unselectedWorkers
-        // IMPORTANT FIX: Filter out workers who already have cases - they should not be selectable for new incidents
-        .filter((unselected: any) => {
-          // Check if the worker has any existing cases - using ref to prevent infinite loop
-          const hasExistingCase = casesRef.current.some((c: any) => c.worker_id === unselected.worker_id && c.status !== 'closed');
-          
-          if (hasExistingCase) {
-            console.log('⛔ Excluding worker with existing case:', unselected.worker?.first_name, unselected.worker?.last_name);
-            return false;
-          }
-          return true;
-        })
-        .map((unselected: any) => {
-          console.log('📋 Processing worker:', unselected);
-          const formatted = {
-            id: unselected.worker_id, // Use worker_id from the main object
-            first_name: unselected.worker.first_name,
-            last_name: unselected.worker.last_name,
-            email: unselected.worker.email,
-            reason: unselected.reason,
-            notes: unselected.notes || 'No notes provided',
-            caseStatus: unselected.case_status || 'open'
-          };
-          console.log('📋 Formatted worker:', formatted);
-          return formatted;
-        });
-      
-      console.log('✅ All formatted workers:', formattedWorkers);
-      dispatch(setTeamMembers(formattedWorkers));
-    } else {
-      console.log('❌ No unselected workers data found');
-      dispatch(setTeamMembers([]));
-    }
-  }, [unselectedWorkersData, dispatch]);
+  // This effect is now handled by the sync effect above
+  // Keeping this for reference but the main logic is in the sync effect
 
   // Auto-select current team if available
   useEffect(() => {
@@ -665,10 +886,7 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
       
       dispatch(setSuccessMessage(successMessage));
       
-      // Clear success message after 8 seconds
-      setTimeout(() => {
-        dispatch(setSuccessMessage(null));
-      }, 8000);
+      // Success message will remain until user manually closes it
 
       // Comprehensive cache clearing and data refresh
       console.log('🧹 Clearing all storage after incident creation...');
@@ -738,7 +956,6 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
   }, [incidentForm, selectedPhotos, user, createIncident, dispatch, refetchIncidents, refetchTeams]);
 
   const handleTeamSelection = useCallback(async (teamName: string) => {
-    console.log('🎯 Team selected:', teamName);
     dispatch(setSelectedTeam(teamName));
     
     // Clear worker selection when team changes
@@ -746,48 +963,62 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
     
     // Find the team leader for this team
     try {
-      console.log('🔍 Searching for team leader with team:', teamName);
-      const { data: teamLeader, error } = await dataClient
+      // First try to find team leader
+      const { data: teamLeader, error: teamLeaderError } = await dataClient
         .from('users')
         .select('id, first_name, last_name, email, role, team')
         .eq('role', 'team_leader')
-        .eq('team', teamName)
+        .ilike('team', teamName)
         .single();
       
-      if (error) {
-        console.error('❌ Error finding team leader:', error);
-        console.log('🔍 Trying to find any user with this team...');
-        
-        // Fallback: try to find any user with this team
+      if (teamLeaderError) {
+        // Fallback A: try to find any user with this team (case-insensitive)
         const { data: anyUser, error: anyUserError } = await dataClient
           .from('users')
           .select('id, first_name, last_name, email, role, team')
-          .eq('team', teamName)
+          .ilike('team', teamName)
           .limit(1)
           .single();
         
         if (anyUserError) {
-          console.error('❌ No users found for team:', teamName);
+          // Fallback B: find team leader by managed_teams containing the team (case-insensitive)
+          const { data: managedLeader, error: managedErr } = await dataClient
+            .from('users')
+            .select('id, first_name, last_name, email, role, managed_teams')
+            .eq('role', 'team_leader')
+            .contains('managed_teams', [teamName]) as any;
+
+          if (!managedErr && Array.isArray(managedLeader) && managedLeader.length > 0) {
+            setSelectedTeamLeaderId(managedLeader[0].id);
+            return;
+          }
+
           setSelectedTeamLeaderId('');
           return;
         }
         
-        console.log('✅ Found user for team (fallback):', anyUser);
         setSelectedTeamLeaderId(anyUser.id);
         return;
       }
       
       if (teamLeader) {
-        console.log('✅ Found team leader:', teamLeader);
-        console.log('🎯 Setting team leader ID:', teamLeader.id);
         // Store the team leader ID for fetching unselected workers
         setSelectedTeamLeaderId(teamLeader.id);
       } else {
-        console.log('❌ No team leader found for team:', teamName);
-        setSelectedTeamLeaderId('');
+        // Last fallback: try managed_teams for team leaders
+        const { data: managedLeader, error: managedErr } = await dataClient
+          .from('users')
+          .select('id, managed_teams')
+          .eq('role', 'team_leader')
+          .contains('managed_teams', [teamName]) as any;
+
+        if (!managedErr && Array.isArray(managedLeader) && managedLeader.length > 0) {
+          setSelectedTeamLeaderId(managedLeader[0].id);
+        } else {
+          setSelectedTeamLeaderId('');
+        }
       }
     } catch (err) {
-      console.error('❌ Error fetching team leader:', err);
       setSelectedTeamLeaderId('');
     }
   }, [dispatch]);
@@ -811,6 +1042,26 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
   const handleFormChange = useCallback((field: string, value: any) => {
     dispatch(updateIncidentForm({ [field]: value }));
   }, [dispatch]);
+
+  // View details handler for memoized component
+  const handleViewDetails = useCallback((incident: Incident) => {
+    dispatch(setSelectedIncident(incident));
+    dispatch(openDialog('incidentDetailsDialog' as any));
+  }, [dispatch]);
+
+  // Optimized pagination handlers with caching
+  const handlePageChange = useCallback((event: React.ChangeEvent<unknown>, page: number) => {
+    setIncidentsPagination(prev => ({ ...prev, page }));
+  }, []);
+
+  const handleLimitChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const newLimit = parseInt(event.target.value, 10);
+    setIncidentsPagination(prev => ({ 
+      ...prev, 
+      limit: newLimit, 
+      page: 1 // Reset to first page when changing limit
+    }));
+  }, []);
 
   // Enhanced loading state with loading skeletons
   if (isAnyLoading) {
@@ -936,8 +1187,12 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
                   variant="outlined"
                   startIcon={<Refresh />}
                   onClick={() => {
+                    // Clear cache before refetching
+                    apiCache.clear();
                     refetchIncidents();
                     refetchTeams();
+                    // Reset pagination to first page
+                    setIncidentsPagination(prev => ({ ...prev, page: 1 }));
                   }}
                   sx={{ 
                     borderRadius: '12px',
@@ -1161,7 +1416,7 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
           }
         }}>
           <Grid container spacing={2} justifyContent="center">
-            <Grid item xs={12} sm={6} md={3}>
+            <Grid item xs={12} sm={6} md={2.4}>
               <Card sx={{ 
                 borderRadius: '16px',
                 border: '1px solid rgba(0, 0, 0, 0.06)',
@@ -1216,7 +1471,7 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
               </Card>
             </Grid>
             
-            <Grid item xs={12} sm={6} md={3}>
+            <Grid item xs={12} sm={6} md={2.4}>
               <Card sx={{ 
                 borderRadius: '16px',
                 border: '1px solid rgba(0, 0, 0, 0.06)',
@@ -1269,7 +1524,7 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
               </Card>
             </Grid>
             
-            <Grid item xs={12} sm={6} md={3}>
+            <Grid item xs={12} sm={6} md={2.4}>
               <Card sx={{ 
                 borderRadius: '16px',
                 border: '1px solid rgba(0, 0, 0, 0.06)',
@@ -1322,7 +1577,7 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
               </Card>
             </Grid>
             
-            <Grid item xs={12} sm={6} md={3}>
+            <Grid item xs={12} sm={6} md={2.4}>
               <Card sx={{ 
                 borderRadius: '16px',
                 border: '1px solid rgba(0, 0, 0, 0.06)',
@@ -1345,7 +1600,7 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
                         lineHeight: 1.2,
                         mb: 0.5
                       }}>
-                        {stats.complianceRate}%
+                        {stats.returnedToWork}
                       </Typography>
                       <Typography sx={{ 
                         fontSize: '0.875rem',
@@ -1354,21 +1609,74 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
                         textTransform: 'uppercase',
                         letterSpacing: '0.05em'
                       }}>
-                        Compliance Rate
+                        Returned to Work
                       </Typography>
                     </Box>
                     <Box sx={{ 
                       width: 56, 
                       height: 56, 
                       borderRadius: '14px', 
-                      background: 'linear-gradient(135deg, #FF6B6B 0%, #E55555 100%)',
+                      background: 'linear-gradient(135deg, #10B981 0%, #059669 100%)',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
-                      boxShadow: '0 4px 12px rgba(255, 107, 107, 0.25), 0 2px 6px rgba(255, 107, 107, 0.15)',
+                      boxShadow: '0 4px 12px rgba(16, 185, 129, 0.25), 0 2px 6px rgba(16, 185, 129, 0.15)',
                       transition: 'all 0.2s ease'
                     }}>
                       <CheckCircle sx={{ fontSize: 24, color: 'white' }} />
+                    </Box>
+                  </Box>
+                </CardContent>
+              </Card>
+            </Grid>
+            
+            <Grid item xs={12} sm={6} md={2.4}>
+              <Card sx={{ 
+                borderRadius: '16px',
+                border: '1px solid rgba(0, 0, 0, 0.06)',
+                background: 'rgba(255, 255, 255, 0.95)',
+                backdropFilter: 'blur(20px)',
+                boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06)',
+                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                '&:hover': {
+                  transform: 'translateY(-4px)',
+                  boxShadow: '0 10px 25px rgba(0, 0, 0, 0.15), 0 4px 10px rgba(0, 0, 0, 0.09)'
+                }
+              }}>
+                <CardContent>
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <Box>
+                      <Typography sx={{ 
+                        fontSize: '1.75rem',
+                        fontWeight: 700,
+                        color: '#111827',
+                        lineHeight: 1.2,
+                        mb: 0.5
+                      }}>
+                        {stats.onRestrictedDuty}
+                      </Typography>
+                      <Typography sx={{ 
+                        fontSize: '0.875rem',
+                        fontWeight: 500,
+                        color: '#6b7280',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.05em'
+                      }}>
+                        On Restricted Duty
+                      </Typography>
+                    </Box>
+                    <Box sx={{ 
+                      width: 56, 
+                      height: 56, 
+                      borderRadius: '14px', 
+                      background: 'linear-gradient(135deg, #F59E0B 0%, #D97706 100%)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      boxShadow: '0 4px 12px rgba(245, 158, 11, 0.25), 0 2px 6px rgba(245, 158, 11, 0.15)',
+                      transition: 'all 0.2s ease'
+                    }}>
+                      <Warning sx={{ fontSize: 24, color: 'white' }} />
                     </Box>
                   </Box>
                 </CardContent>
@@ -1394,25 +1702,34 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
         }}>
           <CardContent sx={{ p: 0 }}>
             <Box sx={{ p: 3, borderBottom: '1px solid rgba(0, 0, 0, 0.08)' }}>
-              <Typography sx={{ 
-                fontSize: '1.125rem',
-                fontWeight: 600,
-                color: '#374151',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 2
-              }}>
-                <Warning sx={{ fontSize: '1.25rem', opacity: 0.7 }} />
-                Recent Incidents
-                <Typography component="span" sx={{ 
-                  fontSize: '0.875rem',
-                  fontWeight: 400,
-                  color: '#6b7280',
-                  opacity: 0.8
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+                <Typography sx={{ 
+                  fontSize: '1.125rem',
+                  fontWeight: 600,
+                  color: '#374151',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 2
                 }}>
-                  • {incidents.length} total records
+                  <Warning sx={{ fontSize: '1.25rem', opacity: 0.7 }} />
+                  Recent Incidents
+                  <Typography component="span" sx={{ 
+                    fontSize: '0.875rem',
+                    fontWeight: 400,
+                    color: '#6b7280',
+                    opacity: 0.8
+                  }}>
+                    • {incidentsPagination.total} total incidents
+                  </Typography>
                 </Typography>
-              </Typography>
+                
+                {/* Page info for mobile */}
+                <Box sx={{ display: { xs: 'block', md: 'none' } }}>
+                  <Typography variant="body2" color="text.secondary">
+                    Page {incidentsPagination.page} of {incidentsPagination.totalPages}
+                  </Typography>
+                </Box>
+              </Box>
             </Box>
             <TableContainer>
               <Table sx={{
@@ -1481,64 +1798,155 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
                       fontSize: '0.875rem',
                       textTransform: 'uppercase',
                       letterSpacing: '0.05em'
+                    }}>Return to Work</TableCell>
+                    <TableCell sx={{ 
+                      fontWeight: 600,
+                      color: '#374151',
+                      fontSize: '0.875rem',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.05em'
                     }}>Actions</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {incidents.map((incident: Incident) => (
-                    <TableRow 
-                      key={incident.id}
-                      sx={{
-                        cursor: 'pointer',
-                        transition: 'all 0.15s ease',
-                        '&:hover': {
-                          background: 'rgba(255, 107, 107, 0.06)',
-                          transform: 'scale(1.001)'
-                        }
-                      }}
-                    >
-                      <TableCell>{incident.incident_number || `INC-${incident.id.slice(-8)}`}</TableCell>
-                      <TableCell>
-                        {incident.incident_date ? new Date(incident.incident_date).toLocaleDateString() : 
-                         incident.created_at ? new Date(incident.created_at).toLocaleDateString() : 'N/A'}
-                      </TableCell>
-                      <TableCell>
-                        {incident.reported_by ? `${incident.reported_by.first_name} ${incident.reported_by.last_name}` : 'N/A'}
-                      </TableCell>
-                      <TableCell>{incident.incident_type || 'N/A'}</TableCell>
-                      <TableCell>
-                        <Chip
-                          label={incident.severity || 'unknown'}
-                          color={
-                            incident.severity === 'high' || incident.severity === 'lost_time' || incident.severity === 'fatality' ? 'error' :
-                            incident.severity === 'medium' || incident.severity === 'medical_treatment' ? 'warning' : 'success'
-                          }
-                          size="small"
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <Chip
-                          label={incident.status || 'reported'}
-                          color={incident.status === 'reported' ? 'info' : 'success'}
-                          size="small"
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <IconButton 
-                          size="small"
-                          onClick={() => {
-                            dispatch(setSelectedIncident(incident));
-                            dispatch(openDialog('incidentDetailsDialog' as any));
-                          }}
-                        >
-                          <Visibility />
-                        </IconButton>
+                  {incidentsLoading ? (
+                    // Loading skeleton rows
+                    Array.from({ length: incidentsPagination.limit }).map((_, index) => (
+                      <TableRow key={`loading-${index}`}>
+                        <TableCell>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <CircularProgress size={16} />
+                            <LinearProgress sx={{ flexGrow: 1, height: 4, borderRadius: 2 }} />
+                          </Box>
+                        </TableCell>
+                        <TableCell>
+                          <LinearProgress sx={{ height: 4, borderRadius: 2 }} />
+                        </TableCell>
+                        <TableCell>
+                          <LinearProgress sx={{ height: 4, borderRadius: 2 }} />
+                        </TableCell>
+                        <TableCell>
+                          <LinearProgress sx={{ height: 4, borderRadius: 2 }} />
+                        </TableCell>
+                        <TableCell>
+                          <LinearProgress sx={{ height: 4, borderRadius: 2 }} />
+                        </TableCell>
+                        <TableCell>
+                          <LinearProgress sx={{ height: 4, borderRadius: 2 }} />
+                        </TableCell>
+                        <TableCell>
+                          <LinearProgress sx={{ height: 4, borderRadius: 2 }} />
+                        </TableCell>
+                        <TableCell>
+                          <CircularProgress size={20} />
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  ) : incidents.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={8} sx={{ textAlign: 'center', py: 4 }}>
+                        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                          <Warning sx={{ fontSize: 48, color: 'text.secondary', opacity: 0.5 }} />
+                          <Typography variant="h6" color="text.secondary">
+                            No incidents found
+                          </Typography>
+                          <Typography variant="body2" color="text.secondary">
+                            No incidents have been reported yet.
+                          </Typography>
+                        </Box>
                       </TableCell>
                     </TableRow>
-                  ))}
+                  ) : (
+                    incidents.map((incident: Incident) => (
+                      <IncidentRow 
+                        key={incident.id}
+                        incident={incident}
+                        onViewDetails={handleViewDetails}
+                      />
+                    ))
+                  )}
                 </TableBody>
               </Table>
             </TableContainer>
+            
+            {/* Pagination Controls */}
+            {incidentsPagination.totalPages > 1 && (
+              <Box sx={{ 
+                p: 3, 
+                borderTop: '1px solid rgba(0, 0, 0, 0.08)',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: 2
+              }}>
+                {/* Results Info */}
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                  <Typography variant="body2" color="text.secondary">
+                    Showing {((incidentsPagination.page - 1) * incidentsPagination.limit) + 1} to{' '}
+                    {Math.min(incidentsPagination.page * incidentsPagination.limit, incidentsPagination.total)} of{' '}
+                    {incidentsPagination.total} incidents
+                  </Typography>
+                  
+                  {/* Items per page selector */}
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Typography variant="body2" color="text.secondary">
+                      Show:
+                    </Typography>
+                    <FormControl size="small" sx={{ minWidth: 80 }}>
+                      <Select
+                        value={incidentsPagination.limit}
+                        onChange={handleLimitChange}
+                        displayEmpty
+                        sx={{ 
+                          '& .MuiSelect-select': { 
+                            py: 0.5,
+                            fontSize: '0.875rem'
+                          }
+                        }}
+                      >
+                        <MenuItem value={5}>5</MenuItem>
+                        <MenuItem value={10}>10</MenuItem>
+                        <MenuItem value={25}>25</MenuItem>
+                        <MenuItem value={50}>50</MenuItem>
+                      </Select>
+                    </FormControl>
+                    <Typography variant="body2" color="text.secondary">
+                      per page
+                    </Typography>
+                  </Box>
+                </Box>
+
+                {/* Pagination Component */}
+                <Stack spacing={2}>
+                  <Pagination
+                    count={incidentsPagination.totalPages}
+                    page={incidentsPagination.page}
+                    onChange={handlePageChange}
+                    color="primary"
+                    size="medium"
+                    showFirstButton
+                    showLastButton
+                    sx={{
+                      '& .MuiPaginationItem-root': {
+                        fontSize: '0.875rem',
+                        fontWeight: 500,
+                        '&.Mui-selected': {
+                          background: 'linear-gradient(135deg, #7B68EE 0%, #5A4FCF 100%)',
+                          color: 'white',
+                          '&:hover': {
+                            background: 'linear-gradient(135deg, #5A4FCF 0%, #4C46B8 100%)',
+                          }
+                        },
+                        '&:hover': {
+                          background: 'rgba(123, 104, 238, 0.08)',
+                        }
+                      }
+                    }}
+                  />
+                </Stack>
+              </Box>
+            )}
           </CardContent>
         </Card>
 
@@ -1569,9 +1977,6 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
                     </MenuItem>
                     {teams.length > 0 ? (
                       teams.map((team: string, index: number) => {
-                        // Debug log to see actual team structure
-                        console.log('Team data:', team);
-                        
                         return (
                           <MenuItem key={`team-${index}`} value={team}>
                             <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', width: '100%' }}>
@@ -1617,17 +2022,30 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
                     onChange={(e) => handleFormChange('worker', e.target.value)}
                     label="Unselected Worker *"
                   >
-                    {console.log('🔍 Rendering dropdown with teamMembers:', teamMembers)}
                     {teamMembers.length > 0 ? (
                       teamMembers.map((member: any) => {
-                        console.log('🔍 Rendering MenuItem for:', member);
                         return (
                           <MenuItem key={member.id} value={member.id}>
                             <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', width: '100%' }}>
                               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
-                                <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                                  {member.first_name} {member.last_name}
-                                </Typography>
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                  <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                                    {member.first_name} {member.last_name}
+                                  </Typography>
+                                  {member.hasOpenCase && (
+                                    <Chip
+                                      label="Open Case"
+                                      size="small"
+                                      color="error"
+                                      sx={{ 
+                                        fontSize: '0.625rem', 
+                                        height: 18, 
+                                        fontWeight: 'bold',
+                                        backgroundColor: '#ef4444'
+                                      }}
+                                    />
+                                  )}
+                                </Box>
                                 <Chip
                                   label={member.reason === 'sick' ? 'Sick' : 
                                          member.reason === 'not_rostered' ? 'Not Rostered' :
@@ -1650,6 +2068,11 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
                               <Typography variant="caption" color="text.secondary">
                                 {member.email}
                               </Typography>
+                              {member.hasOpenCase && (
+                                <Typography variant="caption" sx={{ color: '#ef4444', fontWeight: 'bold', display: 'block', mt: 0.5 }}>
+                                  ⚠️ {member.warningMessage}
+                                </Typography>
+                              )}
                               {member.notes && member.notes !== 'No notes provided' && (
                                 <Typography variant="caption" sx={{ color: '#6b7280', fontStyle: 'italic', display: 'block', mt: 0.5 }}>
                                   Note: {member.notes}
@@ -1668,108 +2091,17 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
                 </FormControl>
                 {teamMembers.length > 0 && (
                   <Alert severity="info" sx={{ mt: 1, py: 0.5 }}>
-                    Showing {teamMembers.length} unselected worker{teamMembers.length !== 1 ? 's' : ''} from unselected_workers table
-                    <br />
-                    <Typography variant="caption" sx={{ fontFamily: 'monospace', fontSize: '0.7rem' }}>
-                      Debug: {JSON.stringify(teamMembers.slice(0, 2), null, 2)}
-                    </Typography>
+                    {teamMembers.length} unselected worker{teamMembers.length !== 1 ? 's' : ''} available for incident reporting
+                    {teamMembers.filter((m: any) => m.hasOpenCase).length > 0 && (
+                      <Typography variant="caption" sx={{ fontSize: '0.7rem', display: 'block', mt: 0.5 }}>
+                        ⚠️ {teamMembers.filter((m: any) => m.hasOpenCase).length} worker{teamMembers.filter((m: any) => m.hasOpenCase).length !== 1 ? 's' : ''} have open cases
+                      </Typography>
+                    )}
                   </Alert>
                 )}
                 {selectedTeam && teamMembers.length === 0 && (
                   <Alert severity="warning" sx={{ mt: 1, py: 0.5 }}>
-                    No unselected workers found in unselected_workers table for this team.
-                    <br />
-                    <Button 
-                      size="small" 
-                      onClick={async () => {
-                        console.log('🔄 Refreshing token...');
-                        try {
-                          // Get fresh token from Supabase
-                          const { data: { session }, error } = await dataClient.auth.getSession();
-                          if (error) {
-                            console.error('❌ Error getting session:', error);
-                            return;
-                          }
-                          
-                          if (session?.access_token) {
-                            localStorage.setItem('token', session.access_token);
-                            console.log('✅ Token refreshed successfully');
-                            console.log('🔍 New token:', session.access_token.substring(0, 50) + '...');
-                          } else {
-                            console.error('❌ No session found');
-                          }
-                        } catch (err) {
-                          console.error('❌ Token refresh error:', err);
-                        }
-                      }}
-                      sx={{ mt: 1, mr: 1 }}
-                    >
-                      Refresh Token
-                    </Button>
-                    <Button 
-                      size="small" 
-                      onClick={async () => {
-                        console.log('🔍 Testing API call manually...');
-                        console.log('🔍 Current user:', user);
-                        console.log('🔍 User role:', user?.role);
-                        console.log('🔍 Token:', localStorage.getItem('token'));
-                        console.log('🔍 Token length:', localStorage.getItem('token')?.length);
-                        console.log('🔍 Team Leader ID:', selectedTeamLeaderId);
-                        
-                        // Check if token exists and is valid format
-                        const token = localStorage.getItem('token');
-                        if (!token) {
-                          console.error('❌ No token found in localStorage');
-                          return;
-                        }
-                        
-                        // Try to decode token to check if it's expired
-                        try {
-                          const tokenParts = token.split('.');
-                          if (tokenParts.length === 3) {
-                            const payload = JSON.parse(atob(tokenParts[1]));
-                            console.log('🔍 Token payload:', payload);
-                            console.log('🔍 Token expires at:', new Date(payload.exp * 1000));
-                            console.log('🔍 Current time:', new Date());
-                            console.log('🔍 Token expired?', new Date() > new Date(payload.exp * 1000));
-                          }
-                        } catch (tokenError) {
-                          console.error('❌ Token decode error:', tokenError);
-                        }
-                        
-                        try {
-                          const response = await fetch(`http://localhost:5001/api/work-readiness-assignments/unselected?teamLeaderId=${selectedTeamLeaderId}`, {
-                            headers: {
-                              'Authorization': `Bearer ${localStorage.getItem('token')}`,
-                              'Content-Type': 'application/json'
-                            }
-                          });
-                          
-                          console.log('🔍 Response status:', response.status);
-                          console.log('🔍 Response headers:', Object.fromEntries(response.headers.entries()));
-                          
-                          const responseText = await response.text();
-                          console.log('🔍 Response text (first 500 chars):', responseText.substring(0, 500));
-                          
-                          if (response.ok) {
-                            try {
-                              const data = JSON.parse(responseText);
-                              console.log('🔍 Manual API response:', data);
-                            } catch (parseError) {
-                              console.error('🔍 JSON Parse Error:', parseError);
-                              console.log('🔍 Full response text:', responseText);
-                            }
-                          } else {
-                            console.error('🔍 API Error:', response.status, responseText);
-                          }
-                        } catch (err) {
-                          console.error('🔍 Manual API error:', err);
-                        }
-                      }}
-                      sx={{ mt: 1 }}
-                    >
-                      Test API Call
-                    </Button>
+                    No unselected workers found for this team.
                   </Alert>
                 )}
               </Box>
@@ -2010,7 +2342,7 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
                       </Typography>
                     </Grid>
                     <Grid item xs={12} sm={6}>
-                      <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
+                      <Box sx={{ display: 'flex', gap: 1, mb: 1, flexWrap: 'wrap' }}>
                         <Chip
                           label={selectedIncident.severity || 'unknown'}
                           color={
@@ -2023,6 +2355,12 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
                           label={selectedIncident.status || 'reported'}
                           color={selectedIncident.status === 'reported' ? 'info' : 'success'}
                           size="small"
+                        />
+                        <Chip
+                          label={selectedIncident.return_to_work ? 'Returned to Work' : 'On Restricted Duty'}
+                          color={selectedIncident.return_to_work ? 'success' : 'warning'}
+                          size="small"
+                          icon={selectedIncident.return_to_work ? <CheckCircle /> : <Warning />}
                         />
                       </Box>
                       <Typography variant="body2" color="text.secondary">
@@ -2111,6 +2449,43 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
                   </Grid>
                 </Box>
 
+                {/* Return to Work Status */}
+                <Box sx={{ mb: 3 }}>
+                  <Typography variant="h6" gutterBottom sx={{ color: 'text.primary', mb: 2 }}>
+                    Work Status
+                  </Typography>
+                  <Box sx={{ 
+                    bgcolor: selectedIncident.return_to_work ? 'success.50' : 'warning.50', 
+                    p: 3, 
+                    borderRadius: 2,
+                    border: '1px solid',
+                    borderColor: selectedIncident.return_to_work ? 'success.200' : 'warning.200',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 2
+                  }}>
+                    {selectedIncident.return_to_work ? (
+                      <CheckCircle sx={{ fontSize: 32, color: 'success.main' }} />
+                    ) : (
+                      <Warning sx={{ fontSize: 32, color: 'warning.main' }} />
+                    )}
+                    <Box>
+                      <Typography variant="h6" sx={{ 
+                        color: selectedIncident.return_to_work ? 'success.main' : 'warning.main',
+                        fontWeight: 600,
+                        mb: 0.5
+                      }}>
+                        {selectedIncident.return_to_work ? 'Worker Has Returned to Work' : 'Worker on Restricted Duty'}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        {selectedIncident.return_to_work 
+                          ? 'The worker has been cleared to return to full work duties.'
+                          : 'The worker is currently on restricted duty due to this incident.'}
+                      </Typography>
+                    </Box>
+                  </Box>
+                </Box>
+
                 {/* Additional Information */}
                 <Box>
                   <Typography variant="h6" gutterBottom sx={{ color: 'text.primary', mb: 2 }}>
@@ -2127,9 +2502,14 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
                       <strong>Created:</strong> {selectedIncident.created_at ? 
                         new Date(selectedIncident.created_at).toLocaleString() : 'N/A'}
                     </Typography>
-                    <Typography variant="body2">
+                    <Typography variant="body2" sx={{ mb: 1 }}>
                       <strong>Incident ID:</strong> {selectedIncident.id}
                     </Typography>
+                    {selectedIncident.case_id && (
+                      <Typography variant="body2">
+                        <strong>Related Case ID:</strong> {selectedIncident.case_id}
+                      </Typography>
+                    )}
                   </Box>
                 </Box>
               </Box>
@@ -2159,4 +2539,8 @@ const SiteSupervisorDashboardRedux: React.FC = () => {
   );
 };
 
-export default SiteSupervisorDashboardRedux;
+// Memoized component for better performance
+const MemoizedSiteSupervisorDashboardRedux = memo(SiteSupervisorDashboardRedux);
+
+export default MemoizedSiteSupervisorDashboardRedux;
+

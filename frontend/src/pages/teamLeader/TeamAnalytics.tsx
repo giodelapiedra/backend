@@ -1,11 +1,10 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../../contexts/AuthContext.supabase';
 import { SupabaseAPI } from '../../utils/supabaseApi';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import Toast from '../../components/Toast';
 import LayoutWithSidebar from '../../components/LayoutWithSidebar';
-import { Box, Card, CardContent, Typography, Button, ButtonGroup, useTheme, useMediaQuery } from '@mui/material';
-// TrendChart component moved inline below
+import { Box, Typography, Button } from '@mui/material';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -16,22 +15,9 @@ import {
   Tooltip,
   Legend,
   ArcElement,
-  BarElement,
   Filler
 } from 'chart.js';
-import { Line, Pie, Bar } from 'react-chartjs-2';
-import { 
-  AreaChart, 
-  Area, 
-  LineChart as RechartsLineChart, 
-  Line as RechartsLine, 
-  XAxis, 
-  YAxis, 
-  CartesianGrid, 
-  Tooltip as RechartsTooltip, 
-  ResponsiveContainer 
-} from 'recharts';
-import { ShowChart, Timeline } from '@mui/icons-material';
+import { Line, Pie } from 'react-chartjs-2';
 
 ChartJS.register(
   CategoryScale,
@@ -42,643 +28,10 @@ ChartJS.register(
   Tooltip,
   Legend,
   ArcElement,
-  BarElement,
   Filler
 );
 
-// Inline TrendChart Component
-interface TrendChartProps {
-  title: string;
-  data: Array<{
-    date: string;
-    fitForWork: number;
-    minorConcernsFitForWork: number;
-    notFitForWork: number;
-    total?: number;
-  }>;
-  isLoading?: boolean;
-  height?: number;
-  externalTimePeriod?: TimePeriod;
-  onTimePeriodChange?: (period: TimePeriod) => void;
-}
-
-type ChartType = 'area' | 'line';
-type TimePeriod = 'week' | 'month' | 'year';
-
-const TrendChart: React.FC<TrendChartProps> = ({
-  title,
-  data,
-  isLoading = false,
-  height = 300,
-  externalTimePeriod,
-  onTimePeriodChange
-}) => {
-  const theme = useTheme();
-  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
-  const [chartType, setChartType] = useState<ChartType>('area');
-  const [chartKey, setChartKey] = useState(0);
-  
-  // Use external time period if provided, otherwise use internal state
-  const [internalTimePeriod, setInternalTimePeriod] = useState<TimePeriod>('week');
-  const timePeriod = externalTimePeriod || internalTimePeriod;
-  
-  // Force chart re-render when switching between mobile and desktop
-  useEffect(() => {
-    setChartKey(prev => prev + 1);
-  }, [isMobile]);
-  
-  const setTimePeriod = (period: TimePeriod) => {
-    if (onTimePeriodChange) {
-      onTimePeriodChange(period);
-    } else {
-      setInternalTimePeriod(period);
-    }
-  };
-
-  // Process data based on time period (optimized)
-  // Backend already filters data by date range, so we just format it here
-  const processedData = useMemo(() => {
-    if (!data || !data.length) {
-      console.log('TrendChart - No data to process');
-      return [];
-    }
-
-    console.log('TrendChart - Processing data:', {
-      timePeriod,
-      dataLength: data.length,
-      firstDate: data[0]?.date,
-      lastDate: data[data.length - 1]?.date,
-      sampleData: data.slice(0, 3)
-    });
-
-    // Format dates for display based on time period
-    return data.map(item => {
-      try {
-        const date = new Date(item.date);
-        if (isNaN(date.getTime())) {
-          console.error('Invalid date:', item.date);
-          return item;
-        }
-
-        let formattedDate = '';
-        
-        switch (timePeriod) {
-          case 'week':
-            // Show as "Mon 15" format
-            formattedDate = date.toLocaleDateString('en-US', { weekday: 'short', day: 'numeric' });
-            break;
-          case 'month':
-            // Show as "Oct 15" format
-            formattedDate = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-            break;
-          case 'year':
-            // Show as "Jan '24" format
-            formattedDate = date.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
-            break;
-          default:
-            formattedDate = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-        }
-        
-        return {
-          ...item,
-          date: formattedDate,
-          fitForWork: item.fitForWork || 0,
-          minorConcernsFitForWork: item.minorConcernsFitForWork || 0,
-          notFitForWork: item.notFitForWork || 0
-        };
-      } catch (error) {
-        console.error('Error processing data item:', error, item);
-        return item;
-      }
-    });
-  }, [data, timePeriod]);
-
-  // Custom tooltip
-  const CustomTooltip = ({ active, payload, label }: any) => {
-    if (active && payload && payload.length) {
-      return (
-        <Box
-          sx={{
-            backgroundColor: 'white',
-            padding: 2,
-            borderRadius: 2,
-            boxShadow: '0 8px 32px rgba(0, 0, 0, 0.12)',
-            border: '1px solid rgba(0, 0, 0, 0.08)'
-          }}
-        >
-          <Typography
-            sx={{
-              fontWeight: 600,
-              fontSize: '0.875rem',
-              color: '#1e293b',
-              mb: 1,
-              fontFamily: 'Inter, system-ui, sans-serif'
-            }}
-          >
-            {label}
-          </Typography>
-          {payload.map((entry: any, index: number) => (
-            <Box key={index} sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
-              <Box
-                sx={{
-                  width: 12,
-                  height: 12,
-                  borderRadius: '50%',
-                  backgroundColor: entry.color
-                }}
-              />
-              <Typography
-                sx={{
-                  fontSize: '0.75rem',
-                  color: '#64748b',
-                  fontFamily: 'Inter, system-ui, sans-serif'
-                }}
-              >
-                {entry.name}: {entry.value}
-              </Typography>
-            </Box>
-          ))}
-        </Box>
-      );
-    }
-    return null;
-  };
-
-  const chartColors = {
-    fitForWork: '#10b981',
-    minorConcernsFitForWork: '#f59e0b',
-    notFitForWork: '#ef4444'
-  };
-
-  const renderChart = () => {
-    const mobileHeight = 300; // Increased height for mobile
-    const chartHeight = isMobile ? mobileHeight : height;
-    
-    console.log('TrendChart - renderChart called:', {
-      isMobile,
-      chartHeight,
-      dataLength: processedData?.length || 0,
-      isLoading,
-      data: processedData
-    });
-    
-    if (isLoading) {
-      return (
-        <Box
-          sx={{
-            height: chartHeight,
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            backgroundColor: '#fafafa',
-            borderRadius: 2,
-            animation: 'pulse 2s infinite',
-            gap: 2
-          }}
-        >
-          <Box sx={{ 
-            width: 60, 
-            height: 60, 
-            borderRadius: '50%', 
-            backgroundColor: '#f5f5f5',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            animation: 'spin 1s linear infinite'
-          }}>
-            <ShowChart sx={{ fontSize: 30, color: '#6366f1' }} />
-          </Box>
-          <Typography sx={{ 
-            color: '#737373', 
-            fontSize: { xs: '0.875rem', md: '1rem' },
-            fontWeight: 500
-          }}>
-            Loading chart data...
-          </Typography>
-        </Box>
-      );
-    }
-
-    if (!processedData || processedData.length === 0) {
-      console.log('TrendChart - No data available');
-      return (
-        <Box
-          sx={{
-            height: chartHeight,
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            backgroundColor: '#fafafa',
-            borderRadius: 2,
-            gap: 2
-          }}
-        >
-          <Box sx={{ 
-            width: 80, 
-            height: 80, 
-            borderRadius: '50%', 
-            backgroundColor: '#f5f5f5',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center'
-          }}>
-            <ShowChart sx={{ fontSize: 40, color: '#a3a3a3' }} />
-          </Box>
-          <Typography sx={{ color: '#737373', fontSize: { xs: '0.875rem', md: '1rem' }, fontWeight: 500 }}>
-            No data available for this period
-          </Typography>
-        </Box>
-      );
-    }
-
-    // Calculate dynamic width for mobile to ensure all data is visible
-    const dataLength = processedData.length;
-    const minWidthPerPoint = 80; // Increased width per data point for better visibility
-    const calculatedWidth = isMobile && dataLength > 4 ? dataLength * minWidthPerPoint : '100%';
-    
-    // Adjust margins for mobile to ensure chart is visible
-    const chartMargin = isMobile 
-      ? { top: 10, right: 20, left: 10, bottom: 50 } // Better margins for mobile
-      : { top: 10, right: 30, left: 0, bottom: 0 };
-
-    const chartContent = chartType === 'area' ? (
-        <ResponsiveContainer width={calculatedWidth as any} height={chartHeight} key={`area-${chartKey}`}>
-          <AreaChart 
-            data={processedData} 
-            margin={chartMargin}
-          >
-            <defs>
-              <linearGradient id="fitGradient" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#10b981" stopOpacity={0.8}/>
-                <stop offset="95%" stopColor="#10b981" stopOpacity={0.1}/>
-              </linearGradient>
-              <linearGradient id="minorGradient" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.8}/>
-                <stop offset="95%" stopColor="#f59e0b" stopOpacity={0.1}/>
-              </linearGradient>
-              <linearGradient id="notFitGradient" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#ef4444" stopOpacity={0.8}/>
-                <stop offset="95%" stopColor="#ef4444" stopOpacity={0.1}/>
-              </linearGradient>
-            </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e5e5e5" />
-            <XAxis 
-              dataKey="date" 
-              axisLine={false}
-              tickLine={false}
-              tick={{ 
-                fontSize: isMobile ? 10 : 12, 
-                fill: '#737373',
-                width: isMobile ? 40 : 'auto',
-                dy: isMobile ? 15 : 0
-              }}
-              angle={isMobile ? -45 : 0}
-              textAnchor={isMobile ? 'end' : 'middle'}
-              height={isMobile ? 100 : 30}
-              interval={0}
-              minTickGap={5}
-            />
-            <YAxis 
-              axisLine={false}
-              tickLine={false}
-              tick={{ fontSize: isMobile ? 10 : 12, fill: '#737373' }}
-              width={isMobile ? 40 : 60}
-              tickCount={5}
-            />
-            <RechartsTooltip content={<CustomTooltip />} />
-            <Area
-              type="monotone"
-              dataKey="fitForWork"
-              name="Fit for Work"
-              stackId="1"
-              stroke={chartColors.fitForWork}
-              strokeWidth={2}
-              fillOpacity={1}
-              fill="url(#fitGradient)"
-            />
-            <Area
-              type="monotone"
-              dataKey="minorConcernsFitForWork"
-              name="Minor Concerns"
-              stackId="1"
-              stroke={chartColors.minorConcernsFitForWork}
-              strokeWidth={2}
-              fillOpacity={1}
-              fill="url(#minorGradient)"
-            />
-            <Area
-              type="monotone"
-              dataKey="notFitForWork"
-              name="Not Fit"
-              stackId="1"
-              stroke={chartColors.notFitForWork}
-              strokeWidth={2}
-              fillOpacity={1}
-              fill="url(#notFitGradient)"
-            />
-          </AreaChart>
-        </ResponsiveContainer>
-    ) : (
-        <ResponsiveContainer width={calculatedWidth as any} height={chartHeight} key={`line-${chartKey}`}>
-          <RechartsLineChart data={processedData} margin={chartMargin}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e5e5e5" />
-            <XAxis 
-              dataKey="date" 
-              axisLine={false}
-              tickLine={false}
-              tick={{ 
-                fontSize: isMobile ? 10 : 12, 
-                fill: '#737373',
-                width: isMobile ? 40 : 'auto',
-                dy: isMobile ? 15 : 0
-              }}
-              angle={isMobile ? -45 : 0}
-              textAnchor={isMobile ? 'end' : 'middle'}
-              height={isMobile ? 100 : 30}
-              interval={0}
-              minTickGap={5}
-            />
-            <YAxis 
-              axisLine={false}
-              tickLine={false}
-              tick={{ fontSize: isMobile ? 10 : 12, fill: '#737373' }}
-              width={isMobile ? 40 : 60}
-              tickCount={5}
-            />
-            <RechartsTooltip content={<CustomTooltip />} />
-            <RechartsLine
-              type="monotone"
-              dataKey="fitForWork"
-              name="Fit for Work"
-              stroke={chartColors.fitForWork}
-              strokeWidth={isMobile ? 2 : 3}
-              dot={{ fill: chartColors.fitForWork, strokeWidth: 2, r: isMobile ? 3 : 4 }}
-              activeDot={{ r: isMobile ? 5 : 6, stroke: chartColors.fitForWork, strokeWidth: 2 }}
-            />
-            <RechartsLine
-              type="monotone"
-              dataKey="minorConcernsFitForWork"
-              name="Minor Concerns"
-              stroke={chartColors.minorConcernsFitForWork}
-              strokeWidth={isMobile ? 2 : 3}
-              dot={{ fill: chartColors.minorConcernsFitForWork, strokeWidth: 2, r: isMobile ? 3 : 4 }}
-              activeDot={{ r: isMobile ? 5 : 6, stroke: chartColors.minorConcernsFitForWork, strokeWidth: 2 }}
-            />
-            <RechartsLine
-              type="monotone"
-              dataKey="notFitForWork"
-              name="Not Fit"
-              stroke={chartColors.notFitForWork}
-              strokeWidth={isMobile ? 2 : 3}
-              dot={{ fill: chartColors.notFitForWork, strokeWidth: 2, r: isMobile ? 3 : 4 }}
-              activeDot={{ r: isMobile ? 5 : 6, stroke: chartColors.notFitForWork, strokeWidth: 2 }}
-            />
-          </RechartsLineChart>
-        </ResponsiveContainer>
-    );
-
-    // Wrap in scrollable container for mobile when there are many data points
-    if (isMobile && dataLength > 4) {
-      return (
-        <Box sx={{ 
-          overflowX: 'auto',
-          overflowY: 'hidden',
-          width: '100%',
-          height: chartHeight, // Ensure the container has a height
-          WebkitOverflowScrolling: 'touch', // Smooth scrolling on iOS
-          '&::-webkit-scrollbar': {
-            height: '6px',
-          },
-          '&::-webkit-scrollbar-track': {
-            backgroundColor: '#f1f1f1',
-            borderRadius: '10px',
-          },
-          '&::-webkit-scrollbar-thumb': {
-            backgroundColor: '#888',
-            borderRadius: '10px',
-            '&:hover': {
-              backgroundColor: '#555',
-            },
-          },
-        }}>
-          {chartContent}
-        </Box>
-      );
-    }
-
-    return chartContent;
-  };
-
-  return (
-    <>
-      <style>{`
-        @keyframes pulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.7; }
-        }
-        @keyframes spin {
-          0% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
-        }
-      `}</style>
-      <Card
-        sx={{
-          borderRadius: { xs: '16px', md: 3 },
-          boxShadow: '0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.02)',
-          border: '1px solid #e5e5e5',
-          height: '100%',
-          backgroundColor: '#ffffff',
-          overflow: 'visible', // Important for chart visibility
-          '& .recharts-wrapper': {
-            // Fix for recharts container
-            overflow: 'visible !important'
-          }
-        }}
-      >
-        <CardContent sx={{ 
-          p: { xs: 2, md: 3 },
-          overflow: 'visible' // Important for chart visibility
-        }}>
-          {/* Header with title */}
-          <Box sx={{ mb: { xs: 2, md: 3 } }}>
-            <Typography
-              variant="h6"
-              sx={{
-                fontWeight: 700,
-                fontSize: { xs: '1rem', md: '1.25rem' },
-                color: '#171717',
-                mb: 2
-              }}
-            >
-              {title}
-            </Typography>
-            
-            {/* Controls - Stacked on mobile */}
-            <Box sx={{ 
-              display: 'flex', 
-              flexDirection: { xs: 'column', md: 'row' },
-              gap: { xs: 1.5, md: 2 },
-              alignItems: { xs: 'stretch', md: 'center' }
-            }}>
-              {/* Chart type toggle */}
-              <ButtonGroup size="small" variant="outlined" fullWidth sx={{ display: { xs: 'flex', md: 'inline-flex' } }}>
-                <Button
-                  onClick={() => setChartType('area')}
-                  sx={{
-                    backgroundColor: chartType === 'area' ? '#6366f1' : 'transparent',
-                    color: chartType === 'area' ? 'white' : '#737373',
-                    borderRadius: '10px',
-                    px: { xs: 1.5, md: 2 },
-                    py: 0.75,
-                    fontSize: { xs: '0.75rem', md: '0.8125rem' },
-                    fontWeight: 600,
-                    borderColor: '#e5e5e5',
-                    flex: { xs: 1, md: 'initial' },
-                    '&:hover': {
-                      backgroundColor: chartType === 'area' ? '#4f46e5' : '#f5f5f5',
-                      borderColor: chartType === 'area' ? '#4f46e5' : '#d4d4d4'
-                    }
-                  }}
-                >
-                  <Timeline sx={{ fontSize: { xs: 14, md: 16 }, mr: 0.5 }} />
-                  Area
-                </Button>
-                <Button
-                  onClick={() => setChartType('line')}
-                  sx={{
-                    backgroundColor: chartType === 'line' ? '#6366f1' : 'transparent',
-                    color: chartType === 'line' ? 'white' : '#737373',
-                    borderRadius: '10px',
-                    px: { xs: 1.5, md: 2 },
-                    py: 0.75,
-                    fontSize: { xs: '0.75rem', md: '0.8125rem' },
-                    fontWeight: 600,
-                    borderColor: '#e5e5e5',
-                    flex: { xs: 1, md: 'initial' },
-                    '&:hover': {
-                      backgroundColor: chartType === 'line' ? '#4f46e5' : '#f5f5f5',
-                      borderColor: chartType === 'line' ? '#4f46e5' : '#d4d4d4'
-                    }
-                  }}
-                >
-                  <ShowChart sx={{ fontSize: { xs: 14, md: 16 }, mr: 0.5 }} />
-                  Line
-                </Button>
-              </ButtonGroup>
-
-              {/* Time period toggle */}
-              <ButtonGroup size="small" variant="outlined" fullWidth sx={{ display: { xs: 'flex', md: 'inline-flex' } }}>
-                {(['week', 'month', 'year'] as TimePeriod[]).map((period) => (
-                  <Button
-                    key={period}
-                    onClick={() => setTimePeriod(period)}
-                    sx={{
-                      backgroundColor: timePeriod === period ? '#6366f1' : 'transparent',
-                      color: timePeriod === period ? 'white' : '#737373',
-                      borderRadius: '10px',
-                      px: { xs: 1.5, md: 2 },
-                      py: 0.75,
-                      fontSize: { xs: '0.75rem', md: '0.8125rem' },
-                      fontWeight: 600,
-                      textTransform: 'capitalize',
-                      borderColor: '#e5e5e5',
-                      flex: { xs: 1, md: 'initial' },
-                      '&:hover': {
-                        backgroundColor: timePeriod === period ? '#4f46e5' : '#f5f5f5',
-                        borderColor: timePeriod === period ? '#4f46e5' : '#d4d4d4'
-                      }
-                    }}
-                  >
-                    {period}
-                  </Button>
-                ))}
-              </ButtonGroup>
-            </Box>
-          </Box>
-
-          {/* Chart legend */}
-          <Box sx={{ 
-            display: 'flex', 
-            flexDirection: { xs: 'column', sm: 'row' },
-            gap: { xs: 1, sm: 3 }, 
-            mb: { xs: 2, md: 2 }, 
-            justifyContent: { xs: 'flex-start', sm: 'center' }
-          }}>
-            {Object.entries({
-              fitForWork: 'Fit for Work',
-              minorConcernsFitForWork: 'Minor Concerns',
-              notFitForWork: 'Not Fit'
-            }).map(([key, label]) => (
-              <Box key={key} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Box
-                  sx={{
-                    width: 12,
-                    height: 12,
-                    borderRadius: '50%',
-                    backgroundColor: chartColors[key as keyof typeof chartColors]
-                  }}
-                />
-                <Typography
-                  sx={{
-                    fontSize: { xs: '0.75rem', md: '0.8125rem' },
-                    color: '#737373',
-                    fontWeight: 500,
-                  }}
-                >
-                  {label}
-                </Typography>
-              </Box>
-            ))}
-          </Box>
-
-          {/* Chart */}
-          <Box sx={{ 
-            mt: { xs: 2, md: 2 }, 
-            height: { xs: 300, md: height },
-            width: '100%',
-            overflow: 'visible'
-          }}>
-            {renderChart()}
-          </Box>
-        </CardContent>
-      </Card>
-    </>
-  );
-};
-
-// Custom gradient plugin
-const gradientPlugin = {
-  id: 'gradient',
-  beforeDraw: (chart: any) => {
-    const { ctx, chartArea } = chart;
-    if (!chartArea) return;
-
-    const dataset = chart.data.datasets[0];
-    if (!dataset || !dataset.fill) return;
-
-    const gradient = ctx.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
-    gradient.addColorStop(0, 'rgba(147, 51, 234, 0.4)');
-    gradient.addColorStop(0.5, 'rgba(147, 51, 234, 0.2)');
-    gradient.addColorStop(1, 'rgba(147, 51, 234, 0.05)');
-    
-    dataset.backgroundColor = gradient;
-  }
-};
-
-// Register the plugin
-ChartJS.register(gradientPlugin);
-
-// Type alias for trend data items
-type TrendDataItem = {
-  date: string;
-  notFitForWork: number;
-  minorConcernsFitForWork: number;
-  fitForWork: number;
-  total: number;
-};
-
+// Type definitions
 interface AnalyticsData {
   teamLeader: {
     id: string;
@@ -697,14 +50,10 @@ interface AnalyticsData {
         pending: number;
         overdue: number;
         cancelled: number;
-        notStarted?: number;
         completedPercentage: number;
         pendingPercentage: number;
         overduePercentage: number;
         cancelledPercentage: number;
-        notStartedPercentage: number;
-        byStatus: any[];
-        monthlyAssessments: any[];
       };
       todayWorkReadinessStats: {
         completed: number;
@@ -715,458 +64,192 @@ interface AnalyticsData {
       todayLogins: number;
       weeklyLogins: number;
       monthlyLogins: number;
-      dailyBreakdown?: Array<{
+      dailyBreakdown: Array<{
         date: string;
         count: number;
       }>;
     };
-    teamPerformance: Array<{
-    memberName: string;
-      email: string;
-      role: string;
-      team: string;
-      lastLogin: string;
-      isActive: boolean;
-      workReadinessStatus: string;
-      activityLevel: number;
-      loggedInToday: boolean;
-      recentCheckIns: number;
-      recentAssessments: number;
-      completedAssessments: number;
-    }>;
-    readinessTrendData: TrendDataItem[];
     complianceRate: number;
     activityRate: number;
   };
 }
 
-// Modern color palette for better visual design
+// Minimal white aesthetic color system - Clean & Professional
 const COLORS = {
-  primary: {
-    main: '#6366f1', // Indigo - more modern than blue
-    light: '#818cf8',
-    dark: '#4f46e5',
-    bg: 'rgba(99, 102, 241, 0.08)',
-  },
-  success: {
-    main: '#10b981', // Emerald - fresher than green
-    light: '#34d399',
-    dark: '#059669',
-    bg: 'rgba(16, 185, 129, 0.08)',
-  },
-  warning: {
-    main: '#f59e0b', // Amber
-    light: '#fbbf24',
-    dark: '#d97706',
-    bg: 'rgba(245, 158, 11, 0.08)',
-  },
-  error: {
-    main: '#ef4444', // Red
-    light: '#f87171',
-    dark: '#dc2626',
-    bg: 'rgba(239, 68, 68, 0.08)',
-  },
-  purple: {
-    main: '#8b5cf6', // Violet
-    light: '#a78bfa',
-    dark: '#7c3aed',
-    bg: 'rgba(139, 92, 246, 0.08)',
-  },
+  primary: { main: '#0F172A', light: '#334155', dark: '#000000' },
+  secondary: '#64748B',
+  accent: '#3B82F6',
+  success: { main: '#10B981', light: '#34D399', dark: '#059669' },
+  warning: { main: '#F59E0B', light: '#FBBF24', dark: '#D97706' },
+  purple: { main: '#8B5CF6', light: '#A78BFA', dark: '#7C3AED' },
+  border: '#E2E8F0',
+  bg: '#FFFFFF',
+  bgSecondary: '#F8FAFC',
+  hover: '#F1F5F9',
+  error: { main: '#EF4444', light: '#F87171', dark: '#DC2626' },
   neutral: {
-    white: '#ffffff',
-    50: '#fafafa',
-    100: '#f5f5f5',
-    200: '#e5e5e5',
-    300: '#d4d4d4',
-    400: '#a3a3a3',
-    500: '#737373',
-    600: '#525252',
-    700: '#404040',
-    800: '#262626',
-    900: '#171717',
-  },
-  gradient: {
-    primary: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-    success: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-    header: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
+    white: '#FFFFFF',
+    50: '#F8FAFC',
+    100: '#F1F5F9',
+    200: '#E2E8F0',
+    300: '#CBD5E1',
+    400: '#94A3B8',
+    500: '#64748B',
+    600: '#475569',
+    700: '#334155',
+    800: '#1E293B',
+    900: '#0F172A',
   }
 };
 
 const TeamAnalytics: React.FC = () => {
   const { user } = useAuth();
   
-  // Add CSS for animations
-  React.useEffect(() => {
-    const style = document.createElement('style');
-    style.textContent = `
-      @keyframes spin {
-        0% { transform: rotate(0deg); }
-        100% { transform: rotate(360deg); }
-      }
-      @keyframes slideUp {
-        from {
-          opacity: 0;
-          transform: translateY(20px);
-        }
-        to {
-          opacity: 1;
-          transform: translateY(0);
-        }
-      }
-      @keyframes pulse {
-        0%, 100% {
-          opacity: 1;
-        }
-        50% {
-          opacity: 0.7;
-        }
-      }
-    `;
-    document.head.appendChild(style);
-    
-    return () => {
-      if (document.head.contains(style)) {
-        document.head.removeChild(style);
-      }
-    };
-  }, []);
+  // State variables
   const [analyticsData, setAnalyticsData] = useState<AnalyticsData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [workReadinessLoading, setWorkReadinessLoading] = useState(false);
+  const [loginLoading, setLoginLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
-  const [readinessChartLoading, setReadinessChartLoading] = useState(false);
-  const [readinessModalOpen, setReadinessModalOpen] = useState(false);
-  const [workReadinessChartLoading, setWorkReadinessChartLoading] = useState(false);
-  const [loginChartLoading, setLoginChartLoading] = useState(false);
-  // Separate date states for each chart
+  
+  // Date filtering state - Simplified (only for modals)
   const [workReadinessDateRange, setWorkReadinessDateRange] = useState<'week' | 'month' | 'year' | 'custom'>('week');
   const [workReadinessStartDate, setWorkReadinessStartDate] = useState<Date>(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
   const [workReadinessEndDate, setWorkReadinessEndDate] = useState<Date>(new Date());
-  
   const [loginDateRange, setLoginDateRange] = useState<'week' | 'month' | 'year' | 'custom'>('week');
   const [loginStartDate, setLoginStartDate] = useState<Date>(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
   const [loginEndDate, setLoginEndDate] = useState<Date>(new Date());
   
-  // Readiness Activity chart date filtering states
-  const [readinessDateRange, setReadinessDateRange] = useState<'week' | 'month' | 'year' | 'custom'>('month');
-  const [readinessStartDate, setReadinessStartDate] = useState<Date>(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000));
-  const [readinessEndDate, setReadinessEndDate] = useState<Date>(new Date());
-  
+  // Modal states
   const [showChartModal, setShowChartModal] = useState(false);
   const [showLoginModal, setShowLoginModal] = useState(false);
-  const [lastFetchTime, setLastFetchTime] = useState<number>(0);
-  const [chartKey, setChartKey] = useState(0);
 
-  // Cache clearing functions
-  const clearAllBrowserCache = useCallback(async () => {
-    console.log('=== CLEARING ALL BROWSER CACHE ===');
-    try {
-      localStorage.clear();
-      console.log('✅ localStorage cleared');
-      sessionStorage.clear();
-      console.log('✅ sessionStorage cleared');
-      
-      // Clear IndexedDB
-      if ('indexedDB' in window) {
-        try {
-          const databases = await indexedDB.databases();
-          for (const db of databases) {
-            if (db.name) {
-              indexedDB.deleteDatabase(db.name);
-            }
-          }
-          console.log('✅ IndexedDB cleared');
-        } catch (error) {
-          console.log('❌ IndexedDB clear error:', error);
-        }
-      }
-      
-      // Clear Service Worker cache
-      if ('serviceWorker' in navigator) {
-        try {
-          const registrations = await navigator.serviceWorker.getRegistrations();
-          for (const registration of registrations) {
-            await registration.unregister();
-          }
-          console.log('✅ Service Worker cleared');
-        } catch (error) {
-          console.log('❌ Service Worker clear error:', error);
-        }
-      }
-      
-      // Clear Cache API
-      if ('caches' in window) {
-        try {
-          const cacheNames = await caches.keys();
-          await Promise.all(cacheNames.map(name => caches.delete(name)));
-          console.log('✅ Cache API cleared');
-        } catch (error) {
-          console.log('❌ Cache API clear error:', error);
-        }
-      }
-      
-      // Clear cookies (but preserve auth cookies)
-      try {
-        const cookiesToPreserve = ['supabase.auth.token', 'sb-', 'auth-token'];
-        document.cookie.split(";").forEach(function(cookie) { 
-          const cookieName = cookie.replace(/^ +/, "").split("=")[0];
-          const shouldPreserve = cookiesToPreserve.some(preserveName => 
-            cookieName.includes(preserveName)
-          );
-          if (!shouldPreserve) {
-            document.cookie = cookie.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/"); 
-          }
-        });
-        console.log('✅ Non-auth cookies cleared (login cookies preserved)');
-      } catch (error) {
-        console.log('❌ Cookie clear error:', error);
-      }
-      
-      console.log('=== BROWSER CACHE CLEARED ===');
-    } catch (error) {
-      console.error('Error clearing browser cache:', error);
-    }
-  }, []);
-
-  const clearDataCache = useCallback(() => {
-    console.log('=== CLEARING DATA CACHE ===');
-    setLastFetchTime(0);
-    setAnalyticsData(null);
-    console.log('✅ Data cache cleared');
-  }, []);
-
+  // Fetch analytics data on mount
   useEffect(() => {
-    fetchAnalyticsData(); // This will fetch general analytics data
-    fetchReadinessAnalyticsData(); // This will fetch work readiness trend data
-  }, []);
+    if (user?.id) {
+      fetchAnalyticsData();
+    }
+  }, [user?.id]);
 
   // Fetch data when work readiness date range changes
   useEffect(() => {
-    console.log('🔄 Work Readiness useEffect triggered:', {
-      workReadinessDateRange,
-      workReadinessStartDate: workReadinessStartDate?.toISOString().split('T')[0],
-      workReadinessEndDate: workReadinessEndDate?.toISOString().split('T')[0]
-    });
-    setWorkReadinessChartLoading(true);
-    fetchAnalyticsData('workReadiness').finally(() => {
-      setWorkReadinessChartLoading(false);
-    });
-  }, [workReadinessDateRange, workReadinessStartDate, workReadinessEndDate]);
+    if (user?.id) {
+      fetchWorkReadinessData();
+    }
+  }, [workReadinessDateRange, workReadinessStartDate, workReadinessEndDate, user?.id]);
 
   // Fetch data when login date range changes
   useEffect(() => {
-    setLoginChartLoading(true);
-    fetchAnalyticsData('login').finally(() => {
-      setLoginChartLoading(false);
-    });
-  }, [loginDateRange, loginStartDate, loginEndDate]);
+    if (user?.id) {
+      fetchLoginData();
+    }
+  }, [loginDateRange, loginStartDate, loginEndDate, user?.id]);
 
-  // Fetch data when readiness chart date range changes (same logic as TeamLeaderDashboard)
-  useEffect(() => {
-    console.log('🔄 TeamAnalytics: Filter changed, fetching new analytics data...', {
-      dateRange: readinessDateRange,
-      startDate: readinessStartDate?.toISOString(),
-      endDate: readinessEndDate?.toISOString(),
-      userId: user?.id
-    });
-    fetchReadinessAnalyticsData();
-  }, [readinessDateRange, readinessStartDate, readinessEndDate, user?.id]);
-
-  // Same logic as TeamLeaderDashboard for work readiness analytics
-  const fetchReadinessAnalyticsData = useCallback(async () => {
+  const fetchLoginData = async () => {
     try {
-      setReadinessChartLoading(true);
-      console.log('🔄 TeamAnalytics: Fetching work readiness trend data from Supabase...');
-      console.log('📅 TeamAnalytics: Filter parameters:', {
-        dateRange: readinessDateRange,
-        startDate: readinessStartDate?.toISOString(),
-        endDate: readinessEndDate?.toISOString(),
-        userId: user?.id
+      setLoginLoading(true);
+      console.log('📊 Fetching login data with filters:', { 
+        dateRange: loginDateRange, 
+        startDate: loginStartDate, 
+        endDate: loginEndDate,
+        userId: user?.id 
       });
       
       if (!user?.id) {
-        console.log('❌ TeamAnalytics: No user ID available for analytics fetch');
-        setAnalyticsData(null);
+        console.log('❌ No user ID available');
         return;
       }
       
-      // Get work readiness trend data from Supabase
-      const trendData = await SupabaseAPI.getWorkReadinessTrendData(user.id, readinessDateRange, readinessStartDate, readinessEndDate);
+      // Fetch login data with date filters
+      const loginData = await SupabaseAPI.getLoginStats(
+        user.id, 
+        loginDateRange, 
+        loginStartDate, 
+        loginEndDate
+      );
       
-      console.log('✅ TeamAnalytics: Work readiness trend data received:', trendData);
-      console.log('📊 TeamAnalytics: Data points:', trendData?.analytics?.readinessTrendData?.length || 0);
-      console.log('📊 TeamAnalytics: Chart data details:', trendData?.analytics?.readinessTrendData?.map((item: TrendDataItem) => ({
-        date: item.date,
-        notFitForWork: item.notFitForWork,
-        minorConcernsFitForWork: item.minorConcernsFitForWork,
-        fitForWork: item.fitForWork,
-        total: item.total
-      })));
-      
-      // Get the full analytics data first, then merge trend data
-      const fullAnalyticsData = await SupabaseAPI.getAnalyticsData(user.id);
-      
-      // Merge trend data into the full analytics data
-      if (trendData?.analytics?.readinessTrendData && fullAnalyticsData) {
-        (fullAnalyticsData.analytics as any).readinessTrendData = trendData.analytics.readinessTrendData;
-        console.log('✅ TeamAnalytics: Merged trend data into full analytics data');
+      // Update analytics data with filtered login stats
+      if (loginData?.analytics?.loginStats && analyticsData) {
+        setAnalyticsData(prev => ({
+          ...prev!,
+          analytics: {
+            ...prev!.analytics,
+            loginStats: loginData.analytics.loginStats
+          }
+        }));
       }
       
-      // Set the complete analytics data
-      setAnalyticsData(fullAnalyticsData);
-    } catch (error) {
-      console.error('❌ TeamAnalytics: Error fetching analytics data:', error);
-      setAnalyticsData(null);
+    } catch (err: any) {
+      console.error('❌ Error fetching login data:', err);
+      setToast({ message: 'Failed to fetch login data', type: 'error' });
     } finally {
-      setReadinessChartLoading(false);
+      setLoginLoading(false);
     }
-  }, [readinessDateRange, readinessStartDate, readinessEndDate, user?.id]);
+  };
 
-  const fetchAnalyticsData = async (chartType?: 'workReadiness' | 'login' | 'readiness', forceRefresh = false) => {
+  const fetchWorkReadinessData = async () => {
     try {
-      console.log('fetchAnalyticsData called with chartType:', chartType, 'forceRefresh:', forceRefresh);
-      
-      // Only set main loading for initial load, not for chart-specific updates
-      if (!chartType) {
-        setLoading(true);
-      }
+      setWorkReadinessLoading(true);
+      console.log('📊 Fetching work readiness data with filters:', { 
+        dateRange: workReadinessDateRange, 
+        startDate: workReadinessStartDate, 
+        endDate: workReadinessEndDate,
+        userId: user?.id 
+      });
       
       if (!user?.id) {
-        console.log('No user ID available for analytics fetch');
-        setAnalyticsData(null);
+        console.log('❌ No user ID available');
         return;
       }
       
-      // Clear cache if force refresh
-      if (forceRefresh) {
-        await clearAllBrowserCache();
-        clearDataCache();
+      // Fetch work readiness data with date filters
+      const workReadinessData = await SupabaseAPI.getWorkReadinessStats(
+        user.id, 
+        workReadinessDateRange, 
+        workReadinessStartDate, 
+        workReadinessEndDate
+      );
+      
+      // Update analytics data with filtered work readiness stats
+      if (workReadinessData?.analytics?.workReadinessStats && analyticsData) {
+        setAnalyticsData(prev => ({
+          ...prev!,
+          analytics: {
+            ...prev!.analytics,
+            workReadinessStats: workReadinessData.analytics.workReadinessStats
+          }
+        }));
+      }
+      
+    } catch (err: any) {
+      console.error('❌ Error fetching work readiness data:', err);
+      setToast({ message: 'Failed to fetch work readiness data', type: 'error' });
+    } finally {
+      setWorkReadinessLoading(false);
+    }
+  };
+
+  const fetchAnalyticsData = async (forceRefresh = false) => {
+    try {
+      console.log('📊 Fetching analytics data:', { forceRefresh, userId: user?.id });
+      
+      setLoading(true);
+      
+      if (!user?.id) {
+        console.log('❌ No user ID available');
+        return;
       }
       
       // Fetch analytics data from Supabase
       const result = await SupabaseAPI.getAnalyticsData(user.id);
       
-      // Fetch filtered data based on chart type
-      if (chartType === 'workReadiness') {
-        try {
-          console.log('📊 TeamAnalytics: Fetching filtered work readiness stats...');
-          console.log('📊 TeamAnalytics: Parameters:', {
-            userId: user.id,
-            dateRange: workReadinessDateRange,
-            startDate: workReadinessStartDate?.toISOString(),
-            endDate: workReadinessEndDate?.toISOString()
-          });
-          console.log('📊 TeamAnalytics: Date objects:', {
-            workReadinessStartDate,
-            workReadinessEndDate,
-            startDateType: typeof workReadinessStartDate,
-            endDateType: typeof workReadinessEndDate
-          });
-          
-          const workReadinessData = await SupabaseAPI.getWorkReadinessStats(
-            user.id, 
-            workReadinessDateRange, 
-            workReadinessStartDate, 
-            workReadinessEndDate
-          );
-          
-          console.log('📊 TeamAnalytics: Work readiness stats received:', workReadinessData);
-          
-          // Merge filtered work readiness stats
-          if (workReadinessData?.analytics?.workReadinessStats) {
-            result.analytics.workReadinessStats = workReadinessData.analytics.workReadinessStats;
-            console.log('✅ TeamAnalytics: Work readiness stats updated with filtered data');
-          }
-        } catch (workReadinessError) {
-          console.error('❌ TeamAnalytics: Error fetching work readiness stats:', workReadinessError);
-        }
-      } else if (chartType === 'login') {
-        try {
-          console.log('📊 TeamAnalytics: Fetching filtered login stats...');
-          console.log('📊 TeamAnalytics: Parameters:', {
-            userId: user.id,
-            dateRange: loginDateRange,
-            startDate: loginStartDate?.toISOString(),
-            endDate: loginEndDate?.toISOString()
-          });
-          
-          const loginData = await SupabaseAPI.getLoginStats(
-            user.id, 
-            loginDateRange, 
-            loginStartDate, 
-            loginEndDate
-          );
-          
-          console.log('📊 TeamAnalytics: Login stats received:', loginData);
-          
-          // Merge filtered login stats
-          if (loginData?.analytics?.loginStats) {
-            result.analytics.loginStats = loginData.analytics.loginStats;
-            console.log('✅ TeamAnalytics: Login stats updated with filtered data');
-          }
-        } catch (loginError) {
-          console.error('❌ TeamAnalytics: Error fetching login stats:', loginError);
-        }
-      }
-      
-      // Fetch work readiness trend data for the readiness chart
-      if (chartType === 'readiness' || !chartType) {
-        try {
-          console.log('📊 TeamAnalytics: Fetching work readiness trend data...');
-          console.log('📊 TeamAnalytics: Parameters:', {
-            userId: user.id,
-            dateRange: readinessDateRange,
-            startDate: readinessStartDate?.toISOString(),
-            endDate: readinessEndDate?.toISOString()
-          });
-          
-          const trendData = await SupabaseAPI.getWorkReadinessTrendData(
-            user.id, 
-            readinessDateRange, 
-            readinessStartDate, 
-            readinessEndDate
-          );
-          
-          console.log('📊 TeamAnalytics: Trend data received:', trendData);
-          
-          // Merge trend data into analytics result
-          if (trendData?.analytics?.readinessTrendData) {
-            (result.analytics as any).readinessTrendData = trendData.analytics.readinessTrendData;
-            console.log('✅ TeamAnalytics: Work readiness trend data added:', trendData.analytics.readinessTrendData.length, 'points');
-            console.log('📊 TeamAnalytics: Chart data details:', trendData.analytics.readinessTrendData.map((item: TrendDataItem) => ({
-              date: item.date,
-              notFitForWork: item.notFitForWork,
-              minorConcernsFitForWork: item.minorConcernsFitForWork,
-              fitForWork: item.fitForWork,
-              total: item.total
-            })));
-            
-            // Additional debugging for chart rendering
-            const trendDataArray = trendData.analytics.readinessTrendData as TrendDataItem[];
-            console.log('🔍 TeamAnalytics: Data validation for chart:', {
-              hasData: trendDataArray.length > 0,
-              firstItem: trendDataArray[0],
-              lastItem: trendDataArray[trendDataArray.length - 1],
-              allDates: trendDataArray.map(item => item.date),
-              allTotals: trendDataArray.map(item => item.total)
-            });
-          } else {
-            console.log('📊 TeamAnalytics: No trend data received');
-          }
-        } catch (trendError) {
-          console.error('❌ TeamAnalytics: Error fetching work readiness trend data:', trendError);
-          // Keep empty array if trend data fails
-          (result.analytics as any).readinessTrendData = [];
-        }
-      }
-      
       setAnalyticsData(result);
       setError(null);
-      setLastFetchTime(Date.now());
       
     } catch (err: any) {
-      console.log('No analytics data found:', err);
-      // Set empty analytics data instead of error
+      console.error('❌ Error fetching analytics:', err);
+      // Set empty analytics data instead of showing error
       setAnalyticsData({
         teamLeader: {
           id: user?.id || '',
@@ -1185,14 +268,10 @@ const TeamAnalytics: React.FC = () => {
             pending: 0,
             overdue: 0,
             cancelled: 0,
-            notStarted: 0,
             completedPercentage: 0,
             pendingPercentage: 0,
             overduePercentage: 0,
-            cancelledPercentage: 0,
-            notStartedPercentage: 0,
-            byStatus: [],
-            monthlyAssessments: []
+            cancelledPercentage: 0
           },
           todayWorkReadinessStats: {
             completed: 0,
@@ -1205,18 +284,13 @@ const TeamAnalytics: React.FC = () => {
             monthlyLogins: 0,
             dailyBreakdown: []
           },
-          teamPerformance: [],
-          readinessTrendData: [],
           complianceRate: 0,
           activityRate: 0
         }
       });
       setError(null);
     } finally {
-      // Only set main loading false for initial load
-      if (!chartType) {
-        setLoading(false);
-      }
+      setLoading(false);
     }
   };
 
@@ -1255,112 +329,110 @@ const TeamAnalytics: React.FC = () => {
             from { transform: rotate(0deg); }
             to { transform: rotate(360deg); }
           }
+          @keyframes slideUp {
+            from {
+              opacity: 0;
+              transform: translateY(20px);
+            }
+            to {
+              opacity: 1;
+              transform: translateY(0);
+            }
+          }
+          @keyframes pulse {
+            0%, 100% {
+              opacity: 1;
+            }
+            50% {
+              opacity: 0.6;
+            }
+          }
         `}
       </style>
       <Box sx={{ 
         width: '100%',
-        p: { xs: 2, sm: 2.5, md: 3 },
-        background: COLORS.neutral[50],
+        p: { xs: 2, sm: 2.5, md: 4 },
+        background: COLORS.bgSecondary,
         minHeight: '100vh',
-        position: 'relative',
         fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
       }}>
-        {/* Modern Header with gradient */}
+        {/* Clean Minimal Header */}
         <Box sx={{ 
-          mb: { xs: 3, md: 4 },
-          position: 'relative',
-          zIndex: 1,
-          background: { 
-            xs: COLORS.gradient.header, 
-            md: COLORS.gradient.header 
-          },
-          padding: { xs: '24px 20px', md: '32px 24px' },
-          borderRadius: { xs: '16px', md: '20px' },
-          boxShadow: '0 10px 40px -10px rgba(99, 102, 241, 0.3)',
+          mb: 4,
           display: 'flex',
           justifyContent: 'space-between',
-          alignItems: 'center',
+          alignItems: { xs: 'flex-start', md: 'center' },
           flexDirection: { xs: 'column', md: 'row' },
-          gap: { xs: 2, md: 3 },
-          animation: 'slideUp 0.6s ease-out',
+          gap: 3,
         }}>
-          <Box sx={{ textAlign: { xs: 'center', md: 'left' }, flex: 1 }}>
-            <Typography variant="h4" sx={{ 
+          <Box>
+            <Typography sx={{ 
               fontWeight: 700, 
-              color: COLORS.neutral.white,
+              color: COLORS.primary,
+              fontSize: { xs: '1.75rem', md: '2.25rem' },
+              letterSpacing: '-0.03em',
               mb: 0.5,
-              fontSize: { xs: '1.5rem', sm: '1.75rem', md: '2rem' },
-              letterSpacing: '-0.02em',
             }}>
               Team Analytics
             </Typography>
-            <Typography variant="body1" sx={{ 
-              color: 'rgba(255,255,255,0.9)',
-              textAlign: { xs: 'center', md: 'left' },
+            <Typography sx={{ 
+              color: COLORS.secondary,
               fontSize: { xs: '0.875rem', md: '0.9375rem' },
-              fontWeight: 400,
-              maxWidth: '600px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1,
             }}>
-              Monitor team performance and track key metrics in real-time
+              {analyticsData?.teamLeader?.team && (
+                <>
+                  <Box component="span" sx={{ 
+                    width: 8, 
+                    height: 8, 
+                    borderRadius: '50%', 
+                    background: COLORS.success,
+                  }} />
+                  {analyticsData.teamLeader.team}
+                  {analyticsData.teamLeader.managedTeams && analyticsData.teamLeader.managedTeams.length > 1 && (
+                    <Box component="span" sx={{ 
+                      fontSize: '0.75rem',
+                      color: COLORS.secondary,
+                      background: COLORS.hover,
+                      px: 1.5,
+                      py: 0.5,
+                      borderRadius: '12px',
+                    }}>
+                      +{analyticsData.teamLeader.managedTeams.length - 1} teams
+                    </Box>
+                  )}
+                </>
+              )}
             </Typography>
           </Box>
           
-          {/* Refresh Button - Modern glassmorphic style */}
           <Button
-            onClick={() => fetchAnalyticsData(undefined, true)}
+            onClick={() => fetchAnalyticsData(true)}
             disabled={loading}
-            variant="contained"
             sx={{
-              background: loading ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.2)',
-              backdropFilter: 'blur(10px)',
-              color: COLORS.neutral.white,
-              padding: { xs: '10px 20px', md: '12px 28px' },
+              background: COLORS.primary,
+              color: COLORS.bg,
+              px: 3,
+              py: 1.25,
               borderRadius: '12px',
-              fontSize: { xs: '0.8125rem', md: '0.875rem' },
+              fontSize: '0.875rem',
               fontWeight: '600',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 1.5,
-              border: '1px solid rgba(255,255,255,0.3)',
-              boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-              transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
               textTransform: 'none',
-              minWidth: { xs: '140px', md: '160px' },
+              boxShadow: '0 1px 3px rgba(15, 23, 42, 0.1)',
               '&:hover': {
-                background: loading ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.25)',
-                transform: 'translateY(-2px)',
-                boxShadow: '0 6px 20px rgba(0,0,0,0.15)',
-                border: '1px solid rgba(255,255,255,0.4)',
-              },
-              '&:active': {
-                transform: 'translateY(0)',
+                background: COLORS.primary,
+                opacity: 0.9,
+                boxShadow: '0 4px 12px rgba(15, 23, 42, 0.15)',
               },
               '&:disabled': {
-                background: 'rgba(255,255,255,0.15)',
-                color: 'rgba(255,255,255,0.7)',
-                border: '1px solid rgba(255,255,255,0.2)',
+                background: COLORS.border,
+                color: COLORS.secondary,
               }
             }}
           >
-            <svg 
-              width="18" 
-              height="18" 
-              viewBox="0 0 24 24" 
-              fill="none" 
-              stroke="currentColor" 
-              strokeWidth="2.5" 
-              strokeLinecap="round" 
-              strokeLinejoin="round"
-              style={{
-                animation: loading ? 'spin 1s linear infinite' : 'none'
-              }}
-            >
-              <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>
-              <path d="M21 3v5h-5"/>
-              <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/>
-              <path d="M3 21v-5h5"/>
-            </svg>
-            {loading ? 'Refreshing...' : 'Refresh'}
+            {loading ? 'Refreshing...' : 'Refresh Data'}
           </Button>
         </Box>
 
@@ -1372,7 +444,7 @@ const TeamAnalytics: React.FC = () => {
             position: 'relative',
             zIndex: 1,
           }}>
-            {/* Overview Cards - Modern clean design */}
+            {/* Minimal White Cards */}
             <Box sx={{ 
               display: 'grid',
               gridTemplateColumns: { 
@@ -1380,68 +452,54 @@ const TeamAnalytics: React.FC = () => {
                 sm: 'repeat(2, 1fr)', 
                 md: 'repeat(4, 1fr)' 
               },
-              gap: { xs: 2, md: 2.5 },
-              mb: { xs: 2, md: 2 }
+              gap: 3,
+              mb: 4
             }}>
               {/* Total Team Members Card */}
               <Box sx={{
-                background: COLORS.neutral.white,
+                background: COLORS.bg,
                 borderRadius: '16px',
-                padding: { xs: '20px', md: '24px' },
-                boxShadow: '0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.02)',
-                border: `1px solid ${COLORS.neutral[200]}`,
-                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                p: 3,
+                border: `1px solid ${COLORS.border}`,
+                transition: 'all 0.2s ease',
                 position: 'relative',
                 overflow: 'hidden',
-                animation: 'slideUp 0.6s ease-out 0.1s both',
                 '&:hover': {
-                  transform: 'translateY(-4px)',
-                  boxShadow: `0 12px 24px -8px ${COLORS.primary.main}40`,
-                  borderColor: COLORS.primary.light,
-                },
-                '&::before': {
-                  content: '""',
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  height: '4px',
-                  background: `linear-gradient(90deg, ${COLORS.primary.main}, ${COLORS.primary.light})`,
-                  borderRadius: '16px 16px 0 0',
+                  borderColor: COLORS.accent,
+                  boxShadow: '0 4px 12px rgba(59, 130, 246, 0.08)',
+                  '& .card-icon': {
+                    transform: 'scale(1.1)',
+                    opacity: 0.8,
+                  }
                 }
               }}>
-                <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
-                  <Box>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <Box sx={{ flex: 1 }}>
                     <Typography sx={{ 
                       fontSize: '0.8125rem', 
                       fontWeight: '600', 
-                      color: COLORS.neutral[500], 
-                      mb: 1,
-                      letterSpacing: '0.02em',
+                      color: COLORS.secondary, 
+                      mb: 2,
                       textTransform: 'uppercase',
+                      letterSpacing: '0.05em',
                     }}>
                       Total Members
                     </Typography>
                     <Typography sx={{ 
-                      fontSize: { xs: '2rem', md: '2.25rem' }, 
+                      fontSize: '2.5rem', 
                       fontWeight: '700', 
-                      color: COLORS.neutral[900],
+                      color: COLORS.primary.main,
                       lineHeight: 1,
                       letterSpacing: '-0.02em',
                     }}>
                       {analyticsData.analytics.totalTeamMembers}
                     </Typography>
                   </Box>
-                  <Box sx={{ 
-                    width: { xs: '48px', md: '56px' }, 
-                    height: { xs: '48px', md: '56px' }, 
-                    background: COLORS.primary.bg,
-                    borderRadius: '14px', 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    justifyContent: 'center',
+                  <Box className="card-icon" sx={{ 
+                    transition: 'all 0.3s ease',
+                    opacity: 0.6,
                   }}>
-                    <svg width="28" height="28" fill="none" stroke={COLORS.primary.main} strokeWidth="2" viewBox="0 0 24 24">
+                    <svg width="48" height="48" fill="none" stroke={COLORS.accent} strokeWidth="1.5" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
                     </svg>
                   </Box>
@@ -1450,293 +508,190 @@ const TeamAnalytics: React.FC = () => {
 
               {/* Active Members Card */}
               <Box sx={{
-                background: COLORS.neutral.white,
+                background: COLORS.bg,
                 borderRadius: '16px',
-                padding: { xs: '20px', md: '24px' },
-                boxShadow: '0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.02)',
-                border: `1px solid ${COLORS.neutral[200]}`,
-                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                p: 3,
+                border: `1px solid ${COLORS.border}`,
+                transition: 'all 0.2s ease',
                 position: 'relative',
                 overflow: 'hidden',
-                animation: 'slideUp 0.6s ease-out 0.2s both',
                 '&:hover': {
-                  transform: 'translateY(-4px)',
-                  boxShadow: `0 12px 24px -8px ${COLORS.success.main}40`,
-                  borderColor: COLORS.success.light,
-                },
-                '&::before': {
-                  content: '""',
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  height: '4px',
-                  background: `linear-gradient(90deg, ${COLORS.success.main}, ${COLORS.success.light})`,
-                  borderRadius: '16px 16px 0 0',
+                  borderColor: COLORS.success.main,
+                  boxShadow: '0 4px 12px rgba(16, 185, 129, 0.08)',
+                  '& .card-icon': {
+                    transform: 'scale(1.1)',
+                    opacity: 0.8,
+                  }
                 }
               }}>
-                <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
-                  <Box>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <Box sx={{ flex: 1 }}>
                     <Typography sx={{ 
                       fontSize: '0.8125rem', 
                       fontWeight: '600', 
-                      color: COLORS.neutral[500], 
-                      mb: 1,
-                      letterSpacing: '0.02em',
+                      color: COLORS.secondary, 
+                      mb: 2,
                       textTransform: 'uppercase',
+                      letterSpacing: '0.05em',
                     }}>
                       Active Members
                     </Typography>
                     <Typography sx={{ 
-                      fontSize: { xs: '2rem', md: '2.25rem' }, 
+                      fontSize: '2.5rem', 
                       fontWeight: '700', 
-                      color: COLORS.neutral[900],
+                      color: COLORS.primary.main,
                       lineHeight: 1,
                       letterSpacing: '-0.02em',
+                      mb: 1,
                     }}>
                       {analyticsData.analytics.activeTeamMembers}
                     </Typography>
+                    <Typography sx={{ 
+                      fontSize: '0.75rem', 
+                      color: COLORS.success.main,
+                      fontWeight: '500',
+                    }}>
+                      {analyticsData.analytics.totalTeamMembers > 0 
+                        ? `${Math.round((analyticsData.analytics.activeTeamMembers / analyticsData.analytics.totalTeamMembers) * 100)}%`
+                        : '0%'} of total
+                    </Typography>
                   </Box>
-                  <Box sx={{ 
-                    width: { xs: '48px', md: '56px' }, 
-                    height: { xs: '48px', md: '56px' }, 
-                    background: COLORS.success.bg,
-                    borderRadius: '14px', 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    justifyContent: 'center',
+                  <Box className="card-icon" sx={{ 
+                    transition: 'all 0.3s ease',
+                    opacity: 0.6,
                   }}>
-                    <svg width="28" height="28" fill="none" stroke={COLORS.success.main} strokeWidth="2" viewBox="0 0 24 24">
+                    <svg width="48" height="48" fill="none" stroke={COLORS.success.main} strokeWidth="1.5" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
                     </svg>
                   </Box>
                 </Box>
               </Box>
 
-              {/* Work Readiness Completed Card */}
+              {/* Assessments Card */}
               <Box sx={{
-                background: COLORS.neutral.white,
+                background: COLORS.bg,
                 borderRadius: '16px',
-                padding: { xs: '20px', md: '24px' },
-                boxShadow: '0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.02)',
-                border: `1px solid ${COLORS.neutral[200]}`,
-                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                p: 3,
+                border: `1px solid ${COLORS.border}`,
+                transition: 'all 0.2s ease',
                 position: 'relative',
                 overflow: 'hidden',
-                animation: 'slideUp 0.6s ease-out 0.3s both',
                 '&:hover': {
-                  transform: 'translateY(-4px)',
-                  boxShadow: `0 12px 24px -8px ${COLORS.purple.main}40`,
-                  borderColor: COLORS.purple.light,
-                },
-                '&::before': {
-                  content: '""',
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  height: '4px',
-                  background: `linear-gradient(90deg, ${COLORS.purple.main}, ${COLORS.purple.light})`,
-                  borderRadius: '16px 16px 0 0',
+                  borderColor: COLORS.purple.main,
+                  boxShadow: '0 4px 12px rgba(139, 92, 246, 0.08)',
+                  '& .card-icon': {
+                    transform: 'scale(1.1)',
+                    opacity: 0.8,
+                  }
                 }
               }}>
-                <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
-                  <Box>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <Box sx={{ flex: 1 }}>
                     <Typography sx={{ 
                       fontSize: '0.8125rem', 
                       fontWeight: '600', 
-                      color: COLORS.neutral[500], 
-                      mb: 1,
-                      letterSpacing: '0.02em',
+                      color: COLORS.secondary, 
+                      mb: 2,
                       textTransform: 'uppercase',
+                      letterSpacing: '0.05em',
                     }}>
                       Completed
                     </Typography>
                     <Typography sx={{ 
-                      fontSize: { xs: '2rem', md: '2.25rem' }, 
+                      fontSize: '2.5rem', 
                       fontWeight: '700', 
-                      color: COLORS.neutral[900],
+                      color: COLORS.primary.main,
                       lineHeight: 1,
                       letterSpacing: '-0.02em',
+                      mb: 1,
                     }}>
                       {analyticsData.analytics.workReadinessStats.completed}
                     </Typography>
+                    <Typography sx={{ 
+                      fontSize: '0.75rem', 
+                      color: COLORS.secondary,
+                      fontWeight: '500',
+                    }}>
+                      of {analyticsData.analytics.workReadinessStats.total} total
+                    </Typography>
                   </Box>
-                  <Box sx={{ 
-                    width: { xs: '48px', md: '56px' }, 
-                    height: { xs: '48px', md: '56px' }, 
-                    background: COLORS.purple.bg,
-                    borderRadius: '14px', 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    justifyContent: 'center',
+                  <Box className="card-icon" sx={{ 
+                    transition: 'all 0.3s ease',
+                    opacity: 0.6,
                   }}>
-                    <svg width="28" height="28" fill="none" stroke={COLORS.purple.main} strokeWidth="2" viewBox="0 0 24 24">
+                    <svg width="48" height="48" fill="none" stroke={COLORS.purple.main} strokeWidth="1.5" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                   </Box>
                 </Box>
               </Box>
 
-              {/* Compliance Rate Card */}
+              {/* Compliance Card */}
               <Box sx={{
-                background: COLORS.neutral.white,
+                background: COLORS.bg,
                 borderRadius: '16px',
-                padding: { xs: '20px', md: '24px' },
-                boxShadow: '0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.02)',
-                border: `1px solid ${COLORS.neutral[200]}`,
-                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                p: 3,
+                border: `1px solid ${COLORS.border}`,
+                transition: 'all 0.2s ease',
                 position: 'relative',
                 overflow: 'hidden',
-                animation: 'slideUp 0.6s ease-out 0.4s both',
                 '&:hover': {
-                  transform: 'translateY(-4px)',
-                  boxShadow: `0 12px 24px -8px ${COLORS.warning.main}40`,
-                  borderColor: COLORS.warning.light,
-                },
-                '&::before': {
-                  content: '""',
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  height: '4px',
-                  background: `linear-gradient(90deg, ${COLORS.warning.main}, ${COLORS.warning.light})`,
-                  borderRadius: '16px 16px 0 0',
+                  borderColor: analyticsData.analytics.complianceRate >= 80 ? COLORS.success.main : COLORS.warning.main,
+                  boxShadow: analyticsData.analytics.complianceRate >= 80 
+                    ? '0 4px 12px rgba(16, 185, 129, 0.08)'
+                    : '0 4px 12px rgba(245, 158, 11, 0.08)',
+                  '& .card-icon': {
+                    transform: 'scale(1.1)',
+                    opacity: 0.8,
+                  }
                 }
               }}>
-                <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
-                  <Box>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <Box sx={{ flex: 1 }}>
                     <Typography sx={{ 
                       fontSize: '0.8125rem', 
                       fontWeight: '600', 
-                      color: COLORS.neutral[500], 
-                      mb: 1,
-                      letterSpacing: '0.02em',
+                      color: COLORS.secondary, 
+                      mb: 2,
                       textTransform: 'uppercase',
+                      letterSpacing: '0.05em',
                     }}>
-                      Compliance Rate
+                      Compliance
                     </Typography>
                     <Typography sx={{ 
-                      fontSize: { xs: '2rem', md: '2.25rem' }, 
+                      fontSize: '2.5rem', 
                       fontWeight: '700', 
-                      color: COLORS.neutral[900],
+                      color: COLORS.primary.main,
                       lineHeight: 1,
                       letterSpacing: '-0.02em',
+                      mb: 1,
                     }}>
                       {analyticsData.analytics.complianceRate}%
                     </Typography>
+                    <Typography sx={{ 
+                      fontSize: '0.75rem', 
+                      color: analyticsData.analytics.complianceRate >= 80 ? COLORS.success.main : COLORS.warning.main,
+                      fontWeight: '500',
+                    }}>
+                      {analyticsData.analytics.complianceRate >= 80 ? 'Excellent' : 'Needs attention'}
+                    </Typography>
                   </Box>
-                  <Box sx={{ 
-                    width: { xs: '48px', md: '56px' }, 
-                    height: { xs: '48px', md: '56px' }, 
-                    background: COLORS.warning.bg,
-                    borderRadius: '14px', 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    justifyContent: 'center',
+                  <Box className="card-icon" sx={{ 
+                    transition: 'all 0.3s ease',
+                    opacity: 0.6,
                   }}>
-                    <svg width="28" height="28" fill="none" stroke={COLORS.warning.main} strokeWidth="2" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                    <svg width="48" height="48" fill="none" stroke={analyticsData.analytics.complianceRate >= 80 ? COLORS.success.main : COLORS.warning.main} strokeWidth="1.5" viewBox="0 0 24 24">
+                      {analyticsData.analytics.complianceRate >= 80 ? (
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      ) : (
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+                      )}
                     </svg>
                   </Box>
                 </Box>
               </Box>
             </Box>
 
-            {/* Date Filter Controls - Modern Design */}
-            <Box sx={{
-              backgroundColor: COLORS.neutral.white,
-              borderRadius: '16px',
-              padding: { xs: '16px', md: '20px' },
-              boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
-              border: `1px solid ${COLORS.neutral[200]}`,
-              mb: 2,
-            }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-                <Typography sx={{ 
-                  fontSize: '0.875rem', 
-                  fontWeight: '600', 
-                  color: COLORS.neutral[600],
-                  minWidth: '80px'
-                }}>
-                  Time Period:
-                </Typography>
-                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                  {(['week', 'month', 'year', 'custom'] as const).map((range) => (
-                    <Button
-                      key={range}
-                      onClick={(e) => {
-                        e.preventDefault();
-                        setWorkReadinessDateRange(range);
-                      }}
-                      variant={workReadinessDateRange === range ? 'contained' : 'outlined'}
-                      sx={{
-                        padding: '8px 20px',
-                        borderRadius: '10px',
-                        border: workReadinessDateRange === range ? 'none' : `1.5px solid ${COLORS.neutral[300]}`,
-                        backgroundColor: workReadinessDateRange === range ? COLORS.primary.main : 'transparent',
-                        color: workReadinessDateRange === range ? COLORS.neutral.white : COLORS.neutral[600],
-                        fontSize: '0.8125rem',
-                        fontWeight: '600',
-                        textTransform: 'capitalize',
-                        minWidth: '80px',
-                        transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
-                        '&:hover': {
-                          backgroundColor: workReadinessDateRange === range ? COLORS.primary.dark : COLORS.neutral[100],
-                          borderColor: workReadinessDateRange === range ? COLORS.primary.dark : COLORS.neutral[400],
-                          transform: 'translateY(-2px)',
-                          boxShadow: '0 4px 8px rgba(0,0,0,0.1)',
-                        },
-                      }}
-                    >
-                      {range}
-                    </Button>
-                  ))}
-                </Box>
-                {workReadinessDateRange === 'custom' && (
-                  <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', flexWrap: 'wrap', mt: { xs: 1, md: 0 } }}>
-                    <input
-                      type="date"
-                      value={workReadinessStartDate.toISOString().split('T')[0]}
-                      onChange={(e) => {
-                        e.preventDefault();
-                        setWorkReadinessStartDate(new Date(e.target.value));
-                      }}
-                      style={{
-                        padding: '10px 14px',
-                        borderRadius: '10px',
-                        border: `1.5px solid ${COLORS.neutral[300]}`,
-                        backgroundColor: COLORS.neutral.white,
-                        fontSize: '0.875rem',
-                        fontWeight: '500',
-                        color: COLORS.neutral[700],
-                        fontFamily: 'inherit',
-                      }}
-                    />
-                    <Typography sx={{ color: COLORS.neutral[400], fontWeight: '600' }}>→</Typography>
-                    <input
-                      type="date"
-                      value={workReadinessEndDate.toISOString().split('T')[0]}
-                      onChange={(e) => {
-                        e.preventDefault();
-                        setWorkReadinessEndDate(new Date(e.target.value));
-                      }}
-                      style={{
-                        padding: '10px 14px',
-                        borderRadius: '10px',
-                        border: `1.5px solid ${COLORS.neutral[300]}`,
-                        backgroundColor: COLORS.neutral.white,
-                        fontSize: '0.875rem',
-                        fontWeight: '500',
-                        color: COLORS.neutral[700],
-                        fontFamily: 'inherit',
-                      }}
-                    />
-                  </Box>
-                )}
-              </Box>
-            </Box>
 
             {/* Charts Section - Improved Grid Layout */}
             <Box sx={{ 
@@ -2031,12 +986,14 @@ const TeamAnalytics: React.FC = () => {
                     const todayLogins = analyticsData.analytics.loginStats.todayLogins || 0;
                     const weeklyLogins = analyticsData.analytics.loginStats.weeklyLogins || 0;
                     const monthlyLogins = analyticsData.analytics.loginStats.monthlyLogins || 0;
+                    const totalLogins = analyticsData.analytics.loginStats.totalLogins || 0;
                     const dailyBreakdown = analyticsData.analytics.loginStats.dailyBreakdown || [];
                     
-                    const total = todayLogins + weeklyLogins + monthlyLogins;
+                    // Use totalLogins or check if dailyBreakdown has any data
+                    const hasData = totalLogins > 0 || dailyBreakdown.some(day => day.count > 0);
                     
                     // If no data for selected date range, show empty state
-                    if (total === 0) {
+                    if (!hasData) {
                       return (
                         <div style={{
                           height: '100%',
@@ -2142,353 +1099,6 @@ const TeamAnalytics: React.FC = () => {
             </Box>
 
 
-            {/* Work Readiness Activity Chart */}
-            <div style={{
-              backgroundColor: 'rgba(255, 255, 255, 0.9)',
-              backdropFilter: 'blur(10px)',
-              borderRadius: window.innerWidth <= 768 ? '1rem' : '1rem',
-              padding: '1.5rem',
-              boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
-              border: '1px solid rgba(255, 255, 255, 0.2)',
-              marginBottom: window.innerWidth <= 768 ? '2rem' : '2rem'
-            }}>
-         <div style={{ 
-           display: 'flex', 
-           justifyContent: 'space-between', 
-           alignItems: 'center',
-                  marginBottom: window.innerWidth <= 768 ? '1.5rem' : '1.5rem'
-         }}>
-           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-             <h3 style={{ 
-               fontSize: window.innerWidth <= 768 ? '1rem' : '1.25rem', 
-               fontWeight: '600', 
-               color: '#1f2937',
-               margin: '0'
-             }}>
-               Activity
-             </h3>
-             <button
-               onClick={() => setReadinessModalOpen(true)}
-               style={{
-                 padding: '0.5rem',
-                 borderRadius: '0.5rem',
-                 border: '1px solid #d1d5db',
-                 backgroundColor: 'white',
-                 color: '#6b7280',
-                 cursor: 'pointer',
-                 display: 'flex',
-                 alignItems: 'center',
-                 gap: '0.25rem',
-                 fontSize: '0.875rem',
-                 transition: 'all 0.2s ease',
-                 boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)'
-               }}
-               onMouseEnter={(e) => {
-                 e.currentTarget.style.backgroundColor = '#f9fafb';
-                 e.currentTarget.style.borderColor = '#9ca3af';
-                 e.currentTarget.style.color = '#374151';
-               }}
-               onMouseLeave={(e) => {
-                 e.currentTarget.style.backgroundColor = 'white';
-                 e.currentTarget.style.borderColor = '#d1d5db';
-                 e.currentTarget.style.color = '#6b7280';
-               }}
-             >
-               <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24">
-                 <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/>
-               </svg>
-               Expand
-             </button>
-           </div>
-                <div style={{ 
-                  display: 'flex', 
-                  alignItems: 'center', 
-                  gap: '1rem',
-                  flexDirection: window.innerWidth <= 768 ? 'column' : 'row',
-                  alignSelf: window.innerWidth <= 768 ? 'flex-start' : 'center',
-                  width: '100%'
-                }}>
-                  {/* Legend */}
-                  <div style={{ 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    gap: window.innerWidth <= 768 ? '1rem' : '0.5rem',
-                    flexWrap: window.innerWidth <= 768 ? 'wrap' : 'nowrap',
-                    width: window.innerWidth <= 768 ? '100%' : 'auto',
-                    justifyContent: window.innerWidth <= 768 ? 'space-between' : 'flex-start'
-                  }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: window.innerWidth <= 768 ? '45%' : 'auto' }}>
-                      <div style={{
-                        width: '12px',
-                        height: '12px',
-                        borderRadius: '50%',
-                        backgroundColor: '#9333ea',
-                        flexShrink: 0
-                      }}></div>
-                      <span style={{ fontSize: '0.875rem', color: '#6b7280', whiteSpace: 'nowrap' }}>Not Fit for Work</span>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: window.innerWidth <= 768 ? '45%' : 'auto' }}>
-                      <div style={{
-                        width: '12px',
-                        height: '12px',
-                        borderRadius: '50%',
-                        backgroundColor: '#3b82f6',
-                        flexShrink: 0
-                      }}></div>
-                      <span style={{ fontSize: '0.875rem', color: '#6b7280', whiteSpace: 'nowrap' }}>Minor Concerns</span>
-                    </div>
-                  </div>
-                  {/* Time Filter Dropdown */}
-                  <div style={{ marginTop: window.innerWidth <= 768 ? '1rem' : '0', width: window.innerWidth <= 768 ? '100%' : 'auto' }}>
-                    <select 
-                    value={readinessDateRange}
-                    onChange={(e) => {
-                      e.preventDefault();
-                      console.log('Readiness filter changed to:', e.target.value);
-                      setReadinessDateRange(e.target.value as 'week' | 'month' | 'year' | 'custom');
-                    }}
-                    disabled={readinessChartLoading}
-                    style={{
-                      padding: '0.5rem 1rem',
-                      borderRadius: '0.5rem',
-                      border: '1px solid #d1d5db',
-                      backgroundColor: readinessChartLoading ? '#f9fafb' : 'white',
-                      fontSize: '0.875rem',
-                      color: readinessChartLoading ? '#9ca3af' : '#374151',
-                      cursor: readinessChartLoading ? 'not-allowed' : 'pointer',
-                      opacity: readinessChartLoading ? 0.7 : 1,
-                      width: window.innerWidth <= 768 ? '100%' : 'auto'
-                    }}
-                  >
-                    <option value="week">This Week</option>
-                    <option value="month">This Month</option>
-                    <option value="year">This Year</option>
-                    <option value="custom">Custom Range</option>
-                  </select>
-                  </div>
-                  
-                  {/* Custom Date Range Inputs */}
-                  {readinessDateRange === 'custom' && (
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.5rem' }}>
-                      <input
-                        type="date"
-                        value={readinessStartDate.toISOString().split('T')[0]}
-                        onChange={(e) => {
-                          e.preventDefault();
-                          setReadinessStartDate(new Date(e.target.value));
-                        }}
-                        style={{
-                          padding: '0.5rem',
-                          borderRadius: '0.375rem',
-                          border: '1px solid #d1d5db',
-                          fontSize: '0.875rem',
-                          backgroundColor: 'white'
-                        }}
-                      />
-                      <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>to</span>
-                      <input
-                        type="date"
-                        value={readinessEndDate.toISOString().split('T')[0]}
-                        onChange={(e) => {
-                          e.preventDefault();
-                          setReadinessEndDate(new Date(e.target.value));
-                        }}
-                        style={{
-                          padding: '0.5rem',
-                          borderRadius: '0.375rem',
-                          border: '1px solid #d1d5db',
-                          fontSize: '0.875rem',
-                          backgroundColor: 'white'
-                        }}
-                      />
-                    </div>
-                  )}
-                </div>
-              </div>
-              
-              <div style={{ height: window.innerWidth <= 768 ? '200px' : '300px', position: 'relative' }}>
-                {readinessChartLoading ? (
-                  <div style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    height: '100%',
-                    color: '#6b7280'
-                  }}>
-                    <div style={{
-                      width: '40px',
-                      height: '40px',
-                      border: '3px solid #e5e7eb',
-                      borderTop: '3px solid #3b82f6',
-                      borderRadius: '50%',
-                      animation: 'spin 1s linear infinite',
-                      marginBottom: '1rem'
-                    }}></div>
-                    <p style={{ fontSize: '0.875rem', margin: '0' }}>
-                      Updating chart data...
-                    </p>
-                  </div>
-                ) : (() => {
-                  console.log('Readiness Trend Data:', analyticsData.analytics.readinessTrendData);
-                  console.log('Data length:', analyticsData.analytics.readinessTrendData?.length);
-                  console.log('Data exists check:', !!analyticsData.analytics.readinessTrendData);
-                  console.log('Length > 0 check:', analyticsData.analytics.readinessTrendData?.length > 0);
-                  
-                  if (analyticsData.analytics.readinessTrendData && analyticsData.analytics.readinessTrendData.length > 0) {
-                    console.log('First few data points:', analyticsData.analytics.readinessTrendData.slice(0, 3));
-                  }
-                  
-                  // More robust check for data
-                  const hasData = analyticsData.analytics.readinessTrendData && 
-                                Array.isArray(analyticsData.analytics.readinessTrendData) && 
-                                analyticsData.analytics.readinessTrendData.length > 0;
-                  
-                  console.log('Final hasData check:', hasData);
-                  
-                  return hasData ? (
-                  <Line
-                    data={{
-                      labels: analyticsData.analytics.readinessTrendData.map((item: TrendDataItem) => 
-                        new Date(item.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-                      ),
-                      datasets: [
-                        {
-                          label: 'Not Fit for Work',
-                          data: analyticsData.analytics.readinessTrendData.map((item: TrendDataItem) => item.notFitForWork),
-                          borderColor: 'rgba(147, 51, 234, 1)',
-                          backgroundColor: 'rgba(147, 51, 234, 0.1)',
-                          fill: true,
-                          tension: 0.4,
-                          pointBackgroundColor: 'rgba(147, 51, 234, 1)',
-                          pointBorderColor: 'rgba(147, 51, 234, 1)',
-                          pointRadius: 3,
-                          pointHoverRadius: 6,
-                          pointHoverBackgroundColor: 'rgba(147, 51, 234, 1)',
-                          pointHoverBorderColor: 'rgba(147, 51, 234, 1)',
-                          pointHoverBorderWidth: 2,
-                          borderWidth: 2
-                        },
-                        {
-                          label: 'Minor Concerns Fit for Work',
-                          data: analyticsData.analytics.readinessTrendData.map((item: TrendDataItem) => item.minorConcernsFitForWork),
-                          borderColor: 'rgba(59, 130, 246, 1)',
-                          backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                          fill: true,
-                          tension: 0.4,
-                          pointBackgroundColor: 'rgba(59, 130, 246, 1)',
-                          pointBorderColor: 'rgba(59, 130, 246, 1)',
-                          pointRadius: 3,
-                          pointHoverRadius: 6,
-                          pointHoverBackgroundColor: 'rgba(59, 130, 246, 1)',
-                          pointHoverBorderColor: 'rgba(59, 130, 246, 1)',
-                          pointHoverBorderWidth: 2,
-                          borderWidth: 2
-                        }
-                      ]
-                    }}
-                    options={{
-                      responsive: true,
-                      maintainAspectRatio: false,
-                      plugins: {
-                        legend: {
-                          display: false // We have custom legend above
-                        },
-                        tooltip: {
-                          backgroundColor: 'rgba(0, 0, 0, 0.8)',
-                          titleColor: 'white',
-                          bodyColor: 'white',
-                          borderColor: 'rgba(255, 255, 255, 0.1)',
-                          borderWidth: 1,
-                          cornerRadius: 8,
-                          displayColors: true,
-                          callbacks: {
-                            title: function(context) {
-                              return new Date(context[0].label).toLocaleDateString('en-US', { 
-                                weekday: 'long',
-                                year: 'numeric',
-                                month: 'long',
-                                day: 'numeric'
-                              });
-                            },
-                            label: function(context) {
-                              return `${context.dataset.label}: ${context.parsed.y} assessment${context.parsed.y !== 1 ? 's' : ''}`;
-                            }
-                          }
-                        }
-                      },
-                      scales: {
-                        x: {
-                          grid: {
-                            display: true,
-                            color: 'rgba(0, 0, 0, 0.05)',
-                            drawTicks: false
-                          },
-                          ticks: {
-                            color: '#6b7280',
-                            font: {
-                              size: 11
-                            },
-                            maxTicksLimit: 8
-                          }
-                        },
-                        y: {
-                          beginAtZero: true,
-                          grid: {
-                            display: true,
-                            color: 'rgba(0, 0, 0, 0.05)',
-                            drawTicks: false
-                          },
-                          ticks: {
-                            color: '#6b7280',
-                            font: {
-                              size: 11
-                            },
-                            stepSize: 1,
-                            callback: function(value) {
-                              return value === 0 ? '0' : value;
-                            }
-                          }
-                        }
-                      },
-                      interaction: {
-                        intersect: false,
-                        mode: 'index'
-                      },
-                      elements: {
-                        point: {
-                          radius: 3,
-                          hoverRadius: 6
-                        },
-                        line: {
-                          borderWidth: 2
-                        }
-                      }
-                    }}
-                  />
-                ) : (
-                  <div style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    height: '100%',
-                    color: '#9ca3af'
-                  }}>
-                    <svg width="48" height="48" fill="currentColor" viewBox="0 0 24 24" style={{ marginBottom: '1rem', opacity: 0.5 }}>
-                      <path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
-                    </svg>
-                    <p style={{ fontSize: '1rem', fontWeight: '500', margin: '0 0 0.5rem 0' }}>
-                      No Readiness Data Available
-                    </p>
-                    <p style={{ fontSize: '0.875rem', margin: '0' }}>
-                      Work readiness assessments will appear here
-                    </p>
-                  </div>
-                );
-                })()}
-              </div>
-            </div>
 
             {/* Additional Analytics Cards */}
             <div style={{ 
@@ -2625,78 +1235,6 @@ const TeamAnalytics: React.FC = () => {
                     </p>
                   </div>
                 </div>
-              </div>
-            </div>
-
-            {/* Emissions Trend Chart - Work Readiness Analytics */}
-            <div style={{
-              backgroundColor: 'rgba(255, 255, 255, 0.9)',
-              backdropFilter: 'blur(10px)',
-              borderRadius: window.innerWidth <= 768 ? '1rem' : '1rem',
-              padding: '1.5rem',
-              boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
-              border: '1px solid rgba(255, 255, 255, 0.2)',
-              marginBottom: window.innerWidth <= 768 ? '2rem' : '2rem'
-            }}>
-              <TrendChart
-                title={`Emissions Trend - Work Readiness Analytics ${analyticsData?.analytics?.readinessTrendData?.length > 0 ? `(${analyticsData.analytics.readinessTrendData.length} data points)` : '(No data yet)'}`}
-                data={(() => {
-                  const chartData = analyticsData?.analytics?.readinessTrendData?.length > 0 ? analyticsData.analytics.readinessTrendData.map((item: TrendDataItem) => ({
-                    date: item.date,
-                    fitForWork: item.fitForWork,
-                    minorConcernsFitForWork: item.minorConcernsFitForWork,
-                    notFitForWork: item.notFitForWork,
-                    total: item.total
-                  })) : [];
-                  
-                  console.log('🔍 Work Readiness Chart Data:', {
-                    rawData: analyticsData?.analytics?.readinessTrendData,
-                    processedData: chartData,
-                    dataLength: chartData.length,
-                    sampleItem: chartData[0]
-                  });
-                  
-                  return chartData;
-                })()}
-                isLoading={readinessChartLoading}
-                height={400}
-                externalTimePeriod={readinessDateRange === 'custom' ? 'week' : readinessDateRange as 'week' | 'month' | 'year'}
-                onTimePeriodChange={(period) => {
-                  console.log('🔄 TeamAnalytics: Time period changed to:', period);
-                  // Update the date range state
-                  if (period === 'week') {
-                    setReadinessDateRange('week');
-                    setReadinessStartDate(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
-                    setReadinessEndDate(new Date());
-                  } else if (period === 'month') {
-                    setReadinessDateRange('month');
-                    setReadinessStartDate(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000));
-                    setReadinessEndDate(new Date());
-                  } else if (period === 'year') {
-                    setReadinessDateRange('year');
-                    setReadinessStartDate(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000));
-                    setReadinessEndDate(new Date());
-                  }
-                  // The useEffect will automatically trigger and fetch new data
-                }}
-              />
-              
-              {/* Database Connection Status */}
-              <div style={{ 
-                marginTop: '1rem', 
-                padding: '1rem', 
-                backgroundColor: '#f8fafc', 
-                borderRadius: '0.5rem',
-                border: '1px solid #e2e8f0'
-              }}>
-                <Typography variant="caption" sx={{ color: '#64748b', fontSize: '0.75rem' }}>
-                  📊 Connected to live database • Data from: <code>{analyticsData?.teamLeader?.team || 'Team'}</code> work readiness assessments
-                </Typography>
-                {analyticsData?.analytics?.readinessTrendData?.length > 0 && (
-                  <Typography variant="caption" sx={{ color: '#10b981', fontSize: '0.75rem', ml: 1 }}>
-                    ✅ {analyticsData.analytics.readinessTrendData.length} data points loaded
-                  </Typography>
-                )}
               </div>
             </div>
 
@@ -2999,9 +1537,9 @@ const TeamAnalytics: React.FC = () => {
                       setToast({ message: 'Start date cannot be after end date', type: 'error' });
                       return;
                     }
-                    fetchAnalyticsData('workReadiness');
+                    fetchWorkReadinessData();
                   }}
-                  disabled={loading}
+                  disabled={workReadinessLoading}
                   style={{
                     padding: '0.5rem 1rem',
                     borderRadius: '0.5rem',
@@ -3416,9 +1954,9 @@ const TeamAnalytics: React.FC = () => {
                       setToast({ message: 'Start date cannot be after end date', type: 'error' });
                       return;
                     }
-                    fetchAnalyticsData('login');
+                    fetchLoginData();
                   }}
-                  disabled={loading}
+                  disabled={loginLoading}
                   style={{
                     padding: '0.5rem 1rem',
                     borderRadius: '0.5rem',
@@ -3503,13 +2041,14 @@ const TeamAnalytics: React.FC = () => {
                   const todayLogins = analyticsData.analytics.loginStats.todayLogins || 0;
                   const weeklyLogins = analyticsData.analytics.loginStats.weeklyLogins || 0;
                   const monthlyLogins = analyticsData.analytics.loginStats.monthlyLogins || 0;
+                  const totalLogins = analyticsData.analytics.loginStats.totalLogins || 0;
                   const dailyBreakdown = analyticsData.analytics.loginStats.dailyBreakdown || [];
                   
-                  // Use totalLogins or check if any data exists
-                  const total = analyticsData.analytics.loginStats.totalLogins || 0;
+                  // Use totalLogins or check if dailyBreakdown has any data
+                  const hasData = totalLogins > 0 || dailyBreakdown.some(day => day.count > 0);
                   
                   // If no data, show empty state
-                  if (total === 0) {
+                  if (!hasData) {
                     return (
                       <div style={{
                         height: '100%',
@@ -3688,355 +2227,6 @@ const TeamAnalytics: React.FC = () => {
           );
         })()}
 
-        {/* Work Readiness Activity Modal */}
-        {readinessModalOpen && (
-          <div style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.5)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            padding: window.innerWidth <= 768 ? '0.75rem' : '2rem'
-          }}>
-            <div style={{
-              backgroundColor: 'white',
-              borderRadius: window.innerWidth <= 768 ? '0.5rem' : '1rem',
-              padding: window.innerWidth <= 768 ? '0.75rem' : '2rem',
-              maxWidth: '90vw',
-              maxHeight: '90vh',
-              width: '1000px',
-              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
-              position: 'relative',
-              overflow: 'auto'
-            }}>
-              {/* Close Button */}
-              <button
-                onClick={() => setReadinessModalOpen(false)}
-                style={{
-                  position: 'absolute',
-                  top: '1rem',
-                  right: '1rem',
-                  padding: '0.5rem',
-                  borderRadius: '0.5rem',
-                  border: 'none',
-                  backgroundColor: '#f3f4f6',
-                  color: '#6b7280',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  width: '2rem',
-                  height: '2rem',
-                  fontSize: window.innerWidth <= 768 ? '1rem' : '1.25rem',
-                  transition: 'all 0.2s ease'
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.backgroundColor = '#e5e7eb';
-                  e.currentTarget.style.color = '#374151';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.backgroundColor = '#f3f4f6';
-                  e.currentTarget.style.color = '#6b7280';
-                }}
-              >
-                ×
-              </button>
-
-              {/* Modal Header */}
-              <div style={{ marginBottom: '2rem' }}>
-                <h2 style={{
-                  fontSize: window.innerWidth <= 768 ? '1.25rem' : '1.5rem',
-                  fontWeight: '600',
-                  color: '#1f2937',
-                  margin: '0 0 0.5rem 0'
-                }}>
-                  Work Readiness Activity - Detailed View
-                </h2>
-                <p style={{
-                  fontSize: '0.875rem',
-                  color: '#6b7280',
-                  margin: '0'
-                }}>
-                  Monitor work readiness trends over time
-                </p>
-              </div>
-
-              {/* Filter Controls */}
-              <div style={{ 
-                display: 'flex', 
-                justifyContent: 'space-between', 
-                alignItems: 'center',
-                marginBottom: window.innerWidth <= 768 ? '0.75rem' : '2rem',
-                padding: '1rem',
-                backgroundColor: '#f9fafb',
-                borderRadius: '0.75rem',
-                border: '1px solid #e5e7eb'
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                  {/* Legend */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <div style={{
-                      width: '12px',
-                      height: '12px',
-                      borderRadius: '50%',
-                      backgroundColor: '#9333ea'
-                    }}></div>
-                    <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>Not Fit for Work</span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <div style={{
-                      width: '12px',
-                      height: '12px',
-                      borderRadius: '50%',
-                      backgroundColor: '#3b82f6'
-                    }}></div>
-                    <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>Minor Concerns Fit for Work</span>
-                  </div>
-                </div>
-                
-                {/* Time Filter Dropdown */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                  <select 
-                    value={readinessDateRange}
-                    onChange={(e) => {
-                      e.preventDefault();
-                      console.log('Modal readiness filter changed to:', e.target.value);
-                      setReadinessDateRange(e.target.value as 'week' | 'month' | 'year' | 'custom');
-                    }}
-                    disabled={readinessChartLoading}
-                    style={{
-                      padding: '0.75rem 1rem',
-                      borderRadius: '0.5rem',
-                      border: '1px solid #d1d5db',
-                      backgroundColor: readinessChartLoading ? '#f9fafb' : 'white',
-                      fontSize: '0.875rem',
-                      color: readinessChartLoading ? '#9ca3af' : '#374151',
-                      cursor: readinessChartLoading ? 'not-allowed' : 'pointer',
-                      opacity: readinessChartLoading ? 0.7 : 1,
-                      minWidth: '120px'
-                    }}
-                  >
-                    <option value="week">This Week</option>
-                    <option value="month">This Month</option>
-                    <option value="year">This Year</option>
-                    <option value="custom">Custom Range</option>
-                  </select>
-                  
-                  {/* Custom Date Range Inputs */}
-                  {readinessDateRange === 'custom' && (
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                      <input
-                        type="date"
-                        value={readinessStartDate.toISOString().split('T')[0]}
-                        onChange={(e) => {
-                          e.preventDefault();
-                          setReadinessStartDate(new Date(e.target.value));
-                        }}
-                        style={{
-                          padding: '0.75rem',
-                          borderRadius: '0.375rem',
-                          border: '1px solid #d1d5db',
-                          fontSize: '0.875rem',
-                          backgroundColor: 'white'
-                        }}
-                      />
-                      <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>to</span>
-                      <input
-                        type="date"
-                        value={readinessEndDate.toISOString().split('T')[0]}
-                        onChange={(e) => {
-                          e.preventDefault();
-                          setReadinessEndDate(new Date(e.target.value));
-                        }}
-                        style={{
-                          padding: '0.75rem',
-                          borderRadius: '0.375rem',
-                          border: '1px solid #d1d5db',
-                          fontSize: '0.875rem',
-                          backgroundColor: 'white'
-                        }}
-                      />
-                    </div>
-                  )}
-                </div>
-              </div>
-              
-              {/* Chart Container */}
-              <div style={{ height: '500px', position: 'relative' }}>
-                {readinessChartLoading ? (
-                  <div style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    height: '100%',
-                    color: '#6b7280'
-                  }}>
-                    <div style={{
-                      width: '40px',
-                      height: '40px',
-                      border: '3px solid #e5e7eb',
-                      borderTop: '3px solid #3b82f6',
-                      borderRadius: '50%',
-                      animation: 'spin 1s linear infinite',
-                      marginBottom: '1rem'
-                    }}></div>
-                    <p style={{ fontSize: '0.875rem', margin: '0' }}>
-                      Updating chart data...
-                    </p>
-                  </div>
-                ) : analyticsData?.analytics?.readinessTrendData && 
-                   Array.isArray(analyticsData.analytics.readinessTrendData) && 
-                   analyticsData.analytics.readinessTrendData.length > 0 ? (
-                  <Line
-                    data={{
-                      labels: analyticsData.analytics.readinessTrendData.map((item: TrendDataItem) => 
-                        new Date(item.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-                      ),
-                      datasets: [
-                        {
-                          label: 'Not Fit for Work',
-                          data: analyticsData.analytics.readinessTrendData.map((item: TrendDataItem) => item.notFitForWork),
-                          borderColor: 'rgba(147, 51, 234, 1)',
-                          backgroundColor: 'rgba(147, 51, 234, 0.1)',
-                          fill: true,
-                          tension: 0.4,
-                          pointBackgroundColor: 'rgba(147, 51, 234, 1)',
-                          pointBorderColor: 'rgba(147, 51, 234, 1)',
-                          pointRadius: 4,
-                          pointHoverRadius: 8,
-                          pointHoverBackgroundColor: 'rgba(147, 51, 234, 1)',
-                          pointHoverBorderColor: 'rgba(147, 51, 234, 1)',
-                          pointHoverBorderWidth: 2,
-                          borderWidth: 3
-                        },
-                        {
-                          label: 'Minor Concerns Fit for Work',
-                          data: analyticsData.analytics.readinessTrendData.map((item: TrendDataItem) => item.minorConcernsFitForWork),
-                          borderColor: 'rgba(59, 130, 246, 1)',
-                          backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                          fill: true,
-                          tension: 0.4,
-                          pointBackgroundColor: 'rgba(59, 130, 246, 1)',
-                          pointBorderColor: 'rgba(59, 130, 246, 1)',
-                          pointRadius: 4,
-                          pointHoverRadius: 8,
-                          pointHoverBackgroundColor: 'rgba(59, 130, 246, 1)',
-                          pointHoverBorderColor: 'rgba(59, 130, 246, 1)',
-                          pointHoverBorderWidth: 2,
-                          borderWidth: 3
-                        }
-                      ]
-                    }}
-                    options={{
-                      responsive: true,
-                      maintainAspectRatio: false,
-                      plugins: {
-                        legend: {
-                          display: false // We have custom legend above
-                        },
-                        tooltip: {
-                          backgroundColor: 'rgba(0, 0, 0, 0.8)',
-                          titleColor: 'white',
-                          bodyColor: 'white',
-                          borderColor: 'rgba(255, 255, 255, 0.1)',
-                          borderWidth: 1,
-                          cornerRadius: 8,
-                          displayColors: true,
-                          callbacks: {
-                            title: function(context) {
-                              return new Date(context[0].label).toLocaleDateString('en-US', { 
-                                weekday: 'long',
-                                year: 'numeric',
-                                month: 'long',
-                                day: 'numeric'
-                              });
-                            },
-                            label: function(context) {
-                              return `${context.dataset.label}: ${context.parsed.y} assessment${context.parsed.y !== 1 ? 's' : ''}`;
-                            }
-                          }
-                        }
-                      },
-                      scales: {
-                        x: {
-                          grid: {
-                            display: true,
-                            color: 'rgba(0, 0, 0, 0.05)',
-                            drawTicks: false
-                          },
-                          ticks: {
-                            color: '#6b7280',
-                            font: {
-                              size: 12
-                            },
-                            maxTicksLimit: 12
-                          }
-                        },
-                        y: {
-                          beginAtZero: true,
-                          grid: {
-                            display: true,
-                            color: 'rgba(0, 0, 0, 0.05)',
-                            drawTicks: false
-                          },
-                          ticks: {
-                            color: '#6b7280',
-                            font: {
-                              size: 12
-                            },
-                            stepSize: 1,
-                            callback: function(value) {
-                              return value === 0 ? '0' : value;
-                            }
-                          }
-                        }
-                      },
-                      interaction: {
-                        intersect: false,
-                        mode: 'index'
-                      },
-                      elements: {
-                        point: {
-                          radius: 4,
-                          hoverRadius: 8
-                        },
-                        line: {
-                          borderWidth: 3
-                        }
-                      }
-                    }}
-                  />
-                ) : (
-                  <div style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    height: '100%',
-                    color: '#9ca3af'
-                  }}>
-                    <svg width="64" height="64" fill="currentColor" viewBox="0 0 24 24" style={{ marginBottom: '1rem', opacity: 0.5 }}>
-                      <path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
-                    </svg>
-                    <p style={{ fontSize: '1.125rem', fontWeight: '500', margin: '0 0 0.5rem 0' }}>
-                      No Readiness Data Available
-                    </p>
-                    <p style={{ fontSize: '0.875rem', margin: '0' }}>
-                      Work readiness assessments will appear here
-                    </p>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* Login Activity Trends Modal */}
         {showLoginModal && (
           <div style={{
@@ -4168,7 +2358,7 @@ const TeamAnalytics: React.FC = () => {
                       setToast({ message: 'Start date cannot be after end date', type: 'error' });
                       return;
                     }
-                    fetchAnalyticsData('login');
+                    fetchAnalyticsData(true);
                   }}
                   disabled={loading}
                   style={{
@@ -4270,12 +2460,14 @@ const TeamAnalytics: React.FC = () => {
                   const todayLogins = analyticsData.analytics.loginStats.todayLogins || 0;
                   const weeklyLogins = analyticsData.analytics.loginStats.weeklyLogins || 0;
                   const monthlyLogins = analyticsData.analytics.loginStats.monthlyLogins || 0;
+                  const totalLogins = analyticsData.analytics.loginStats.totalLogins || 0;
                   const dailyBreakdown = analyticsData.analytics.loginStats.dailyBreakdown || [];
                   
-                  const total = todayLogins + weeklyLogins + monthlyLogins;
+                  // Use totalLogins or check if dailyBreakdown has any data
+                  const hasData = totalLogins > 0 || dailyBreakdown.some(day => day.count > 0);
                   
                   // If no data, show empty state
-                  if (total === 0) {
+                  if (!hasData) {
                     return (
                       <div style={{
                         height: '100%',

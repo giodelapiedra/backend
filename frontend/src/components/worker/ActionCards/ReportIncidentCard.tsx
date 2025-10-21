@@ -39,4 +39,10 @@ const ReportIncidentCard: React.FC<ReportIncidentCardProps> = memo(({ onClick })
 ReportIncidentCard.displayName = 'ReportIncidentCard';
 
 export default ReportIncidentCard;
+export {};
+
+
+
+
+
 

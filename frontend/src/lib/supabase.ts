@@ -2,13 +2,15 @@ import { createClient } from '@supabase/supabase-js';
 import { cookieStorage } from './cookieStorage';
 
 // Get Supabase configuration from environment variables
-const supabaseUrl = process.env.REACT_APP_SUPABASE_URL || 'https://dtcgzgbxhefwhqpeotrl.supabase.co';
-const supabaseAnonKey = process.env.REACT_APP_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR0Y2d6Z2J4aGVmd2hxcGVvdHJsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTkxNDQ3MTgsImV4cCI6MjA3NDcyMDcxOH0.n557fWuqr8-e900nNhWOfeJTzdnhSzsv5tBW2pNM4gw';
+// SECURITY: No hardcoded keys - must use environment variables
+const supabaseUrl = process.env.REACT_APP_SUPABASE_URL;
+const supabaseAnonKey = process.env.REACT_APP_SUPABASE_ANON_KEY;
 
 // Validate environment variables
 if (!supabaseUrl || !supabaseAnonKey) {
   console.error('❌ Missing Supabase environment variables. Please check your .env.local file.');
-  throw new Error('Supabase configuration is missing');
+  console.error('Required: REACT_APP_SUPABASE_URL and REACT_APP_SUPABASE_ANON_KEY');
+  throw new Error('Supabase configuration is missing. Please configure environment variables.');
 }
 
 console.log('✅ Supabase configuration loaded from environment variables');

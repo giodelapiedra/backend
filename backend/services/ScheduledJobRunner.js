@@ -142,14 +142,8 @@ class ScheduledJobRunner {
       timezone: 'Asia/Manila'
     }));
     
-  // Mark overdue assignments every hour to check shift-based deadlines
-  this.jobs.set('markOverdueAssignments', cron.schedule('0 * * * *', async () => {
-    console.log('⏰ Running overdue assignment marking (hourly shift-based check)...');
-    await this.markOverdueAssignments();
-  }, {
-    scheduled: true,
-    timezone: 'Asia/Manila'
-  }));
+  // Manual overdue marking only - no automatic detection
+  // Team leaders can manually mark assignments as overdue after due time
     
     // Run all checks every 6 hours for critical notifications
     this.jobs.set('allChecks', cron.schedule('0 */6 * * *', async () => {
@@ -165,7 +159,7 @@ class ScheduledJobRunner {
     
     // Log job schedule
     console.log('📅 Job Schedule:');
-    console.log('  - Overdue assignments: Every hour (shift-based deadlines)');
+    console.log('  - Overdue assignments: Manual only (team leader control)');
     console.log('  - Check-in reminders: Daily at 9:00 AM');
     console.log('  - Overdue cases: Daily at 10:00 AM');
     console.log('  - Rehab milestones: Daily at 11:00 AM');

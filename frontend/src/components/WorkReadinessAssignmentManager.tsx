@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Box,
   Card,
@@ -41,34 +41,65 @@ import {
   KeyboardArrowLeft as KeyboardArrowLeftIcon,
   KeyboardArrowRight as KeyboardArrowRightIcon,
   Print as PrintIcon,
-  Refresh as RefreshIcon
+  Refresh as RefreshIcon,
+  Download as DownloadIcon
 } from '@mui/icons-material';
+import * as XLSX from 'xlsx';
 import { SupabaseAPI } from '../utils/supabaseApi';
 import { BackendAssignmentAPI } from '../utils/backendAssignmentApi';
 import { authClient } from '../lib/supabase';
+
+// Constants
+const PHT_OFFSET_MINUTES = 8 * 60;
+const ITEMS_PER_PAGE = 10;
+const SUCCESS_MESSAGE_DURATION = 5000;
+
+// Utility functions
+const getTodayPHT = (): string => {
+  const now = new Date();
+  const phtTime = new Date(now.getTime() + (PHT_OFFSET_MINUTES * 60 * 1000));
+  return phtTime.toISOString().split('T')[0];
+};
+
+const formatWorkerName = (worker?: { first_name?: string; last_name?: string }): string => {
+  if (!worker?.first_name || !worker?.last_name) return 'Unknown Worker';
+  return `${worker.first_name} ${worker.last_name}`;
+};
+
+const getInitials = (firstName?: string, lastName?: string): string => {
+  const first = firstName?.[0] || '';
+  const last = lastName?.[0] || '';
+  return `${first}${last}`.toUpperCase();
+};
+
+// Types
+type AssignmentStatus = 'pending' | 'completed' | 'overdue' | 'cancelled';
+type UnselectedReason = 'sick' | 'on_leave_rdo' | 'transferred' | 'injured_medical' | 'not_rostered';
+type CaseStatus = 'open' | 'in_progress' | 'closed';
+
+interface Worker {
+  id: string;
+  first_name: string;
+  last_name: string;
+  email: string;
+}
 
 interface Assignment {
   id: string;
   worker_id: string;
   assigned_date: string;
   due_time: string;
-  status: 'pending' | 'completed' | 'overdue' | 'cancelled';
+  status: AssignmentStatus;
   notes?: string;
-  worker?: {
-    id: string;
-    first_name: string;
-    last_name: string;
-    email: string;
+  worker?: Worker;
+  work_readiness?: {
+    readiness_level?: number;
+    fatigue_level?: number;
   };
-  work_readiness?: any;
   completed_at?: string;
 }
 
-interface TeamMember {
-  id: string;
-  first_name: string;
-  last_name: string;
-  email: string;
+interface TeamMember extends Worker {
   team: string;
 }
 
@@ -76,15 +107,28 @@ interface UnselectedWorker {
   id: string;
   worker_id: string;
   assignment_date: string;
-  reason: 'sick' | 'on_leave_rdo' | 'transferred' | 'injured_medical' | 'not_rostered';
+  reason: UnselectedReason;
   notes?: string;
-  case_status?: 'open' | 'in_progress' | 'closed';
-  worker?: {
-    id: string;
-    first_name: string;
-    last_name: string;
-    email: string;
-  };
+  case_status?: CaseStatus;
+  worker?: Worker;
+}
+
+interface ShiftInfo {
+  shift_name: string;
+  start_time: string;
+  end_time: string;
+  color: string;
+}
+
+interface AssignmentToCancel {
+  id: string;
+  workerName: string;
+  assignedDate: string;
+}
+
+interface UnselectedWorkerReason {
+  reason: string;
+  notes: string;
 }
 
 interface WorkReadinessAssignmentManagerProps {
@@ -96,60 +140,79 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
   teamLeaderId,
   team
 }) => {
+  // Core data state
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [unselectedWorkers, setUnselectedWorkers] = useState<UnselectedWorker[]>([]);
+  const [currentShift, setCurrentShift] = useState<ShiftInfo | null>(null);
+  
+  // UI state
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   
-  // Dialog states
+  // Assignment creation state
   const [openDialog, setOpenDialog] = useState(false);
   const [selectedWorkers, setSelectedWorkers] = useState<string[]>([]);
-  const [unselectedWorkerReasons, setUnselectedWorkerReasons] = useState<{[key: string]: {reason: string, notes: string}}>({});
-  const [assignedDate, setAssignedDate] = useState(() => {
-    // Get today's date in PHT
-    const now = new Date();
-    const phtOffset = 8 * 60; // 8 hours in minutes
-    const phtTime = new Date(now.getTime() + (phtOffset * 60 * 1000));
-    return phtTime.toISOString().split('T')[0];
-  });
+  const [unselectedWorkerReasons, setUnselectedWorkerReasons] = useState<Record<string, UnselectedWorkerReason>>({});
+  const [assignedDate, setAssignedDate] = useState(getTodayPHT);
   const [notes, setNotes] = useState('');
   
-  // Confirmation and Success Dialog states
+  // Dialog states
   const [showConfirmationDialog, setShowConfirmationDialog] = useState(false);
   const [showSuccessDialog, setShowSuccessDialog] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
-  
-  // Team leader shift information
-  const [currentShift, setCurrentShift] = useState<{
-    shift_name: string;
-    start_time: string;
-    end_time: string;
-    color: string;
-  } | null>(null);
-  
-  // Completed Worker Dialog states
   const [showCompletedWorkerDialog, setShowCompletedWorkerDialog] = useState(false);
   const [completedWorkerMessage, setCompletedWorkerMessage] = useState('');
+  const [showCancelDialog, setShowCancelDialog] = useState(false);
+  const [assignmentToCancel, setAssignmentToCancel] = useState<AssignmentToCancel | null>(null);
+  const [showOverdueConfirmDialog, setShowOverdueConfirmDialog] = useState(false);
+  const [showOverdueBlockingDialog, setShowOverdueBlockingDialog] = useState(false);
+  const [overdueBlockingMessage, setOverdueBlockingMessage] = useState('');
+  const [overdueBlockingDetails, setOverdueBlockingDetails] = useState<any>(null);
+  
+  // Password validation state
+  const [passwordDialog, setPasswordDialog] = useState(false);
+  const [passwordInput, setPasswordInput] = useState('');
+  const [passwordError, setPasswordError] = useState('');
+  const [validatingPassword, setValidatingPassword] = useState(false);
+  
+  // Filter and pagination state
+  const [filterDate, setFilterDate] = useState(getTodayPHT);
+  const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [assignmentsPage, setAssignmentsPage] = useState(1);
+  const [unselectedPage, setUnselectedPage] = useState(1);
 
-  // API configuration
+  // Constants
   const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001/api';
 
-  // Helper function to get auth token
-  const getAuthToken = async () => {
+  // Memoized auth token getter with refresh handling
+  const getAuthToken = useCallback(async (): Promise<string | null> => {
     try {
-      const { data: { session } } = await authClient.auth.getSession();
-      return session?.access_token || null;
+      const { data: { session }, error } = await authClient.auth.getSession();
+      
+      if (error || !session) {
+        // Try to refresh the session
+        const { data: refreshData, error: refreshError } = await authClient.auth.refreshSession();
+        
+        if (refreshError || !refreshData.session) {
+          setError('Session expired. Please login again.');
+          return null;
+        }
+        
+        return refreshData.session.access_token;
+      }
+      
+      return session.access_token;
     } catch (error) {
       console.error('Error getting auth token:', error);
+      setError('Failed to authenticate. Please refresh the page.');
       return null;
     }
-  };
+  }, []);
 
-
-  // Fetch team leader's current shift
-  const fetchCurrentShift = async () => {
+  // Optimized API functions with useCallback
+  const fetchCurrentShift = useCallback(async (): Promise<void> => {
     try {
       const token = await getAuthToken();
       if (!token) {
@@ -166,7 +229,6 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
 
       if (response.ok) {
         const data = await response.json();
-        // Find the current active shift
         const activeShift = data.data?.find((shift: any) => shift.is_active);
         if (activeShift) {
           setCurrentShift({
@@ -180,66 +242,9 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
     } catch (error) {
       console.error('Error fetching current shift:', error);
     }
-  };
-  
-  // Cancel confirmation dialog state
-  const [showCancelDialog, setShowCancelDialog] = useState(false);
-  const [assignmentToCancel, setAssignmentToCancel] = useState<{
-    id: string;
-    workerName: string;
-    assignedDate: string;
-  } | null>(null);
-  const [passwordDialog, setPasswordDialog] = useState(false);
-  const [passwordInput, setPasswordInput] = useState('');
-  const [passwordError, setPasswordError] = useState('');
-  const [validatingPassword, setValidatingPassword] = useState(false);
-  
-  // Overdue confirmation dialog state
-  const [showOverdueConfirmDialog, setShowOverdueConfirmDialog] = useState(false);
-  
-  // Overdue blocking dialog state
-  const [showOverdueBlockingDialog, setShowOverdueBlockingDialog] = useState(false);
-  const [overdueBlockingMessage, setOverdueBlockingMessage] = useState('');
-  
-  // Filter states
-  const [filterDate, setFilterDate] = useState(() => {
-    // Get today's date in PHT
-    const now = new Date();
-    const phtOffset = 8 * 60; // 8 hours in minutes
-    const phtTime = new Date(now.getTime() + (phtOffset * 60 * 1000));
-    return phtTime.toISOString().split('T')[0];
-  });
-  const [filterStatus, setFilterStatus] = useState<string>('all');
-  
-  // Pagination states
-  const [assignmentsPage, setAssignmentsPage] = useState(1);
-  const [unselectedPage, setUnselectedPage] = useState(1);
-  const [itemsPerPage] = useState(10);
+  }, [teamLeaderId, API_BASE_URL, getAuthToken]);
 
-  useEffect(() => {
-    fetchTeamMembers();
-    fetchAssignments();
-    fetchUnselectedWorkers();
-    fetchCurrentShift();
-  }, [teamLeaderId]);
-
-
-  // Auto-refresh assignments every 30 seconds to catch status updates
-  useEffect(() => {
-    const interval = setInterval(() => {
-      fetchAssignments();
-    }, 30000); // 30 seconds
-
-    return () => clearInterval(interval);
-  }, []);
-
-  // Reset pagination when filters change
-  useEffect(() => {
-    setAssignmentsPage(1);
-    setUnselectedPage(1);
-  }, [filterDate, filterStatus]);
-
-  const fetchTeamMembers = async () => {
+  const fetchTeamMembers = useCallback(async (): Promise<void> => {
     try {
       const { teamMembers: members } = await SupabaseAPI.getTeamMembers(teamLeaderId, team);
       setTeamMembers(members || []);
@@ -247,10 +252,63 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
       console.error('Error fetching team members:', err);
       setError('Failed to load team members');
     }
-  };
+  }, [teamLeaderId, team]);
 
-  // Helper function to check if a worker is unavailable
-  const isWorkerUnavailable = (member: any) => {
+  const fetchAssignments = useCallback(async (): Promise<void> => {
+    try {
+      setLoading(true);
+      const response = await BackendAssignmentAPI.getAssignments();
+      
+      const assignments = response.assignments || [];
+      setAssignments(assignments);
+      setError(null);
+    } catch (err: any) {
+      console.error('Error fetching assignments:', err);
+      setError(err.message || 'Failed to load assignments');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const fetchUnselectedWorkers = useCallback(async (): Promise<void> => {
+    try {
+      // Load OPEN incidents/cases from Incident Management (unselected_workers with case_status = 'open')
+      const supabaseApi = new SupabaseAPI();
+      const result = await supabaseApi.getUnselectedWorkerReasons(teamLeaderId, {
+        limit: 100,
+        offset: 0,
+        includeCount: false
+      });
+
+      if ((result as any)?.success && (result as any)?.data) {
+        setUnselectedWorkers(((result as any).data || []) as UnselectedWorker[]);
+      } else if ((result as any)?.unselectedWorkers) {
+        // Fallback shape if backend returns old shape
+        setUnselectedWorkers((result as any).unselectedWorkers || []);
+      } else {
+        setUnselectedWorkers([]);
+      }
+    } catch (err: any) {
+      console.error('Error fetching open incidents/unselected workers:', err);
+      setUnselectedWorkers([]);
+    }
+  }, [teamLeaderId]);
+
+  // Effects
+  useEffect(() => {
+    fetchTeamMembers();
+    fetchAssignments();
+    fetchUnselectedWorkers();
+    fetchCurrentShift();
+  }, [fetchTeamMembers, fetchAssignments, fetchUnselectedWorkers, fetchCurrentShift]);
+
+  useEffect(() => {
+    setAssignmentsPage(1);
+    setUnselectedPage(1);
+  }, [filterDate, filterStatus]);
+
+  // Memoized helper function to check if a worker is unavailable
+  const isWorkerUnavailable = useCallback((member: TeamMember): boolean => {
     const now = new Date();
     
     // Check if worker has pending assignment that's not due (across ALL dates)
@@ -272,70 +330,64 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
       return assignment.status === 'completed'; // Always block if completed on same date
     });
 
-    // Check if worker has unselected case
+    // Check if worker has ANY unclosed unselected case (regardless of date)
+    // Worker must close their case before they can be assigned again
     const unselected = unselectedWorkers.some(unselected => 
       unselected.worker_id === member.id &&
-        unselected.assignment_date === assignedDate && 
-        unselected.case_status !== 'closed'
+        unselected.case_status !== 'closed'  // ✅ Removed date check - blocks on ANY unclosed case
     );
 
-    // Check if worker has overdue assignment on the same date AND next shift hasn't started
+    // Check if worker has overdue assignment on the same date
+    // Overdue workers are blocked until next shift cycle starts
     const overdue = assignments.some(assignment => {
       if (assignment.worker_id !== member.id) return false;
       if (assignment.assigned_date !== assignedDate) return false;
       if (assignment.status !== 'overdue') return false;
       
-      // Check if next shift has started by comparing with current shift end time
+      // If assignment is overdue, check if enough time has passed (next shift started)
       if (currentShift && assignment.due_time) {
         const dueTime = new Date(assignment.due_time);
         const now = new Date();
         
-        // If current time is past the shift end time, worker should be available
-        // This is a simplified check - the backend will do the precise calculation
-        return now < dueTime;
+        // Calculate hours since the assignment became overdue
+        const hoursPastDue = (now.getTime() - dueTime.getTime()) / (1000 * 60 * 60);
+        
+        // Block for 8 hours after overdue (assumes next shift after 8 hours)
+        // This allows time for shift transition
+        return hoursPastDue < 8;
       }
       
       return true; // Block if no shift info available
     });
 
     return pendingNotDue || completed || unselected || overdue;
-  };
+  }, [assignments, assignedDate, unselectedWorkers, currentShift]);
 
-  const getAvailableTeamMembers = () => {
-    // Filter out unavailable workers and currently selected workers
-    const availableMembers = teamMembers.filter(member => 
+  // Memoized available team members
+  const availableTeamMembers = useMemo(() => {
+    return teamMembers.filter(member => 
       !isWorkerUnavailable(member) &&
       !selectedWorkers.includes(member.id)
     );
+  }, [teamMembers, isWorkerUnavailable, selectedWorkers]);
 
-    console.log('🔍 Available Members:', availableMembers.map(m => `${m.first_name} ${m.last_name}`));
-    return availableMembers;
-  };
-
-  const getFilteredAssignments = () => {
+  // Memoized filtered assignments
+  const filteredAssignments = useMemo(() => {
     let filtered = assignments;
-    
-    console.log('🔍 getFilteredAssignments - Debug Info:');
-    console.log('Total assignments:', assignments.length);
-    console.log('Filter status:', filterStatus);
-    console.log('Filter date:', filterDate);
-    console.log('All assignment statuses:', assignments.map(a => ({ id: a.id, status: a.status, worker: a.worker?.first_name })));
     
     if (filterDate) {
       filtered = filtered.filter(assignment => assignment.assigned_date === filterDate);
-      console.log('After date filter:', filtered.length);
     }
     
     if (filterStatus !== 'all') {
       filtered = filtered.filter(assignment => assignment.status === filterStatus);
-      console.log('After status filter:', filtered.length);
-      console.log('Filtered assignments:', filtered.map(a => ({ id: a.id, status: a.status, worker: a.worker?.first_name })));
     }
     
     return filtered;
-  };
+  }, [assignments, filterDate, filterStatus]);
 
-  const getFilteredUnselectedWorkers = () => {
+  // Memoized filtered unselected workers
+  const filteredUnselectedWorkers = useMemo(() => {
     let filtered = unselectedWorkers;
     
     if (filterDate) {
@@ -343,62 +395,71 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
     }
     
     return filtered;
-  };
+  }, [unselectedWorkers, filterDate]);
 
-  const getPaginatedAssignments = () => {
-    const filtered = getFilteredAssignments();
+  // Memoized paginated assignments
+  const paginatedAssignments = useMemo(() => {
+    let filtered = filteredAssignments;
     
     // Only sort by performance rank when viewing completed assignments
-    let sortedAssignments = filtered;
     if (filterStatus === 'completed') {
-      sortedAssignments = filtered.sort((a, b) => {
+      filtered = [...filtered].sort((a, b) => {
         const rankA = getWorkerRank(a.worker_id);
         const rankB = getWorkerRank(b.worker_id);
         return rankA - rankB; // Lower rank number = better performance = appears first
       });
     }
     
-    const startIndex = (assignmentsPage - 1) * itemsPerPage;
-    const endIndex = startIndex + itemsPerPage;
-    return sortedAssignments.slice(startIndex, endIndex);
-  };
-
-  const getPaginatedUnselectedWorkers = () => {
-    const filtered = getFilteredUnselectedWorkers().filter(w => w.case_status !== 'closed');
-    const startIndex = (unselectedPage - 1) * itemsPerPage;
-    const endIndex = startIndex + itemsPerPage;
+    const startIndex = (assignmentsPage - 1) * ITEMS_PER_PAGE;
+    const endIndex = startIndex + ITEMS_PER_PAGE;
     return filtered.slice(startIndex, endIndex);
-  };
+  }, [filteredAssignments, filterStatus, assignmentsPage]);
 
-  const getTotalPages = (items: any[]) => {
-    return Math.ceil(items.length / itemsPerPage);
-  };
+  // Memoized paginated unselected workers
+  const paginatedUnselectedWorkers = useMemo(() => {
+    const filtered = filteredUnselectedWorkers.filter(w => w.case_status !== 'closed');
+    const startIndex = (unselectedPage - 1) * ITEMS_PER_PAGE;
+    const endIndex = startIndex + ITEMS_PER_PAGE;
+    return filtered.slice(startIndex, endIndex);
+  }, [filteredUnselectedWorkers, unselectedPage]);
 
-  const handleAssignmentsPageChange = (newPage: number) => {
+  // Memoized total pages calculations
+  const totalAssignmentPages = useMemo(() => 
+    Math.ceil(filteredAssignments.length / ITEMS_PER_PAGE), 
+    [filteredAssignments.length]
+  );
+  
+  const totalUnselectedPages = useMemo(() => 
+    Math.ceil(filteredUnselectedWorkers.filter(w => w.case_status !== 'closed').length / ITEMS_PER_PAGE), 
+    [filteredUnselectedWorkers]
+  );
+
+  // Optimized event handlers
+  const handleAssignmentsPageChange = useCallback((newPage: number) => {
     setAssignmentsPage(newPage);
-  };
+  }, []);
 
-  const handleUnselectedPageChange = (newPage: number) => {
+  const handleUnselectedPageChange = useCallback((newPage: number) => {
     setUnselectedPage(newPage);
-  };
+  }, []);
 
   const PaginationComponent = ({ 
     currentPage, 
     totalPages, 
     onPageChange, 
     totalItems, 
-    itemsPerPage 
+    ITEMS_PER_PAGE 
   }: {
     currentPage: number;
     totalPages: number;
     onPageChange: (page: number) => void;
     totalItems: number;
-    itemsPerPage: number;
+    ITEMS_PER_PAGE: number;
   }) => {
     if (totalPages <= 1) return null;
 
-    const startItem = (currentPage - 1) * itemsPerPage + 1;
-    const endItem = Math.min(currentPage * itemsPerPage, totalItems);
+    const startItem = (currentPage - 1) * ITEMS_PER_PAGE + 1;
+    const endItem = Math.min(currentPage * ITEMS_PER_PAGE, totalItems);
 
     return (
       <Box sx={{ 
@@ -484,170 +545,223 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
     assignments: number;
     completed: number;
     onTime: number;
+    late: number; // Track late submissions (completed after due_time)
+    pending: number; // Track pending assignments
+    overdue: number; // Track overdue assignments
     avgReadiness: number;
     avgFatigue: number;
     performanceRating: string;
+    score: number;
   }
 
-  const calculateWorkerPerformance = (): WorkerPerformanceData[] => {
+  // Memoized worker performance calculation - FIXED for accurate KPI
+  const calculateWorkerPerformance = useCallback((): WorkerPerformanceData[] => {
     const workerMap = new Map<string, WorkerPerformanceData>();
 
-    // Use filtered assignments based on current date filter for performance calculation
-    const filteredAssignments = getFilteredAssignments();
-    
-    console.log('🔍 Worker Performance Debug:');
-    console.log('All Assignments:', assignments);
-    console.log('Filtered Assignments:', filteredAssignments);
-    console.log('Team Members:', teamMembers);
-    console.log('Filter Date:', filterDate);
-
-    // Only initialize worker data for workers who have assignments for the selected date
-    filteredAssignments.forEach(assignment => {
-      if (!workerMap.has(assignment.worker_id)) {
-        const worker = teamMembers.find(m => m.id === assignment.worker_id);
-        console.log('Looking for worker:', assignment.worker_id, 'Found:', worker);
+    // Use ALL assignments for consistent KPI (not filtered by date)
+    assignments.forEach(assignment => {
+      const workerId = assignment.worker_id;
+      
+      // Initialize worker if not exists
+      if (!workerMap.has(workerId)) {
+        const worker = teamMembers.find(m => m.id === workerId);
         
-        // Use worker data from assignment if team member not found
-        const workerName = worker ? `${worker.first_name} ${worker.last_name}` : 
-                          (assignment.worker?.first_name && assignment.worker?.last_name) ? 
-                          `${assignment.worker.first_name} ${assignment.worker.last_name}` : 
-                          `Worker ${assignment.worker_id}`;
-        const workerEmail = worker ? worker.email : 
-                           assignment.worker?.email || 'No email';
+        // Use worker data from assignment if team member not found - null safety
+        const workerName = worker 
+          ? `${worker.first_name} ${worker.last_name}` 
+          : (assignment.worker?.first_name && assignment.worker?.last_name) 
+            ? `${assignment.worker.first_name} ${assignment.worker.last_name}` 
+            : `Worker ${workerId}`;
+        const workerEmail = worker?.email || assignment.worker?.email || 'No email';
         
-        workerMap.set(assignment.worker_id, {
-          id: assignment.worker_id,
+        workerMap.set(workerId, {
+          id: workerId,
           name: workerName,
           email: workerEmail,
           assignments: 0,
           completed: 0,
           onTime: 0,
+          late: 0, // Track late submissions (completed after due_time)
+          pending: 0, // Track pending assignments
+          overdue: 0, // Track overdue assignments
           avgReadiness: 0,
           avgFatigue: 0,
-          performanceRating: 'No Data'
+          performanceRating: 'No Data',
+          score: 0
         });
       }
-    });
 
-    // Calculate performance metrics from filtered assignments
-    filteredAssignments.forEach(assignment => {
-      const worker = workerMap.get(assignment.worker_id);
-      if (worker) {
-        worker.assignments++;
-        
+      const workerData = workerMap.get(workerId)!;
+      workerData.assignments++;
+      
+      // Process COMPLETED assignments
         if (assignment.status === 'completed') {
-          worker.completed++;
-          
-          // Check if completed on time (within 24 hours of assignment)
-          const assignedDate = new Date(assignment.assigned_date);
-          const completedDate = new Date(assignment.completed_at || assignment.assigned_date);
-          const isOnTime = completedDate <= new Date(assignedDate.getTime() + 24 * 60 * 60 * 1000);
+        workerData.completed++;
+        
+        // FIXED: Check against actual due_time (not 24 hours)
+        // Track on-time vs late submissions
+        if (assignment.due_time && assignment.completed_at) {
+          const dueDate = new Date(assignment.due_time);
+          const completedDate = new Date(assignment.completed_at);
+          const isOnTime = completedDate <= dueDate;
           
           if (isOnTime) {
-            worker.onTime++;
+            workerData.onTime++;
+          } else {
+            // Late submission: completed after due_time
+            workerData.late++;
           }
+        }
 
-          // Add readiness and fatigue data if available from work_readiness
+        // Add readiness data - FIXED: Normalize to 0-100 scale
           if (assignment.work_readiness?.readiness_level) {
-            const readinessLevel = parseFloat(assignment.work_readiness.readiness_level);
+          let readinessLevel = typeof assignment.work_readiness.readiness_level === 'string' 
+              ? parseFloat(assignment.work_readiness.readiness_level)
+              : assignment.work_readiness.readiness_level;
+          
             if (!isNaN(readinessLevel)) {
-              worker.avgReadiness = (worker.avgReadiness * (worker.completed - 1) + readinessLevel) / worker.completed;
+            // Normalize if 1-10 scale (convert to 0-100)
+            if (readinessLevel <= 10) {
+              readinessLevel = readinessLevel * 10;
             }
+            workerData.avgReadiness = (workerData.avgReadiness * (workerData.completed - 1) + readinessLevel) / workerData.completed;
           }
+        }
+        
           if (assignment.work_readiness?.fatigue_level) {
-            const fatigueLevel = parseFloat(assignment.work_readiness.fatigue_level);
+            const fatigueLevel = typeof assignment.work_readiness.fatigue_level === 'string'
+              ? parseFloat(assignment.work_readiness.fatigue_level)
+              : assignment.work_readiness.fatigue_level;
             if (!isNaN(fatigueLevel)) {
-              worker.avgFatigue = (worker.avgFatigue * (worker.completed - 1) + fatigueLevel) / worker.completed;
-            }
+            workerData.avgFatigue = (workerData.avgFatigue * (workerData.completed - 1) + fatigueLevel) / workerData.completed;
           }
         }
       }
+      
+      // Process PENDING assignments
+      if (assignment.status === 'pending') {
+        workerData.pending++;
+      }
+      
+      // Process OVERDUE assignments
+      if (assignment.status === 'overdue') {
+        workerData.overdue++;
+      }
     });
 
-    // Calculate performance ratings only for workers with completed assignments
+    // Calculate performance ratings and scores - FULLY ALIGNED WITH BACKEND INDIVIDUAL WORKER KPI
     workerMap.forEach(worker => {
-      if (worker.completed > 0) {
+      if (worker.assignments > 0) {
+        // Completion rate: completed / total assignments
         const completionRate = (worker.completed / worker.assignments) * 100;
-        const onTimeRate = (worker.onTime / worker.completed) * 100;
-        const readinessScore = worker.avgReadiness || 0;
         
-        const overallScore = (completionRate + onTimeRate + readinessScore) / 3;
+        // On-time rate: on time / total assignments
+        let onTimeRate = (worker.onTime / worker.assignments) * 100;
         
-        if (overallScore >= 85) {
-          worker.performanceRating = 'Excellent';
-        } else if (overallScore >= 70) {
-          worker.performanceRating = 'Good';
-        } else if (overallScore >= 50) {
-          worker.performanceRating = 'Average';
+        // Quality score: readiness level (already normalized to 0-100)
+        let qualityScore = worker.avgReadiness || 0;
+        
+        // ⚠️ APPLY LATE SUBMISSION PENALTIES (matches backend behavior)
+        // Late submissions reduce both on-time rate and quality score
+        if (worker.late > 0) {
+          // Late submissions reduce on-time rate by 50% per late assignment
+          const latePenaltyRate = (worker.late / worker.assignments) * 50;
+          onTimeRate = Math.max(0, onTimeRate - latePenaltyRate);
+          
+          // Late submissions also reduce quality score by 20% per late assignment
+          const latePenaltyQuality = (worker.late / worker.assignments) * 20;
+          qualityScore = Math.max(0, qualityScore - latePenaltyQuality);
+        }
+        
+        // Backend-aligned weighted score formula (WITHOUT lateRate as positive contribution):
+        // (completion * 0.5) + (onTime * 0.25) + (quality * 0.1) + bonuses - penalties
+        let weightedScore = (completionRate * 0.5) +      // 50% weight for completion
+                           (onTimeRate * 0.25) +          // 25% weight for on-time (already penalized if late)
+                           (qualityScore * 0.1);          // 10% weight for quality (already penalized if late)
+        
+        // Calculate pending bonus (max 5%)
+        const pendingBonus = worker.pending > 0 
+          ? Math.min(5, (worker.pending / worker.assignments) * 5)
+          : 0;
+        
+        // Apply overdue penalty: simplified version (no shift-based decay in frontend)
+        // Backend uses up to 10% penalty with shift-based decay
+        const overduePenalty = Math.min(10, (worker.overdue / worker.assignments) * 10);
+        
+        // Calculate recovery bonus (simplified - up to 3%)
+        // Backend checks recent completions within 7 days; here we simplify
+        // Give bonus if completion rate is high (80%+)
+        const recoveryBonus = completionRate >= 80 ? 3 : 0;
+        
+        // Final score with all components
+        weightedScore = weightedScore + pendingBonus - overduePenalty + recoveryBonus;
+        
+        // Ensure score stays within 0-100 range
+        worker.score = Math.max(0, Math.min(100, weightedScore));
+        
+        // Rating thresholds aligned with backend
+        if (worker.score >= 95) {
+          worker.performanceRating = 'Excellent (A+)';
+        } else if (worker.score >= 90) {
+          worker.performanceRating = 'Excellent (A)';
+        } else if (worker.score >= 85) {
+          worker.performanceRating = 'Very Good (A-)';
+        } else if (worker.score >= 80) {
+          worker.performanceRating = 'Good (B+)';
+        } else if (worker.score >= 75) {
+          worker.performanceRating = 'Good (B)';
+        } else if (worker.score >= 70) {
+          worker.performanceRating = 'Above Average (B-)';
+        } else if (worker.score >= 65) {
+          worker.performanceRating = 'Average (C+)';
+        } else if (worker.score >= 60) {
+          worker.performanceRating = 'Average (C)';
+        } else if (worker.score >= 55) {
+          worker.performanceRating = 'Below Average (C-)';
+        } else if (worker.score >= 50) {
+          worker.performanceRating = 'Below Average (D)';
         } else {
-          worker.performanceRating = 'Needs Improvement';
+          worker.performanceRating = 'Needs Improvement (F)';
         }
       }
     });
 
-    // Return all workers who have assignments (even if not completed)
-    const result = Array.from(workerMap.values());
-    console.log('🔍 Worker Performance Result:', result);
-    console.log('Worker Map Size:', workerMap.size);
-    console.log('Result Length:', result.length);
-    
-    // If no workers found but we have assignments, there might be a data issue
-    if (result.length === 0 && assignments.length > 0) {
-      console.log('⚠️ No workers found but assignments exist - data structure issue');
-      console.log('All Assignment worker_ids:', assignments.map(a => a.worker_id));
-      console.log('Filtered Assignment worker_ids:', filteredAssignments.map(a => a.worker_id));
-      console.log('Team member ids:', teamMembers.map(m => m.id));
-    }
-    
-    return result;
-  };
+    return Array.from(workerMap.values());
+  }, [assignments, teamMembers]); // Use assignments, not filteredAssignments
+
+  // Memoized worker performance data
+  const workerPerformanceData = useMemo(() => calculateWorkerPerformance(), [calculateWorkerPerformance]);
+
+  // Memoized sorted worker performance - optimized to use pre-calculated scores
+  const sortedWorkerPerformance = useMemo(() => {
+    return [...workerPerformanceData].sort((a, b) => {
+      // Only rank workers with completed assignments
+      if (a.completed === 0 && b.completed === 0) return 0;
+      if (a.completed === 0) return 1; // Workers with no completions go to bottom
+      if (b.completed === 0) return -1;
+      
+      // Use pre-calculated score for efficiency
+      return b.score - a.score; // Higher score = better rank (first)
+    });
+  }, [workerPerformanceData]);
+
+  // Memoized worker rank map for O(1) lookup
+  const workerRankMap = useMemo(() => {
+    const rankMap = new Map<string, number>();
+    sortedWorkerPerformance.forEach((worker, index) => {
+      rankMap.set(worker.id, index + 1);
+    });
+    return rankMap;
+  }, [sortedWorkerPerformance]);
 
   const getPaginatedWorkerPerformance = () => {
-    const workerPerformance = calculateWorkerPerformance();
-    // Sort workers by performance score (best to worst)
-    const sortedWorkers = workerPerformance.sort((a, b) => {
-      // Only rank workers with completed assignments
-      if (a.completed === 0 && b.completed === 0) {
-        return 0; // Equal ranking for workers with no completions
-      }
-      if (a.completed === 0) return 1; // Workers with no completions go to bottom
-      if (b.completed === 0) return -1; // Workers with no completions go to bottom
-      
-      const scoreA = (a.completed / Math.max(a.assignments, 1)) * 100 + 
-                    (a.onTime / Math.max(a.completed, 1)) * 100 + 
-                    (a.avgReadiness || 0);
-      const scoreB = (b.completed / Math.max(b.assignments, 1)) * 100 + 
-                    (b.onTime / Math.max(b.completed, 1)) * 100 + 
-                    (b.avgReadiness || 0);
-      return scoreB - scoreA; // Higher score = better rank (first)
-    });
-    
-    const startIndex = (assignmentsPage - 1) * itemsPerPage;
-    const endIndex = startIndex + itemsPerPage;
-    return sortedWorkers.slice(startIndex, endIndex);
+    const startIndex = (assignmentsPage - 1) * ITEMS_PER_PAGE;
+    const endIndex = startIndex + ITEMS_PER_PAGE;
+    return sortedWorkerPerformance.slice(startIndex, endIndex);
   };
 
   const getWorkerRank = (workerId: string) => {
-    const workerPerformance = calculateWorkerPerformance();
-    const sortedWorkers = workerPerformance.sort((a, b) => {
-      // Only rank workers with completed assignments
-      if (a.completed === 0 && b.completed === 0) {
-        return 0; // Equal ranking for workers with no completions
-      }
-      if (a.completed === 0) return 1; // Workers with no completions go to bottom
-      if (b.completed === 0) return -1; // Workers with no completions go to bottom
-      
-      const scoreA = (a.completed / Math.max(a.assignments, 1)) * 100 + 
-                    (a.onTime / Math.max(a.completed, 1)) * 100 + 
-                    (a.avgReadiness || 0);
-      const scoreB = (b.completed / Math.max(b.assignments, 1)) * 100 + 
-                    (b.onTime / Math.max(b.completed, 1)) * 100 + 
-                    (b.avgReadiness || 0);
-      return scoreB - scoreA;
-    });
-    
-    const globalRank = sortedWorkers.findIndex(w => w.id === workerId) + 1;
-    return globalRank;
+    return workerRankMap.get(workerId) || 0;
   };
 
   const getPerformanceColor = (rating: string) => {
@@ -661,60 +775,55 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
     }
   };
 
-  const fetchAssignments = async () => {
-    try {
-      setLoading(true);
-      // Fetch all assignments including cancelled ones
-      const response = await BackendAssignmentAPI.getAssignments();
-      
-      console.log('🔍 fetchAssignments - Raw API Response:', response);
-      console.log('🔍 fetchAssignments - Assignments array:', response.assignments);
-      console.log('🔍 fetchAssignments - Assignment statuses:', response.assignments?.map((a: any) => ({ id: a.id, status: a.status, worker: a.worker?.first_name })));
-      
-      // Debug stats calculation
-      const assignments = response.assignments || [];
-      const completedCount = assignments.filter(a => a.status === 'completed').length;
-      const pendingCount = assignments.filter(a => a.status === 'pending').length;
-      const overdueCount = assignments.filter(a => a.status === 'overdue').length;
-      
-      console.log('📊 Assignment Stats:', {
-        total: assignments.length,
-        completed: completedCount,
-        pending: pendingCount,
-        overdue: overdueCount
-      });
-      
-      setAssignments(assignments);
-      setError(null);
-    } catch (err: any) {
-      console.error('Error fetching assignments:', err);
-      setError(err.message || 'Failed to load assignments');
-    } finally {
-      setLoading(false);
-    }
-  };
 
-  const fetchUnselectedWorkers = async () => {
-    try {
-      // Fetch all unselected workers, not filtered by date for dialog logic
-      const response = await BackendAssignmentAPI.getUnselectedWorkers();
-      setUnselectedWorkers(response.unselectedWorkers || []);
-    } catch (err: any) {
-      console.error('Error fetching unselected workers:', err);
-      // Don't show error for unselected workers, just log it
-    }
-  };
-
-  // Check if any assignments are past due time (only for today's assignments)
+  // Check if the FILTERED DATE has pending assignments that can be marked as overdue
+  // Only checks the currently selected date in the filter
   const hasOverdueAssignments = () => {
     const now = new Date();
     const today = now.toISOString().split('T')[0]; // Get today's date in YYYY-MM-DD format
+    const selectedDate = filterDate; // Use the filtered date
     
-    return assignments.some(assignment => 
-      assignment.status === 'pending' && 
-      assignment.assigned_date === today && // Only check today's assignments
-      new Date(assignment.due_time) < now
-    );
+    // Only if the filtered date is BEFORE today
+    if (selectedDate >= today) {
+      return false; // Can't mark future or today as overdue yet
+    }
+    
+    // Check if there are pending assignments for the selected date
+    return assignments.some(assignment => {
+      if (assignment.status !== 'pending') return false;
+      if (assignment.assigned_date !== selectedDate) return false; // Must match filtered date
+      
+      return true;
+    });
+  };
+
+  // Check if team leader's shift has started
+  const isShiftStarted = () => {
+    if (!currentShift) return true; // If no shift info, assume it's started
+    
+    const now = new Date();
+    const currentHour = now.getHours();
+    const currentMinute = now.getMinutes();
+    const currentTime = currentHour * 60 + currentMinute; // Current time in minutes
+    
+    // Parse shift start time
+    const [startHour, startMinute] = currentShift.start_time.split(':').map(Number);
+    const shiftStartTime = startHour * 60 + startMinute; // Shift start time in minutes
+    
+    // Parse shift end time
+    const [endHour, endMinute] = currentShift.end_time.split(':').map(Number);
+    const shiftEndTime = endHour * 60 + endMinute; // Shift end time in minutes
+    
+    // Handle night shift (22:00 - 06:00) - crosses midnight
+    if (endHour < 12) { // Night shift (ends before noon, e.g., 06:00)
+      // For night shift, we're in shift if:
+      // 1. Current time is after start time (same day), OR
+      // 2. Current time is before end time (next day)
+      return currentTime >= shiftStartTime || currentTime < shiftEndTime;
+    } else {
+      // Day shift (ends after noon, e.g., 14:00, 22:00)
+      return currentTime >= shiftStartTime;
+    }
   };
 
   // Check if team leader's shift has ended
@@ -745,8 +854,10 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
   };
 
   // Check if overdue button should be enabled
+  // Enable whenever there are PAST DATE pending assignments
+  // Team leader can manually mark them as overdue anytime
   const isOverdueButtonEnabled = () => {
-    return hasOverdueAssignments() && isShiftEnded();
+    return hasOverdueAssignments();
   };
 
   // Check if there are overdue assignments that block new assignment creation
@@ -761,32 +872,65 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
     );
     
     if (overdueAssignments.length === 0) {
-      return { hasOverdue: false, message: '' };
+      return { hasOverdue: false, message: '', overdueDetails: null };
     }
     
+    // NEW: Check if next shift has started - if yes, workers should be available
+    if (currentShift && isShiftStarted()) {
+      // Current shift has started, so overdue assignments shouldn't block new ones
+      return { hasOverdue: false, message: '', overdueDetails: null };
+    }
+    
+    // Get worker names with overdue assignments
+    const overdueWorkerNames = overdueAssignments
+      .map(assignment => {
+        const worker = teamMembers.find(m => m.id === assignment.worker_id) || assignment.worker;
+        return worker ? `${worker.first_name} ${worker.last_name}` : 'Unknown Worker';
+      })
+      .filter((name, index, self) => self.indexOf(name) === index); // Remove duplicates
+    
     // Calculate next shift start time
-    let nextShiftStart = '';
+    let nextShiftDate = '';
+    let nextShiftTime = '';
     if (currentShift) {
-      const [startHour, startMinute] = currentShift.start_time.split(':').map(Number);
       const tomorrow = new Date(now);
       tomorrow.setDate(tomorrow.getDate() + 1);
       
-      nextShiftStart = tomorrow.toLocaleDateString('en-US', {
+      nextShiftDate = tomorrow.toLocaleDateString('en-US', {
+        weekday: 'long',
         year: 'numeric',
         month: 'long',
         day: 'numeric'
-      }) + ` at ${currentShift.start_time}`;
-    } else {
-      nextShiftStart = 'the next shift';
+      });
+      
+      // Format time to 12-hour format with AM/PM
+      const [hour, minute] = currentShift.start_time.split(':').map(Number);
+      const period = hour >= 12 ? 'PM' : 'AM';
+      const hour12 = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour;
+      nextShiftTime = `${hour12}:${minute.toString().padStart(2, '0')} ${period}`;
     }
     
-    const message = `Cannot assign new work readiness tasks. Some workers have overdue assignments for ${new Date(today).toLocaleDateString('en-US', {
+    const todayFormatted = new Date(today).toLocaleDateString('en-US', {
+      weekday: 'long',
       year: 'numeric',
       month: 'long',
       day: 'numeric'
-    })}. They will be available when the next shift starts at ${nextShiftStart}.`;
+    });
     
-    return { hasOverdue: true, message };
+    const message = `Cannot assign new work readiness tasks.\n\nSome workers have overdue assignments from ${todayFormatted}.\n\nThey will be available when the next shift starts.`;
+    
+    return { 
+      hasOverdue: true, 
+      message,
+      overdueDetails: {
+        date: todayFormatted,
+        workerCount: overdueWorkerNames.length,
+        workers: overdueWorkerNames,
+        nextShiftDate,
+        nextShiftTime,
+        shiftName: currentShift?.shift_name || 'Next Shift'
+      }
+    };
   };
 
   // Handle manual overdue marking confirmation
@@ -794,20 +938,31 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
     try {
       setLoading(true);
       
-      // Check if there are any overdue assignments first
+      // Check if there are pending assignments for the filtered date
       if (!hasOverdueAssignments()) {
-        setSuccessMessage('No assignments are past due time yet');
+        const formattedDate = new Date(filterDate).toLocaleDateString('en-US', {
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric'
+        });
+        setSuccessMessage(`No pending assignments found for ${formattedDate} to mark as overdue`);
         setShowSuccessDialog(true);
         return;
       }
       
-      const response = await BackendAssignmentAPI.markOverdueAssignments();
+      // Pass the specific date to mark as overdue
+      const response = await BackendAssignmentAPI.markOverdueAssignments(filterDate);
       
       if (response.success) {
-        console.log(`✅ Marked ${response.count} assignments as overdue`);
+        const formattedDate = new Date(filterDate).toLocaleDateString('en-US', {
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric'
+        });
+        console.log(`✅ Marked ${response.count} assignment(s) from ${formattedDate} as overdue`);
         await fetchAssignments(); // Refresh the list
         // Show success message
-        setSuccessMessage(`Successfully marked ${response.count} assignments as overdue`);
+        setSuccessMessage(`Successfully marked ${response.count} assignment(s) from ${formattedDate} as overdue`);
         setShowSuccessDialog(true);
       } else {
         console.error('Failed to mark overdue assignments:', response.message);
@@ -826,27 +981,276 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
     }
   };
 
+  // Excel Export Function - Professional Formatting
+  const handleExportExcel = () => {
+    try {
+      const now = new Date();
+      const dateStr = filterDate || getTodayPHT();
+      const formattedDate = new Date(dateStr).toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      });
+
+      // Create workbook
+      const workbook = XLSX.utils.book_new();
+
+      // === SHEET 1: ASSIGNMENT DETAILS ===
+      const assignmentData = [
+        [`WORK READINESS ASSIGNMENTS - ${formattedDate}`],
+        [''],
+        ['Generated:', now.toLocaleString('en-US')],
+        ['Team Leader:', team],
+        ['Total Assignments:', filteredAssignments.length],
+        [''],
+        ['ASSIGNMENT DETAILS'],
+        [''],
+        ['Worker Name', 'Assigned Date', 'Due Time', 'Status', 'Completion Time', 'Readiness Level', 'Pain Level', 'Fatigue Level', 'Notes']
+      ];
+
+      filteredAssignments.forEach(assignment => {
+        const workerName = assignment.worker 
+          ? `${assignment.worker.first_name} ${assignment.worker.last_name}`
+          : 'Unknown Worker';
+        
+        const assignedDate = new Date(assignment.assigned_date).toLocaleDateString('en-US');
+        const dueTime = assignment.due_time 
+          ? new Date(assignment.due_time).toLocaleString('en-US')
+          : 'Not set';
+        
+        const completionTime = assignment.completed_at
+          ? new Date(assignment.completed_at).toLocaleString('en-US')
+          : '-';
+        
+        const readiness = assignment.work_readiness?.readiness_level || '-';
+        const pain = (assignment.work_readiness as any)?.pain_level || '-';
+        const fatigue = assignment.work_readiness?.fatigue_level || '-';
+        const notes = (assignment.work_readiness as any)?.notes || '-';
+
+        assignmentData.push([
+          workerName,
+          assignedDate,
+          dueTime,
+          assignment.status.toUpperCase(),
+          completionTime,
+          readiness,
+          pain,
+          fatigue,
+          notes
+        ]);
+      });
+
+      const assignmentSheet = XLSX.utils.aoa_to_sheet(assignmentData);
+      assignmentSheet['!cols'] = [
+        { wch: 20 }, // Worker Name
+        { wch: 15 }, // Assigned Date
+        { wch: 20 }, // Due Time
+        { wch: 12 }, // Status
+        { wch: 20 }, // Completion Time
+        { wch: 15 }, // Readiness
+        { wch: 12 }, // Pain
+        { wch: 14 }, // Fatigue
+        { wch: 30 }  // Notes
+      ];
+
+      // === SHEET 2: WORKER PERFORMANCE ===
+      const performanceData = [
+        ['WORKER PERFORMANCE RANKING'],
+        [''],
+        ['Generated:', now.toLocaleString('en-US')],
+        ['Based on:', 'All assignments (not filtered by date)'],
+        [''],
+        ['PERFORMANCE METRICS'],
+        [''],
+        ['Rank', 'Worker Name', 'Total Assignments', 'Completed', 'On-Time', 'Late', 'Pending', 'Overdue', 'Completion %', 'On-Time %', 'KPI Score', 'Rating']
+      ];
+
+      sortedWorkerPerformance.forEach((worker, index) => {
+        const rank = index + 1;
+        const completionRate = worker.assignments > 0 
+          ? ((worker.completed / worker.assignments) * 100).toFixed(1) 
+          : '0.0';
+        const onTimeRate = worker.completed > 0 
+          ? ((worker.onTime / worker.completed) * 100).toFixed(1) 
+          : '0.0';
+        
+        performanceData.push([
+          rank.toString(),
+          worker.name,
+          worker.assignments.toString(),
+          worker.completed.toString(),
+          worker.onTime.toString(),
+          worker.late.toString(),
+          worker.pending.toString(),
+          worker.overdue.toString(),
+          completionRate + '%',
+          onTimeRate + '%',
+          worker.score.toFixed(1),
+          worker.performanceRating
+        ]);
+      });
+
+      const performanceSheet = XLSX.utils.aoa_to_sheet(performanceData);
+      performanceSheet['!cols'] = [
+        { wch: 6 },  // Rank
+        { wch: 20 }, // Worker Name
+        { wch: 16 }, // Total
+        { wch: 12 }, // Completed
+        { wch: 10 }, // On-Time
+        { wch: 8 },  // Late
+        { wch: 10 }, // Pending
+        { wch: 10 }, // Overdue
+        { wch: 14 }, // Completion %
+        { wch: 12 }, // On-Time %
+        { wch: 12 }, // KPI Score
+        { wch: 15 }  // Rating
+      ];
+
+      // === SHEET 3: SUMMARY STATISTICS ===
+      const totalAssignments = filteredAssignments.length;
+      const completedCount = filteredAssignments.filter(a => a.status === 'completed').length;
+      const pendingCount = filteredAssignments.filter(a => a.status === 'pending').length;
+      const overdueCount = filteredAssignments.filter(a => a.status === 'overdue').length;
+      const completionRate = totalAssignments > 0 
+        ? ((completedCount / totalAssignments) * 100).toFixed(1) 
+        : '0.0';
+
+      const summaryData = [
+        ['SUMMARY STATISTICS'],
+        [''],
+        ['Report Date:', formattedDate],
+        ['Generated On:', now.toLocaleString('en-US')],
+        [''],
+        ['ASSIGNMENT OVERVIEW'],
+        [''],
+        ['Metric', 'Value', 'Percentage'],
+        ['Total Assignments', totalAssignments, '100%'],
+        ['Completed', completedCount, completionRate + '%'],
+        ['Pending', pendingCount, (totalAssignments > 0 ? ((pendingCount / totalAssignments) * 100).toFixed(1) : '0.0') + '%'],
+        ['Overdue', overdueCount, (totalAssignments > 0 ? ((overdueCount / totalAssignments) * 100).toFixed(1) : '0.0') + '%'],
+        [''],
+        ['TEAM PERFORMANCE'],
+        [''],
+        ['Total Workers', sortedWorkerPerformance.length, ''],
+        ['Active Workers', sortedWorkerPerformance.filter(w => w.assignments > 0).length, ''],
+        ['Top Performer', sortedWorkerPerformance[0]?.name || 'N/A', sortedWorkerPerformance[0]?.performanceRating || 'N/A'],
+        [''],
+        ['KPI FORMULA (Backend-Aligned)'],
+        [''],
+        ['Component', 'Weight', 'Description'],
+        ['Completion Rate', '50%', 'Percentage of completed assignments'],
+        ['On-Time Rate', '25%', 'Percentage of on-time submissions'],
+        ['Quality Score', '10%', 'Based on readiness assessments'],
+        ['Pending Bonus', 'Up to +5%', 'Bonus for pending assignments'],
+        ['Overdue Penalty', 'Variable', 'Penalty for overdue assignments'],
+        ['Recovery Bonus', 'Up to +3%', 'Bonus for high completion rates (≥80%)'],
+        ['Late Penalty', '-50% on-time, -20% quality', 'Applied to late submissions'],
+        [''],
+        ['RATING SCALE'],
+        [''],
+        ['Grade', 'Score Range', 'Description'],
+        ['A+ to A-', '85-100', 'Excellent Performance'],
+        ['B+ to B-', '70-84', 'Good Performance'],
+        ['C+ to C-', '55-69', 'Average Performance'],
+        ['D to F', '0-54', 'Needs Improvement']
+      ];
+
+      const summarySheet = XLSX.utils.aoa_to_sheet(summaryData);
+      summarySheet['!cols'] = [
+        { wch: 25 }, // Column A
+        { wch: 18 }, // Column B
+        { wch: 40 }  // Column C
+      ];
+
+      // Add sheets to workbook
+      XLSX.utils.book_append_sheet(workbook, summarySheet, 'Summary');
+      XLSX.utils.book_append_sheet(workbook, assignmentSheet, 'Assignment Details');
+      XLSX.utils.book_append_sheet(workbook, performanceSheet, 'Worker Performance');
+
+      // Generate filename
+      const filename = `Work_Readiness_Report_${dateStr.replace(/-/g, '_')}.xlsx`;
+
+      // Download file
+      XLSX.writeFile(workbook, filename);
+
+      setSuccessMessage(`Excel report downloaded successfully: ${filename}`);
+      setShowSuccessDialog(true);
+    } catch (error) {
+      console.error('Error exporting Excel:', error);
+      setError('Failed to export Excel report. Please try again.');
+    }
+  };
+
   const handleCreateAssignments = () => {
     if (selectedWorkers.length === 0) {
       setError('Please select at least one worker');
       return;
     }
 
+    // Check if shift has started
+    if (!isShiftStarted()) {
+      setError(null); // Clear any error alerts
+      const shiftStartTime = currentShift ? currentShift.start_time : 'shift start time';
+      setOverdueBlockingMessage(`Assignment creation is not available yet. Please wait until your shift starts at ${shiftStartTime}.`);
+      setShowOverdueBlockingDialog(true);
+      return;
+    }
+
+    // Check if any selected workers have unclosed unselected cases
+    const workersWithUnclosedCases = selectedWorkers
+      .map(workerId => {
+        const unclosedCase = unselectedWorkers.find(unselected => 
+          unselected.worker_id === workerId && 
+          unselected.case_status !== 'closed'
+        );
+        
+        if (unclosedCase) {
+          const worker = teamMembers.find(m => m.id === workerId);
+          return {
+            workerId,
+            workerName: worker ? `${worker.first_name} ${worker.last_name}` : 'Unknown Worker',
+            caseDate: unclosedCase.assignment_date,
+            reason: unclosedCase.reason
+          };
+        }
+        return null;
+      })
+      .filter(Boolean);
+
+    if (workersWithUnclosedCases.length > 0) {
+      setError(null); // Clear any error alerts
+      const workersList = workersWithUnclosedCases
+        .map(w => `• ${w!.workerName} - Unclosed case from ${new Date(w!.caseDate).toLocaleDateString('en-US', {
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric'
+        })}`)
+        .join('\n');
+      
+      setOverdueBlockingMessage(
+        `Some workers have unclosed unselected cases. Please close their cases first before assigning new tasks.\n\n${workersList}\n\nYou can close these cases from the Unselected Workers section below.`
+      );
+      setShowOverdueBlockingDialog(true);
+      return;
+    }
+
     // Check for overdue assignments that block new assignment creation
     const overdueCheck = checkOverdueBlocking();
     if (overdueCheck.hasOverdue) {
+      setError(null); // Clear any error alerts
       setOverdueBlockingMessage(overdueCheck.message);
+      setOverdueBlockingDetails(overdueCheck.overdueDetails);
       setShowOverdueBlockingDialog(true);
       return;
     }
 
     // Validate that all unselected workers have reasons
-    const availableMembers = getAvailableTeamMembers();
+    const availableMembers = availableTeamMembers;
     const unselectedWorkerIds = teamMembers
       .filter(member => 
         !selectedWorkers.includes(member.id) && 
         !assignments.some(a => a.assigned_date === assignedDate && a.worker_id === member.id && a.status === 'pending') &&
-        !unselectedWorkers.some(u => u.assignment_date === assignedDate && u.worker_id === member.id && u.case_status !== 'closed')
+        !unselectedWorkers.some(u => u.worker_id === member.id && u.case_status !== 'closed')  // ✅ Check ANY unclosed case
       )
       .map(member => member.id);
 
@@ -996,6 +1400,41 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
       setLoading(true);
       setError(null);
       
+      // RE-VALIDATE: Fetch latest assignments to check for race conditions
+      await fetchAssignments();
+      
+      // Check if any selected worker now has an assignment (race condition protection)
+      const nowUnavailable = selectedWorkers.filter(workerId => {
+        return assignments.some(a => 
+          a.worker_id === workerId && 
+          a.assigned_date === assignedDate &&
+          ['pending', 'completed'].includes(a.status)
+        );
+      });
+      
+      if (nowUnavailable.length > 0) {
+        const workerNames = nowUnavailable.map(id => {
+          const worker = teamMembers.find(m => m.id === id);
+          return worker ? `${worker.first_name} ${worker.last_name}` : id;
+        }).join(', ');
+        
+        setError(`These workers are no longer available: ${workerNames}. Please refresh and try again.`);
+        setLoading(false);
+        setOpenDialog(true); // Re-open dialog so user can adjust
+        return;
+      }
+      
+      // RE-CHECK for overdue blocking before API call (in case status changed)
+      const overdueCheck = checkOverdueBlocking();
+      if (overdueCheck.hasOverdue) {
+        setError(null);
+        setOverdueBlockingMessage(overdueCheck.message);
+        setOverdueBlockingDetails(overdueCheck.overdueDetails);
+        setShowOverdueBlockingDialog(true);
+        setLoading(false);
+        return;
+      }
+      
       // Prepare unselected workers data
       const unselectedWorkersData = Object.entries(unselectedWorkerReasons)
         .filter(([workerId]) => !selectedWorkers.includes(workerId))
@@ -1030,8 +1469,26 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
     } catch (err: any) {
       console.error('Error creating assignments:', err);
       
+      // Check if backend returned overdue blocking error
+      const errorMessage = err.response?.data?.error || err.message || '';
+      if (errorMessage.includes('overdue assignments') || errorMessage.includes('Cannot assign new work readiness tasks')) {
+        // Backend detected overdue - parse and show in dialog
+        const overdueCheck = checkOverdueBlocking();
+        if (overdueCheck.hasOverdue) {
+          setError(null);
+          setOverdueBlockingMessage(overdueCheck.message);
+          setOverdueBlockingDetails(overdueCheck.overdueDetails);
+          setShowOverdueBlockingDialog(true);
+        } else {
+          // Fallback if we can't get details
+          setError(null);
+          setOverdueBlockingMessage(errorMessage);
+          setOverdueBlockingDetails(null);
+          setShowOverdueBlockingDialog(true);
+        }
+      }
       // Check if the error is related to completed workers
-      if (err.response?.data?.completedWorkers && err.response.data.completedWorkers.length > 0) {
+      else if (err.response?.data?.completedWorkers && err.response.data.completedWorkers.length > 0) {
         const completedWorkerNames = teamMembers
           .filter(member => err.response.data.completedWorkers.includes(member.id))
           .map(member => `${member.first_name} ${member.last_name}`)
@@ -1152,15 +1609,17 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
     setNotes('');
   };
 
-  const handleWorkerToggle = (workerId: string) => {
+  // Optimized worker toggle handler
+  const handleWorkerToggle = useCallback((workerId: string) => {
     setSelectedWorkers(prev =>
       prev.includes(workerId)
         ? prev.filter(id => id !== workerId)
         : [...prev, workerId]
     );
-  };
+  }, []);
 
-  const handleUnselectedWorkerReasonChange = (workerId: string, reason: string) => {
+  // Optimized unselected worker reason handler
+  const handleUnselectedWorkerReasonChange = useCallback((workerId: string, reason: string) => {
     setUnselectedWorkerReasons(prev => ({
       ...prev,
       [workerId]: {
@@ -1168,9 +1627,10 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
         reason
       }
     }));
-  };
+  }, []);
 
-  const handleUnselectedWorkerNotesChange = (workerId: string, notes: string) => {
+  // Optimized unselected worker notes handler
+  const handleUnselectedWorkerNotesChange = useCallback((workerId: string, notes: string) => {
     setUnselectedWorkerReasons(prev => ({
       ...prev,
       [workerId]: {
@@ -1178,40 +1638,44 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
         notes
       }
     }));
-  };
+  }, []);
 
-  const getReasonLabel = (reason: string) => {
-    switch (reason) {
-      case 'sick': return 'Sick';
-      case 'on_leave_rdo': return 'On leave / RDO';
-      case 'transferred': return 'Transferred to another site';
-      case 'injured_medical': return 'Injured / Medical';
-      case 'not_rostered': return 'Not rostered';
-      default: return reason;
-    }
-  };
+  // Memoized reason label getter
+  const getReasonLabel = useCallback((reason: string): string => {
+    const reasonLabels: Record<string, string> = {
+      'sick': 'Sick',
+      'on_leave_rdo': 'On leave / RDO',
+      'transferred': 'Transferred to another site',
+      'injured_medical': 'Injured / Medical',
+      'not_rostered': 'Not rostered'
+    };
+    return reasonLabels[reason] || reason;
+  }, []);
 
-  const getCaseStatusColor = (status: string) => {
-    switch (status) {
-      case 'open': return 'error';
-      case 'in_progress': return 'warning';
-      case 'closed': return 'success';
-      default: return 'default';
-    }
-  };
+  // Memoized case status color getter
+  const getCaseStatusColor = useCallback((status: string): 'error' | 'warning' | 'success' | 'default' => {
+    const statusColors: Record<string, 'error' | 'warning' | 'success' | 'default'> = {
+      'open': 'error',
+      'in_progress': 'warning',
+      'closed': 'success'
+    };
+    return statusColors[status] || 'default';
+  }, []);
 
-  const getCaseStatusLabel = (status: string) => {
-    switch (status) {
-      case 'open': return 'Open';
-      case 'in_progress': return 'In Progress';
-      case 'closed': return 'Closed';
-      default: return 'Open';
-    }
-  };
+  // Memoized case status label getter
+  const getCaseStatusLabel = useCallback((status: string): string => {
+    const statusLabels: Record<string, string> = {
+      'open': 'Open',
+      'in_progress': 'In Progress',
+      'closed': 'Closed'
+    };
+    return statusLabels[status] || 'Open';
+  }, []);
 
-  const handleCloseCase = async (unselectedWorkerId: string) => {
+  // Optimized close case handler
+  const handleCloseCase = useCallback(async (unselectedWorkerId: string) => {
     const worker = unselectedWorkers.find(w => w.id === unselectedWorkerId);
-    const workerName = worker?.worker ? `${worker.worker.first_name} ${worker.worker.last_name}` : 'this worker';
+    const workerName = worker?.worker ? formatWorkerName(worker.worker) : 'this worker';
     const reason = worker ? getReasonLabel(worker.reason) : 'the specified reason';
     
     const confirmMessage = `Close case for ${workerName}?\n\nReason: ${reason}\n\nThis will make the worker available for assignment again.`;
@@ -1228,13 +1692,10 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
       
       if (response.success) {
         // Remove the worker from unselectedWorkers list when case is closed
-        const updatedUnselectedWorkers = unselectedWorkers.filter(worker => 
-          worker.id !== unselectedWorkerId
-        );
-        setUnselectedWorkers(updatedUnselectedWorkers);
+        setUnselectedWorkers(prev => prev.filter(worker => worker.id !== unselectedWorkerId));
         
         setSuccess(`✅ Case closed successfully! ${workerName} is now available for assignment.`);
-        setTimeout(() => setSuccess(null), 5000);
+        setTimeout(() => setSuccess(null), SUCCESS_MESSAGE_DURATION);
       } else {
         throw new Error(response.message || 'Failed to close case');
       }
@@ -1244,37 +1705,29 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
     } finally {
       setLoading(false);
     }
-  };
+  }, [unselectedWorkers, getReasonLabel]);
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'completed':
-        return 'success';
-      case 'pending':
-        return 'warning';
-      case 'overdue':
-        return 'error';
-      case 'cancelled':
-        return 'default';
-      default:
-        return 'default';
-    }
-  };
+  // Memoized status color getter
+  const getStatusColor = useCallback((status: string): 'success' | 'warning' | 'error' | 'default' => {
+    const statusColors: Record<string, 'success' | 'warning' | 'error' | 'default'> = {
+      'completed': 'success',
+      'pending': 'warning',
+      'overdue': 'error',
+      'cancelled': 'default'
+    };
+    return statusColors[status] || 'default';
+  }, []);
 
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case 'completed':
-        return <CheckCircleIcon fontSize="small" />;
-      case 'pending':
-        return <ScheduleIcon fontSize="small" />;
-      case 'overdue':
-        return <WarningIcon fontSize="small" />;
-      case 'cancelled':
-        return <CancelIcon fontSize="small" />;
-      default:
-        return undefined;
-    }
-  };
+  // Memoized status icon getter
+  const getStatusIcon = useCallback((status: string) => {
+    const statusIcons: Record<string, React.ReactElement> = {
+      'completed': <CheckCircleIcon fontSize="small" />,
+      'pending': <ScheduleIcon fontSize="small" />,
+      'overdue': <WarningIcon fontSize="small" />,
+      'cancelled': <CancelIcon fontSize="small" />
+    };
+    return statusIcons[status] || undefined;
+  }, []);
 
   return (
     <Box>
@@ -1306,6 +1759,25 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
           </Button>
           <Button
             variant="contained"
+            startIcon={<DownloadIcon />}
+            onClick={handleExportExcel}
+            disabled={loading || filteredAssignments.length === 0}
+            sx={{
+              backgroundColor: '#10b981',
+              color: 'white',
+              '&:hover': { 
+                backgroundColor: '#059669'
+              },
+              '&:disabled': {
+                backgroundColor: '#d1d5db',
+                color: '#9ca3af'
+              }
+            }}
+          >
+            Export Excel
+          </Button>
+          <Button
+            variant="contained"
             color="warning"
             startIcon={<ScheduleIcon />}
             onClick={() => setShowOverdueConfirmDialog(true)}
@@ -1319,9 +1791,9 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
               }
             }}
             title={
-              !isShiftEnded() ? "Cannot mark overdue during active shift" :
-              !hasOverdueAssignments() ? "No assignments are past due time yet" :
-              "Mark assignments as overdue if past due time"
+              !hasOverdueAssignments() 
+                ? `No pending assignments for ${new Date(filterDate).toLocaleDateString()} to mark as overdue` 
+                : `Mark pending assignments from ${new Date(filterDate).toLocaleDateString()} as overdue`
             }
           >
             Mark Overdue
@@ -1340,8 +1812,12 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
         </Box>
       </Box>
 
-      {/* Alerts */}
-      {error && (
+      {/* Alerts - Hide overdue/blocking messages as they show in dialogs */}
+      {error && 
+       !error.includes('overdue assignments') && 
+       !error.includes('unclosed unselected cases') && 
+       !error.includes('Assignment creation is not available yet') && 
+       !error.includes('Cannot assign new work readiness tasks') && (
         <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
           {error}
         </Alert>
@@ -1359,25 +1835,25 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
             {[
               { 
                 label: 'Total Assignments', 
-                value: getFilteredAssignments().length, 
+                value: filteredAssignments.length, 
                 color: '#6366f1',
                 icon: <AssignmentIcon />
               },
               { 
                 label: 'Pending', 
-                value: getFilteredAssignments().filter(a => a.status === 'pending').length, 
+                value: filteredAssignments.filter(a => a.status === 'pending').length, 
                 color: '#f59e0b',
                 icon: <ScheduleIcon />
               },
               { 
                 label: 'Completed', 
-                value: getFilteredAssignments().filter(a => a.status === 'completed').length, 
+                value: filteredAssignments.filter(a => a.status === 'completed').length, 
                 color: '#10b981',
                 icon: <DoneIcon />
               },
               { 
                 label: 'Overdue', 
-                value: getFilteredAssignments().filter(a => a.status === 'overdue').length, 
+                value: filteredAssignments.filter(a => a.status === 'overdue').length, 
                 color: '#ef4444',
                 icon: <WarningIcon />
               }
@@ -1465,9 +1941,9 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
                   {(() => {
                     let count = 0;
                     if (tab.value === 'all') {
-                      count = getFilteredAssignments().length;
+                      count = filteredAssignments.length;
                     } else {
-                      count = getFilteredAssignments().filter(a => a.status === tab.value).length;
+                      count = filteredAssignments.filter(a => a.status === tab.value).length;
                     }
                     
                     return count > 0 ? (
@@ -1550,9 +2026,7 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
           ) : (
             // Regular Assignments Table
             (() => {
-              const filteredAssignments = getFilteredAssignments();
-              const paginatedAssignments = getPaginatedAssignments();
-              const totalPages = getTotalPages(filteredAssignments);
+              const totalPages = totalAssignmentPages;
               
               return filteredAssignments.length === 0 ? (
                 <Box sx={{ textAlign: 'center', p: 4 }}>
@@ -1582,16 +2056,20 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
                 </TableHead>
                 <TableBody>
                         {paginatedAssignments.map((assignment) => {
-                          // Get worker performance rank
-                          const workerPerformance = calculateWorkerPerformance();
+                          // Get worker performance rank - optimized with memoized map
                           const workerRank = getWorkerRank(assignment.worker_id);
+                          
+                          // Null safety for worker data
+                          const workerFirstName = assignment.worker?.first_name || 'Unknown';
+                          const workerLastName = assignment.worker?.last_name || '';
+                          const workerEmail = assignment.worker?.email || 'No email';
                           
                           return (
                     <TableRow key={assignment.id}>
                       {filterStatus === 'completed' && (
                         <TableCell>
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                            {workerRank <= 3 ? (
+                            {workerRank > 0 && workerRank <= 3 ? (
                               <Box sx={{ 
                                 width: 24, 
                                 height: 24, 
@@ -1606,9 +2084,13 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
                               }}>
                                 {workerRank}
                               </Box>
-                            ) : (
+                            ) : workerRank > 0 ? (
                               <Typography variant="body2" sx={{ fontWeight: 600, color: '#6b7280' }}>
                                 #{workerRank}
+                              </Typography>
+                            ) : (
+                              <Typography variant="body2" sx={{ fontWeight: 400, color: '#9ca3af' }}>
+                                N/A
                               </Typography>
                             )}
                           </Box>
@@ -1617,10 +2099,10 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
                       <TableCell>
                         <Box>
                           <Typography variant="body2" fontWeight={600}>
-                            {assignment.worker?.first_name} {assignment.worker?.last_name}
+                            {workerFirstName} {workerLastName}
                           </Typography>
                           <Typography variant="caption" color="text.secondary">
-                            {assignment.worker?.email}
+                            {workerEmail}
                           </Typography>
                         </Box>
                       </TableCell>
@@ -1700,7 +2182,7 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
                     totalPages={totalPages}
                     onPageChange={handleAssignmentsPageChange}
                     totalItems={filteredAssignments.length}
-                    itemsPerPage={itemsPerPage}
+                    ITEMS_PER_PAGE={ITEMS_PER_PAGE}
                   />
                 </>
               );
@@ -1776,10 +2258,25 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
                       label="Assignment Date"
                       type="date"
                       value={assignedDate}
-                      onChange={(e) => setAssignedDate(e.target.value)}
+                      onChange={(e) => {
+                        const selectedDate = new Date(e.target.value);
+                        const today = new Date(getTodayPHT());
+                        today.setHours(0, 0, 0, 0);
+                        selectedDate.setHours(0, 0, 0, 0);
+                        
+                        if (selectedDate < today) {
+                          setError('Cannot create assignments for past dates');
+                          setTimeout(() => setError(null), 5000);
+                          return;
+                        }
+                        setAssignedDate(e.target.value);
+                      }}
                       fullWidth
                       required
                       InputLabelProps={{ shrink: true }}
+                      inputProps={{
+                        min: getTodayPHT() // Prevent selecting past dates in date picker
+                      }}
                       sx={{
                         '& .MuiOutlinedInput-root': {
                           borderRadius: '8px',
@@ -1838,7 +2335,7 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
                     👥 Select Team Members
                   </Typography>
                   {(() => {
-                    const availableMembers = getAvailableTeamMembers();
+                    const availableMembers = availableTeamMembers;
                     const allSelected = availableMembers.length > 0 && selectedWorkers.length === availableMembers.length;
                     
                     return availableMembers.length > 0 && (
@@ -1908,7 +2405,7 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
 
                 {/* Available Workers List */}
                 {(() => {
-                  const availableMembers = getAvailableTeamMembers();
+                  const availableMembers = availableTeamMembers;
                   return availableMembers.length === 0 ? (
                     <Box sx={{ 
                       p: 3, 
@@ -2005,7 +2502,7 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
             {(() => {
               // Get unavailable members using helper function
               const unavailableMembers = teamMembers.filter(member => isWorkerUnavailable(member));
-              const availableMembers = getAvailableTeamMembers();
+              const availableMembers = availableTeamMembers;
               const unselectedMembers = availableMembers.filter(member => !selectedWorkers.includes(member.id));
               
               return (
@@ -2018,7 +2515,7 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
                       </Typography>
                       <Alert severity="warning" sx={{ mb: 2 }}>
                         <Typography variant="body2">
-                          <strong>Note:</strong> These workers cannot be assigned because they have pending assignments that are not yet due, completed assignments (until shift deadline passes), or unclosed cases. Workers with overdue assignments can be reassigned (KPI penalties apply).
+                          <strong>Note:</strong> These workers cannot be assigned because they have pending assignments that are not yet due, completed assignments (until shift deadline passes), or unclosed unselected cases (from any date). Workers with overdue assignments can be reassigned (KPI penalties apply).
                         </Typography>
                       </Alert>
 
@@ -2056,9 +2553,8 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
                             return true; // Block if no due time
                           });
 
-                          const unselected = unselectedWorkers.some(unselected => 
+                          const unselectedCase = unselectedWorkers.find(unselected => 
                             unselected.worker_id === member.id &&
-                            unselected.assignment_date === assignedDate &&
                             unselected.case_status !== 'closed'
                           );
 
@@ -2074,8 +2570,13 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
                             reason = `Has pending assignment from ${pendingAssignment?.assigned_date} (not yet due)`;
                           } else if (completed) {
                             reason = 'Already completed assignment';
-                          } else if (unselected) {
-                            reason = 'Has unclosed unselected case';
+                          } else if (unselectedCase) {
+                            const caseDate = new Date(unselectedCase.assignment_date).toLocaleDateString('en-US', {
+                              year: 'numeric',
+                              month: 'short',
+                              day: 'numeric'
+                            });
+                            reason = `Has unclosed unselected case from ${caseDate}`;
                           }
 
                           return (
@@ -2943,7 +3444,7 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
         
         <DialogContent sx={{ p: 3 }}>
           <Typography variant="body1" sx={{ mb: 2, color: '#374151' }}>
-            Are you sure you want to mark assignments as overdue?
+            Are you sure you want to mark pending assignments as overdue?
           </Typography>
           
           <Box sx={{ 
@@ -2953,13 +3454,21 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
             border: '1px solid #fbbf24',
             mb: 2
           }}>
-            <Typography variant="body2" sx={{ color: '#92400e', fontWeight: 500 }}>
-              ⚠️ <strong>Important:</strong> This action will mark all assignments past their due time as overdue.
+            <Typography variant="body2" sx={{ color: '#92400e', fontWeight: 500, mb: 1 }}>
+              ⚠️ <strong>Important:</strong> This will mark all pending assignments as overdue for:
+            </Typography>
+            <Typography variant="h6" sx={{ color: '#92400e', fontWeight: 700, textAlign: 'center' }}>
+              {new Date(filterDate).toLocaleDateString('en-US', {
+                weekday: 'long',
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric'
+              })}
             </Typography>
           </Box>
           
           <Typography variant="body2" sx={{ color: '#6b7280' }}>
-            💡 <strong>Note:</strong> Overdue assignments cannot be completed later and will affect worker performance records.
+            💡 <strong>Note:</strong> Only assignments from the selected date will be marked. Workers may have submitted late, so marking as overdue will affect their performance records and KPI calculations.
           </Typography>
         </DialogContent>
         
@@ -3015,8 +3524,11 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
       {/* Overdue Blocking Dialog */}
       <Dialog
         open={showOverdueBlockingDialog}
-        onClose={() => setShowOverdueBlockingDialog(false)}
-        maxWidth="sm"
+        onClose={() => {
+          setShowOverdueBlockingDialog(false);
+          setOverdueBlockingDetails(null);
+        }}
+        maxWidth="md"
         fullWidth
         PaperProps={{
           sx: {
@@ -3027,114 +3539,225 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
         }}
       >
         <DialogTitle sx={{ 
-          bgcolor: '#fef2f2', 
-          color: '#991b1b',
+          bgcolor: overdueBlockingDetails ? '#fef2f2' : '#fefce8',
+          color: overdueBlockingDetails ? '#991b1b' : '#78350f',
           fontWeight: 600,
-          borderBottom: '1px solid #fecaca',
+          borderBottom: overdueBlockingDetails ? '2px solid #fecaca' : '2px solid #fde68a',
           p: 3
         }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
             <Box sx={{
-              width: 40,
-              height: 40,
+              width: 48,
+              height: 48,
               borderRadius: '50%',
-              bgcolor: '#ef4444',
+              bgcolor: overdueBlockingDetails ? 'rgba(239, 68, 68, 0.1)' : 'rgba(251, 191, 36, 0.1)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center'
             }}>
-              <WarningIcon sx={{ fontSize: 24, color: 'white' }} />
+              <WarningIcon sx={{ fontSize: 28, color: overdueBlockingDetails ? '#ef4444' : '#f59e0b' }} />
             </Box>
-            Cannot Create Assignment
+            <Box>
+              <Typography variant="h5" sx={{ fontWeight: 700 }}>
+                {overdueBlockingDetails ? 'Cannot Create Assignment' : 'Assignment Not Available'}
+              </Typography>
+              <Typography variant="body2" sx={{ opacity: 0.9, mt: 0.5 }}>
+                {overdueBlockingDetails ? 'Workers have overdue assignments' : 'Please review the details below'}
+            </Typography>
+            </Box>
           </Box>
         </DialogTitle>
         
         <DialogContent sx={{ p: 4 }}>
+          {overdueBlockingDetails ? (
+            <>
+              {/* Overdue Workers Information */}
+              <Box sx={{ mb: 3 }}>
           <Box sx={{ 
-            display: 'flex', 
-            alignItems: 'center', 
-            justifyContent: 'center',
-            mb: 3
-          }}>
-            <Box sx={{
-              width: 100,
-              height: 100,
-              borderRadius: '50%',
-              bgcolor: '#fef2f2',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              border: '3px solid #ef4444',
-              animation: 'pulse 2s infinite'
-            }}>
-              <WarningIcon sx={{ fontSize: 50, color: '#ef4444' }} />
-            </Box>
-          </Box>
-          
-          <Typography variant="h5" align="center" sx={{ mb: 3, fontWeight: 700, color: '#991b1b' }}>
-            ⚠️ Assignment Blocked
-          </Typography>
-          
-          <Box sx={{ 
-            p: 3, 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  justifyContent: 'center',
+                  mb: 3
+                }}>
+                  <Box sx={{
+                    width: 80,
+                    height: 80,
+                    borderRadius: '50%',
             bgcolor: '#fef2f2', 
-            borderRadius: 2, 
-            border: '1px solid #fecaca',
-            mb: 3
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    border: '3px solid #ef4444'
+                  }}>
+                    <ScheduleIcon sx={{ fontSize: 40, color: '#ef4444' }} />
+                  </Box>
+                </Box>
+
+                <Typography variant="h6" align="center" sx={{ mb: 2, fontWeight: 700, color: '#ef4444' }}>
+                  ⏰ Overdue Assignments Detected
+                </Typography>
+
+                <Box sx={{ 
+                  p: 3, 
+                  bgcolor: '#fef2f2', 
+                  borderRadius: 2, 
+                  border: '2px solid #fecaca',
+                  mb: 3
+                }}>
+                  <Typography variant="body1" sx={{ mb: 2, fontWeight: 600, color: '#991b1b' }}>
+                    📅 Assignment Date:
+                  </Typography>
+                  <Typography variant="body1" sx={{ mb: 3, pl: 2, color: '#7f1d1d' }}>
+                    {overdueBlockingDetails.date}
+                  </Typography>
+
+                  <Typography variant="body1" sx={{ mb: 2, fontWeight: 600, color: '#991b1b' }}>
+                    👥 Affected Workers ({overdueBlockingDetails.workerCount}):
+                  </Typography>
+                  <Box sx={{ 
+                    pl: 2, 
+                    maxHeight: 150, 
+                    overflowY: 'auto',
+                    bgcolor: 'white',
+                    borderRadius: 1,
+                    p: 2,
+                    border: '1px solid #fecaca'
+                  }}>
+                    {overdueBlockingDetails.workers.map((workerName: string, index: number) => (
+                      <Box key={index} sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                        <Box sx={{ 
+                          width: 6, 
+                          height: 6, 
+                          borderRadius: '50%', 
+                          bgcolor: '#ef4444' 
+                        }} />
+                        <Typography variant="body2" sx={{ color: '#7f1d1d', fontWeight: 500 }}>
+                          {workerName}
+                        </Typography>
+                      </Box>
+                    ))}
+                  </Box>
+                </Box>
+
+                {/* Next Shift Information */}
+                <Box sx={{ 
+                  p: 3, 
+                  bgcolor: '#f0fdf4', 
+                  borderRadius: 2, 
+                  border: '2px solid #86efac'
+                }}>
+                  <Typography variant="body1" sx={{ mb: 2, fontWeight: 700, color: '#166534', textAlign: 'center' }}>
+                    ⏰ Workers Will Be Available
+                  </Typography>
+                  
+                  <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                    <Box sx={{ textAlign: 'center' }}>
+                      <Typography variant="body2" sx={{ color: '#166534', fontWeight: 600, mb: 0.5 }}>
+                        Next Shift:
+                      </Typography>
+                      <Typography variant="h6" sx={{ color: '#15803d', fontWeight: 700 }}>
+                        {overdueBlockingDetails.shiftName}
+                      </Typography>
+                    </Box>
+
+                    <Box sx={{ textAlign: 'center' }}>
+                      <Typography variant="body2" sx={{ color: '#166534', fontWeight: 600, mb: 0.5 }}>
+                        Start Time:
+                      </Typography>
+                      <Typography variant="h5" sx={{ color: '#15803d', fontWeight: 700 }}>
+                        {overdueBlockingDetails.nextShiftTime}
+                      </Typography>
+                    </Box>
+
+                    <Box sx={{ textAlign: 'center' }}>
+                      <Typography variant="body2" sx={{ color: '#166534', fontWeight: 600, mb: 0.5 }}>
+                        Date:
+                      </Typography>
+                      <Typography variant="body1" sx={{ color: '#15803d', fontWeight: 600 }}>
+                        {overdueBlockingDetails.nextShiftDate}
+                      </Typography>
+                    </Box>
+                  </Box>
+                </Box>
+              </Box>
+
+              <Alert severity="info" sx={{ mt: 3 }}>
+                <Typography variant="body2">
+                  💡 <strong>Note:</strong> These workers cannot be assigned until the next shift begins. This ensures proper shift-based tracking and KPI calculations.
+                </Typography>
+              </Alert>
+            </>
+          ) : (
+            <>
+              {/* Original simple message for other cases */}
+              <Box sx={{ 
+                p: 2.5, 
+                bgcolor: overdueBlockingMessage.includes('Assignment creation is not available yet') ? '#fefce8' : '#fef2f2',
+            borderRadius: 1.5, 
+                border: overdueBlockingMessage.includes('Assignment creation is not available yet') ? '1px solid #fde68a' : '1px solid #fecaca',
+            mb: 2
           }}>
-            <Typography variant="body1" sx={{ fontWeight: 600, color: '#991b1b', whiteSpace: 'pre-line', textAlign: 'center' }}>
+                <Typography 
+                  variant="body1" 
+                  sx={{ 
+                    fontWeight: 600, 
+                    color: overdueBlockingMessage.includes('Assignment creation is not available yet') ? '#78350f' : '#991b1b',
+                    lineHeight: 1.8,
+                    whiteSpace: 'pre-line',
+                    textAlign: 'left'
+                  }}
+                >
               {overdueBlockingMessage}
             </Typography>
           </Box>
 
-          <Alert severity="warning" sx={{ mb: 2 }}>
-            <Typography variant="body2" sx={{ fontWeight: 600 }}>
-              Why this happens:
+          {overdueBlockingMessage.includes('Assignment creation is not available yet') ? (
+                <Alert severity="warning" sx={{ mt: 2 }}>
+                  <Typography variant="body2">
+                    ⏰ <strong>Shift Not Started:</strong> You must start your shift before creating work readiness assignments.
             </Typography>
-            <Typography variant="body2" component="div" sx={{ mt: 1 }}>
-              • Workers with overdue assignments cannot receive new assignments<br/>
-              • This prevents assignment conflicts and ensures proper workflow<br/>
-              • Workers become available again when the next shift starts<br/>
-              • Consider marking overdue assignments first if needed
+                </Alert>
+              ) : overdueBlockingMessage.includes('unclosed unselected cases') ? (
+                <Alert severity="info" sx={{ mt: 2 }}>
+                  <Typography variant="body2">
+                    💡 <strong>Tip:</strong> Go to the Unselected Workers section below and click "Close Case" for these workers to make them available for assignment again.
             </Typography>
-          </Alert>
-
-          <Box sx={{ 
-            p: 2, 
-            bgcolor: '#f0f9ff', 
-            borderRadius: 1, 
-            border: '1px solid #0ea5e9'
-          }}>
-            <Typography variant="body2" sx={{ color: '#0c4a6e', fontWeight: 500 }}>
-              💡 <strong>Tip:</strong> Use the "Mark Overdue" button to mark pending assignments as overdue, then create new assignments for the next day.
-            </Typography>
-          </Box>
+                </Alert>
+              ) : null}
+            </>
+          )}
         </DialogContent>
         
         <DialogActions sx={{ 
           p: 3, 
-          pt: 1, 
           justifyContent: 'center',
-          bgcolor: '#fafafa'
+          bgcolor: '#fafafa',
+          borderTop: '1px solid #e5e7eb'
         }}>
           <Button
-            onClick={() => setShowOverdueBlockingDialog(false)}
+            onClick={() => {
+              setShowOverdueBlockingDialog(false);
+              setOverdueBlockingDetails(null);
+            }}
             variant="contained"
             size="large"
             sx={{
-              bgcolor: '#6b7280',
+              bgcolor: '#6366f1',
               '&:hover': { 
-                bgcolor: '#4b5563',
-                transform: 'translateY(-1px)',
-                boxShadow: '0 4px 12px rgba(107, 114, 128, 0.4)'
+                bgcolor: '#4f46e5',
+                transform: 'translateY(-2px)',
+                boxShadow: '0 8px 16px rgba(99, 102, 241, 0.4)'
               },
               fontWeight: 600,
-              px: 4,
+              px: 5,
               py: 1.5,
-              transition: 'all 0.2s ease-in-out'
+              borderRadius: 2,
+              transition: 'all 0.2s ease-in-out',
+              textTransform: 'none',
+              fontSize: '1rem'
             }}
           >
-            Understood
+            {overdueBlockingDetails ? 'Got it, I\'ll wait' : 'Understood'}
           </Button>
         </DialogActions>
       </Dialog>
@@ -3143,3 +3766,4 @@ const WorkReadinessAssignmentManager: React.FC<WorkReadinessAssignmentManagerPro
 };
 
 export default WorkReadinessAssignmentManager;
+export {};

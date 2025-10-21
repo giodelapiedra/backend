@@ -55,6 +55,14 @@ const SimpleWorkReadiness: React.FC<SimpleWorkReadinessProps> = ({
   });
 
   const handleSubmit = () => {
+    // NOTE: formData only contains the assessment responses:
+    // - painLevel, fatigueLevel, sleepHours, stressLevel, notes
+    // 
+    // The team_leader_id and team fields are automatically populated by:
+    // 1. Frontend hook (useWorkReadiness.ts) - finds team leader from user.team
+    // 2. Backend service (goalTracking.service.js) - validates and saves with team info
+    // 
+    // So workers don't need to input their team or team leader - it's automatic!
     onSubmit(formData);
   };
 

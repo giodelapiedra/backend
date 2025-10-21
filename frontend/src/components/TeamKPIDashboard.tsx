@@ -86,6 +86,7 @@ interface AssignmentKPIData {
   score: number;
   completionRate: number;
   onTimeRate: number;
+  lateRate?: number;  // Late submission rate
   qualityScore: number;
   pendingBonus: number;
   overduePenalty: number;
@@ -93,6 +94,17 @@ interface AssignmentKPIData {
   pendingAssignments: number;
   overdueAssignments: number;
   totalAssignments: number;
+  letterGrade?: string;  // Letter grade (A+, A, B+, etc.)
+  breakdown?: {
+    completionScore: number;
+    onTimeScore: number;
+    lateScore: number;
+    qualityScore: number;
+    pendingBonus: number;
+    overduePenalty: number;
+    recoveryBonus: number;
+    shiftBasedDecayApplied: boolean;
+  };
 }
 
 interface AssignmentMetrics {
@@ -750,20 +762,34 @@ const TeamKPIDashboard: React.FC<TeamKPIDashboardProps> = ({
   console.log('🎁 Pending Bonus:', teamKPI.pendingBonus, '%');
   console.log('⚠️ Overdue Penalty:', teamKPI.overduePenalty, '%');
   
-  // ✅ UPDATED: Verify KPI calculation formula (matches backend with penalties)
+  // ✅ FIXED: Team KPI calculation formula aligned with backend
+  // Backend formula: (completion * 0.5) + (onTime * 0.25) + (late * 0.15) + (quality * 0.1) + pendingBonus - overduePenalty + recoveryBonus
   const pendingBonus = teamKPI.pendingBonus || 0;
   const overduePenalty = teamKPI.overduePenalty || 0;
-  const expectedWeightedScore = (teamMetrics.completionRate * 0.7) + 
-                                 (teamMetrics.onTimeRate * 0.2) + 
-                                 ((teamMetrics.qualityScore || 0) * 0.1) + 
-                                 pendingBonus - overduePenalty;
-  console.log('🧮 Expected Weighted Score (WITH PENALTIES):', expectedWeightedScore.toFixed(2));
+  const lateRate = teamKPI.lateRate || 0; // Late submissions rate
+  const recoveryBonus = teamKPI.breakdown?.recoveryBonus || 0;
+  
+  const expectedWeightedScore = (teamMetrics.completionRate * 0.5) +      // 50% weight for completion
+                                 (teamMetrics.onTimeRate * 0.25) +         // 25% weight for on-time
+                                 (lateRate * 0.15) +                       // 15% weight for late submissions
+                                 ((teamMetrics.qualityScore || 0) * 0.1) + // 10% weight for quality
+                                 pendingBonus -                            // Pending bonus (up to 5%)
+                                 overduePenalty +                          // Overdue penalty (up to -10%)
+                                 recoveryBonus;                            // Recovery bonus (up to 3%)
+  
+  console.log('🧮 Expected Weighted Score (BACKEND-ALIGNED):', expectedWeightedScore.toFixed(2));
   console.log('🧮 Actual KPI Score:', teamKPI.score);
-  console.log('🎁 Pending Bonus:', pendingBonus.toFixed(2));
-  console.log('⚠️ Overdue Penalty:', overduePenalty.toFixed(2));
+  console.log('📊 Completion Rate:', teamMetrics.completionRate, '% (50% weight)');
+  console.log('⏰ On-Time Rate:', teamMetrics.onTimeRate, '% (25% weight)');
+  console.log('⏳ Late Rate:', lateRate, '% (15% weight)');
+  console.log('🏆 Quality Score:', teamMetrics.qualityScore, '(10% weight)');
+  console.log('🎁 Pending Bonus:', pendingBonus.toFixed(2), '%');
+  console.log('⚠️ Overdue Penalty:', overduePenalty.toFixed(2), '%');
+  console.log('🔄 Recovery Bonus:', recoveryBonus.toFixed(2), '%');
   
   if (Math.abs(expectedWeightedScore - teamKPI.score) > 1) {
     console.warn('⚠️ KPI score mismatch detected!');
+    console.warn('Expected:', expectedWeightedScore.toFixed(2), '| Actual:', teamKPI.score);
   }
   
   console.log('==========================================');
@@ -946,7 +972,7 @@ const TeamKPIDashboard: React.FC<TeamKPIDashboardProps> = ({
               </Grid>
               <Grid item xs={12} sm={6} md={3}>
                 <Box sx={{ textAlign: 'center', p: 2, backgroundColor: 'white', borderRadius: 2, border: '1px solid #e5e7eb' }}>
-                  <Typography variant="h5" sx={{ fontWeight: 700, color: '#dc2626', mb: 0.5 }}>
+                  <Typography variant="h5" sx={{ fontWeight: 700, color: '#059669', mb: 0.5 }}>
                     {teamMetrics.onTimeSubmissions}
                   </Typography>
                   <Typography variant="caption" sx={{ color: '#6b7280', fontWeight: 500 }}>
@@ -960,13 +986,69 @@ const TeamKPIDashboard: React.FC<TeamKPIDashboardProps> = ({
               <Grid item xs={12} sm={6} md={3}>
                 <Box sx={{ textAlign: 'center', p: 2, backgroundColor: 'white', borderRadius: 2, border: '1px solid #e5e7eb' }}>
                   <Typography variant="h5" sx={{ fontWeight: 700, color: '#f59e0b', mb: 0.5 }}>
-                    {teamMetrics.totalMembers}
+                    {Math.round(lateRate)}%
                   </Typography>
                   <Typography variant="caption" sx={{ color: '#6b7280', fontWeight: 500 }}>
-                    Total Team Members
+                    Late Submissions
                   </Typography>
                   <Typography variant="caption" sx={{ display: 'block', color: '#9ca3af', fontSize: '0.7rem', mt: 0.5 }}>
-                    Complete team size
+                    Completed after due time
+                  </Typography>
+                </Box>
+              </Grid>
+            </Grid>
+            
+            {/* Additional KPI Metrics */}
+            <Grid container spacing={2} sx={{ mt: 2 }}>
+              <Grid item xs={12} sm={6} md={3}>
+                <Box sx={{ textAlign: 'center', p: 2, backgroundColor: 'white', borderRadius: 2, border: '1px solid #e5e7eb' }}>
+                  <Typography variant="h5" sx={{ fontWeight: 700, color: '#3b82f6', mb: 0.5 }}>
+                    {teamMetrics.pendingAssignments}
+                  </Typography>
+                  <Typography variant="caption" sx={{ color: '#6b7280', fontWeight: 500 }}>
+                    Pending Assignments
+                  </Typography>
+                  <Typography variant="caption" sx={{ display: 'block', color: '#9ca3af', fontSize: '0.7rem', mt: 0.5 }}>
+                    +{pendingBonus.toFixed(1)}% bonus applied
+                  </Typography>
+                </Box>
+              </Grid>
+              <Grid item xs={12} sm={6} md={3}>
+                <Box sx={{ textAlign: 'center', p: 2, backgroundColor: 'white', borderRadius: 2, border: '1px solid #e5e7eb' }}>
+                  <Typography variant="h5" sx={{ fontWeight: 700, color: '#dc2626', mb: 0.5 }}>
+                    {teamMetrics.overdueAssignments}
+                  </Typography>
+                  <Typography variant="caption" sx={{ color: '#6b7280', fontWeight: 500 }}>
+                    Overdue Assignments
+                  </Typography>
+                  <Typography variant="caption" sx={{ display: 'block', color: '#9ca3af', fontSize: '0.7rem', mt: 0.5 }}>
+                    -{overduePenalty.toFixed(1)}% penalty applied
+                  </Typography>
+                </Box>
+              </Grid>
+              <Grid item xs={12} sm={6} md={3}>
+                <Box sx={{ textAlign: 'center', p: 2, backgroundColor: 'white', borderRadius: 2, border: '1px solid #e5e7eb' }}>
+                  <Typography variant="h5" sx={{ fontWeight: 700, color: '#10b981', mb: 0.5 }}>
+                    {teamMetrics.qualityScore || 0}
+                  </Typography>
+                  <Typography variant="caption" sx={{ color: '#6b7280', fontWeight: 500 }}>
+                    Quality Score
+                  </Typography>
+                  <Typography variant="caption" sx={{ display: 'block', color: '#9ca3af', fontSize: '0.7rem', mt: 0.5 }}>
+                    Avg readiness level
+                  </Typography>
+                </Box>
+              </Grid>
+              <Grid item xs={12} sm={6} md={3}>
+                <Box sx={{ textAlign: 'center', p: 2, backgroundColor: 'white', borderRadius: 2, border: '1px solid #e5e7eb' }}>
+                  <Typography variant="h5" sx={{ fontWeight: 700, color: teamKPI.color, mb: 0.5 }}>
+                    {teamKPI.score.toFixed(1)}
+                  </Typography>
+                  <Typography variant="caption" sx={{ color: '#6b7280', fontWeight: 500 }}>
+                    Team KPI Score
+                  </Typography>
+                  <Typography variant="caption" sx={{ display: 'block', color: '#9ca3af', fontSize: '0.7rem', mt: 0.5 }}>
+                    Grade: {teamKPI.letterGrade || teamKPI.rating}
                   </Typography>
                 </Box>
               </Grid>
@@ -980,8 +1062,11 @@ const TeamKPIDashboard: React.FC<TeamKPIDashboardProps> = ({
               <Typography variant="body2" sx={{ color: '#dc2626', fontWeight: 500, mb: 1 }}>
                 📅 Assignment Summary: {teamMetrics.completedAssignments}/{teamMetrics.totalAssignments} assignments completed ({teamMetrics.completionRate}%)
               </Typography>
+              <Typography variant="caption" sx={{ color: '#64748b', display: 'block', mb: 0.5 }}>
+                Team KPI Formula: (Completion × 50%) + (On-Time × 25%) + (Late × 15%) + (Quality × 10%) + Bonuses - Penalties
+              </Typography>
               <Typography variant="caption" sx={{ color: '#64748b' }}>
-                Team performance is calculated based on assignment completion rates and quality scores.
+                Current Score: {teamKPI.score.toFixed(1)} = ({teamMetrics.completionRate}% × 0.5) + ({teamMetrics.onTimeRate}% × 0.25) + ({Math.round(lateRate)}% × 0.15) + ({teamMetrics.qualityScore || 0} × 0.1) + {pendingBonus.toFixed(1)}% - {overduePenalty.toFixed(1)}%
               </Typography>
             </Box>
           </Box>

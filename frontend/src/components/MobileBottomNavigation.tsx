@@ -54,7 +54,7 @@ const MobileBottomNavigation: React.FC = () => {
       id: 'more',
       label: 'More',
       icon: <MoreHorizIcon sx={{ fontSize: 20 }} />,
-      path: '/team-leader/work-readiness'
+      path: '/team-leader/work-readiness-kpi'
     }
   ];
 

@@ -7,24 +7,59 @@ export const incidentsApi = createApi({
     baseUrl: '', // No fallback URL - use Supabase only
   }),
   tagTypes: ['Incident', 'Case'],
-  // Optimize for real-time updates
+  // Minimal auto refresh - only on reconnect, no aggressive refresh
   refetchOnFocus: false,
-  refetchOnReconnect: true,
-  refetchOnMountOrArgChange: 30, // Refetch if data is older than 30 seconds
+  refetchOnReconnect: true, // Reconnect only - essential for network issues
+  refetchOnMountOrArgChange: false, // No aggressive refresh
   endpoints: (builder) => ({
     getIncidents: builder.query({
-      queryFn: async (arg = {}) => {
+      queryFn: async (arg: { page?: number; limit?: number; search?: string; status?: string; severity?: string } = {}) => {
         try {
-            const { data, error } = await dataClient
-              .from('incidents')
-              .select(`
-                *,
-                reported_by:users!reported_by(id, first_name, last_name, email)
-              `)
-              .order('created_at', { ascending: false });
+          const { page = 1, limit = 10, search = '', status = '', severity = '' } = arg;
+          const offset = (page - 1) * limit;
+          
+          let query = dataClient
+            .from('incidents')
+            .select(`
+              *,
+              reported_by:users!reported_by(id, first_name, last_name, email),
+              worker:users!worker_id(id, first_name, last_name, email)
+            `, { count: 'exact' });
+          
+          // Apply search filter
+          if (search) {
+            query = query.or(`description.ilike.%${search}%,reported_by.first_name.ilike.%${search}%,reported_by.last_name.ilike.%${search}%`);
+          }
+          
+          // Apply status filter
+          if (status) {
+            query = query.eq('status', status);
+          }
+          
+          // Apply severity filter
+          if (severity) {
+            query = query.eq('severity', severity);
+          }
+          
+          // Apply pagination and ordering
+          const { data, error, count } = await query
+            .order('created_at', { ascending: false })
+            .range(offset, offset + limit - 1);
           
           if (error) throw error;
-          return { data: { incidents: data || [] } };
+          
+          return { 
+            data: { 
+              incidents: data || [], 
+              total: count || 0,
+              pagination: {
+                page,
+                limit,
+                total: count || 0,
+                totalPages: Math.ceil((count || 0) / limit)
+              }
+            } 
+          };
         } catch (error) {
           return { error: { status: 500, data: error } };
         }

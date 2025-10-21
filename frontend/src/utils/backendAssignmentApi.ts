@@ -63,7 +63,6 @@ apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      localStorage.removeItem('token');
       // 👇 Move this to external logic if possible
       window.location.href = '/login';
     }
@@ -188,7 +187,11 @@ export class BackendAssignmentAPI {
     return request(() => apiClient.patch(`/work-readiness-assignments/unselected/${unselectedWorkerId}/close`), 'Failed to close case');
   }
 
-  static async markOverdueAssignments(): Promise<OverdueMarkingResponse> {
-    return request(() => apiClient.post('/work-readiness-assignments/mark-overdue'), 'Failed to mark overdue assignments');
+  static async markOverdueAssignments(date?: string): Promise<OverdueMarkingResponse> {
+    const body: any = {};
+    if (date) {
+      body.date = date; // Pass specific date to mark as overdue
+    }
+    return request(() => apiClient.post('/work-readiness-assignments/mark-overdue', body), 'Failed to mark overdue assignments');
   }
 }

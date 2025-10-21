@@ -6,6 +6,21 @@
 export type StatusColor = 'default' | 'primary' | 'secondary' | 'error' | 'info' | 'success' | 'warning';
 
 /**
+ * Get formatted label for case status
+ */
+export const getStatusLabel = (status: string): string => {
+  const labels: { [key: string]: string } = {
+    'new': 'NEW CASE',
+    'triaged': 'TRIAGED',
+    'assessed': 'ASSESSED',
+    'in_rehab': 'IN REHAB',
+    'return_to_work': 'RETURN TO WORK',
+    'closed': 'CLOSED',
+  };
+  return labels[status.toLowerCase()] || status.toUpperCase();
+};
+
+/**
  * Get color for case status
  */
 export const getStatusColor = (status: string): StatusColor => {

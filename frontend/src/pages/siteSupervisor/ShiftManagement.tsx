@@ -34,6 +34,9 @@ import {
   ListItem,
   ListItemText,
   ListItemIcon,
+  Pagination,
+  TablePagination,
+  InputAdornment,
 } from '@mui/material';
 import {
   Schedule,
@@ -48,10 +51,13 @@ import {
   Refresh,
   AccessTime,
   CalendarToday,
+  Search,
+  FilterList,
 } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext.supabase';
 import { authClient } from '../../lib/supabase';
 import LayoutWithSidebar from '../../components/LayoutWithSidebar';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 // Custom SVG Icons for enhanced UI
 const CustomSVGIcons = {
@@ -186,34 +192,147 @@ interface ShiftStatistics {
 
 const ShiftManagement: React.FC = () => {
   const { user } = useAuth();
+  const queryClient = useQueryClient();
   
   // API configuration
   const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001/api';
   
-  // State management
-  const [loading, setLoading] = useState(true);
+  // State management - OPTIMIZED
   const [error, setError] = useState<string | null>(null);
-  const [retryCount, setRetryCount] = useState(0);
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
-  const abortControllerRef = useRef<AbortController | null>(null);
   const [successMessage, setSuccessMessage] = useState<string>('');
   
   // Search and filter states
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'assigned' | 'unassigned'>('all');
   
-  // Data states
-  const [shiftTypes, setShiftTypes] = useState<ShiftType[]>([]);
-  const [teamLeaders, setTeamLeaders] = useState<TeamLeader[]>([]);
-  const [statistics, setStatistics] = useState<ShiftStatistics | null>(null);
+  // Pagination states
+  const [page, setPage] = useState(0);
+  const [rowsPerPage, setRowsPerPage] = useState(10);
   
-  // Memoized statistics calculation
+  // Helper function to get auth token - OPTIMIZED
+  const getAuthToken = useCallback(async () => {
+    try {
+      const { data: { session } } = await authClient.auth.getSession();
+      return session?.access_token || null;
+    } catch (error) {
+      console.error('Error getting auth token:', error);
+      return null;
+    }
+  }, []);
+
+  // OPTIMIZED: Use React Query for data fetching with proper caching
+  const { data: shiftTypes = [], isLoading: shiftTypesLoading, error: shiftTypesError } = useQuery({
+    queryKey: ['shiftTypes'],
+    queryFn: async () => {
+      const token = await getAuthToken();
+      if (!token) {
+        // Return mock data if no auth token
+        return [
+          { id: '1', name: 'Midnight Shift', description: '12:00 AM - 8:00 AM', start_time: '00:00:00', end_time: '08:00:00', color: '#1a237e', is_active: true },
+          { id: '2', name: 'Morning Shift', description: '6:00 AM - 2:00 PM', start_time: '06:00:00', end_time: '14:00:00', color: '#2e7d32', is_active: true },
+          { id: '3', name: 'Afternoon Shift', description: '2:00 PM - 10:00 PM', start_time: '14:00:00', end_time: '22:00:00', color: '#f57c00', is_active: true },
+          { id: '4', name: 'Evening Shift', description: '10:00 PM - 6:00 AM', start_time: '22:00:00', end_time: '06:00:00', color: '#5d4037', is_active: true },
+          { id: '5', name: 'Day Shift', description: '8:00 AM - 5:00 PM', start_time: '08:00:00', end_time: '17:00:00', color: '#1976d2', is_active: true },
+          { id: '6', name: 'Night Shift', description: '8:00 PM - 5:00 AM', start_time: '20:00:00', end_time: '05:00:00', color: '#424242', is_active: true }
+        ];
+      }
+
+      const response = await fetch(`${API_BASE_URL}/shifts/types`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        signal: AbortSignal.timeout(10000) // 10 second timeout
+      });
+      
+      if (!response.ok) {
+        if (response.status === 404 || response.status === 0) {
+          // Return mock data if backend not available
+          return [
+            { id: '1', name: 'Midnight Shift', description: '12:00 AM - 8:00 AM', start_time: '00:00:00', end_time: '08:00:00', color: '#1a237e', is_active: true },
+            { id: '2', name: 'Morning Shift', description: '6:00 AM - 2:00 PM', start_time: '06:00:00', end_time: '14:00:00', color: '#2e7d32', is_active: true },
+            { id: '3', name: 'Afternoon Shift', description: '2:00 PM - 10:00 PM', start_time: '14:00:00', end_time: '22:00:00', color: '#f57c00', is_active: true },
+            { id: '4', name: 'Evening Shift', description: '10:00 PM - 6:00 AM', start_time: '22:00:00', end_time: '06:00:00', color: '#5d4037', is_active: true },
+            { id: '5', name: 'Day Shift', description: '8:00 AM - 5:00 PM', start_time: '08:00:00', end_time: '17:00:00', color: '#1976d2', is_active: true },
+            { id: '6', name: 'Night Shift', description: '8:00 PM - 5:00 AM', start_time: '20:00:00', end_time: '05:00:00', color: '#424242', is_active: true }
+          ];
+        }
+        throw new Error('Failed to fetch shift types');
+      }
+      
+      const data = await response.json();
+      return data.data;
+    },
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    gcTime: 10 * 60 * 1000, // 10 minutes
+    retry: 2,
+    retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 5000),
+  });
+
+  const { data: teamLeadersData, isLoading: teamLeadersLoading, error: teamLeadersError } = useQuery({
+    queryKey: ['teamLeaders', page, rowsPerPage, searchTerm, statusFilter],
+    queryFn: async () => {
+      const token = await getAuthToken();
+      if (!token) {
+        return { data: [], totalCount: 0 };
+      }
+
+      // Build query parameters for pagination and filtering
+      const params = new URLSearchParams({
+        page: (page + 1).toString(), // API uses 1-based pagination
+        limit: rowsPerPage.toString(),
+        search: searchTerm,
+        status: statusFilter
+      });
+
+      const response = await fetch(`${API_BASE_URL}/shifts/team-leaders?${params}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        signal: AbortSignal.timeout(10000)
+      });
+      
+      if (!response.ok) {
+        if (response.status === 404 || response.status === 0) {
+          return { data: [], totalCount: 0 };
+        }
+        throw new Error('Failed to fetch team leaders');
+      }
+      
+      const data = await response.json();
+      return {
+        data: data.data || [],
+        totalCount: data.totalCount || 0
+      };
+    },
+    staleTime: 2 * 60 * 1000, // 2 minutes - more frequent updates for team leaders
+    gcTime: 5 * 60 * 1000, // 5 minutes
+    retry: 2,
+    retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 5000),
+  });
+
+  // Extract team leaders and total count from the response
+  const teamLeaders = teamLeadersData?.data || [];
+  const totalCount = teamLeadersData?.totalCount || 0;
+
+  // Memoized statistics calculation - OPTIMIZED for pagination
   const memoizedStatistics = useMemo(() => {
-    if (!statistics) return null;
+    // For statistics, we need to fetch all data or use cached totals
+    // For now, we'll calculate from current page data as a fallback
+    if (!teamLeaders || teamLeaders.length === 0) {
+      return {
+        totalTeamLeaders: totalCount || 0,
+        assignedTeamLeaders: 0,
+        unassignedTeamLeaders: totalCount || 0,
+        shiftDistribution: {},
+        assignmentRate: 0
+      };
+    }
     
-    const totalTeamLeaders = teamLeaders.length;
+    // Calculate from current page data (this is a limitation - ideally we'd have server-side stats)
     const assignedTeamLeaders = teamLeaders.filter(leader => leader.currentShift).length;
-    const unassignedTeamLeaders = totalTeamLeaders - assignedTeamLeaders;
+    const unassignedTeamLeaders = teamLeaders.filter(leader => !leader.currentShift).length;
     
     const shiftDistribution: { [key: string]: number } = {};
     teamLeaders.forEach(leader => {
@@ -223,73 +342,59 @@ const ShiftManagement: React.FC = () => {
       }
     });
     
-    const assignmentRate = totalTeamLeaders > 0 ? 
-      Math.round((assignedTeamLeaders / totalTeamLeaders) * 100) : 0;
+    const assignmentRate = teamLeaders.length > 0 ? 
+      Math.round((assignedTeamLeaders / teamLeaders.length) * 100) : 0;
     
     return {
-      totalTeamLeaders,
+      totalTeamLeaders: totalCount || teamLeaders.length,
       assignedTeamLeaders,
       unassignedTeamLeaders,
       shiftDistribution,
       assignmentRate
     };
-  }, [teamLeaders, statistics]);
+  }, [teamLeaders, totalCount]);
 
-  // Memoized filtered team leaders
-  const filteredTeamLeaders = useMemo(() => {
-    return teamLeaders.filter(leader => {
-      const matchesSearch = !searchTerm || 
-        `${leader.first_name} ${leader.last_name}`.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        leader.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (leader.team && leader.team.toLowerCase().includes(searchTerm.toLowerCase()));
-      
-      const matchesStatus = statusFilter === 'all' ||
-        (statusFilter === 'assigned' && leader.currentShift) ||
-        (statusFilter === 'unassigned' && !leader.currentShift);
-      
-      return matchesSearch && matchesStatus;
-    });
-  }, [teamLeaders, searchTerm, statusFilter]);
+  // Server-side filtering, no client-side filtering needed
+  const filteredTeamLeaders = teamLeaders;
 
-  // Enhanced error display with retry functionality
+  // Combined loading state
+  const isLoading = shiftTypesLoading || teamLeadersLoading;
+  
+  // Combined error state
+  const combinedError = error || shiftTypesError?.message || teamLeadersError?.message;
+
+  // Enhanced error display - OPTIMIZED
   const ErrorDisplay = useCallback(() => {
-    if (!error) return null;
+    if (!combinedError) return null;
     
     return (
       <Alert 
         severity="error" 
         sx={{ mb: 3 }}
         action={
-          <Box display="flex" gap={1}>
             <Button 
               size="small" 
-              onClick={() => loadData()}
-              disabled={loading}
+            onClick={() => {
+              queryClient.invalidateQueries({ queryKey: ['shiftTypes'] });
+              queryClient.invalidateQueries({ queryKey: ['teamLeaders'] });
+              setError(null);
+            }}
+            disabled={isLoading}
             >
               Retry
             </Button>
-            {!isOnline && (
-              <Chip 
-                label="Offline" 
-                size="small" 
-                color="error" 
-                variant="outlined"
-              />
-            )}
-          </Box>
         }
       >
         <Typography variant="body2">
-          {error}
-          {retryCount > 0 && ` (Attempt ${retryCount}/3)`}
+          {combinedError}
         </Typography>
       </Alert>
     );
-  }, [error, loading, retryCount, isOnline]);
+  }, [combinedError, isLoading, queryClient]);
 
-  // Enhanced loading display
+  // Enhanced loading display - OPTIMIZED
   const LoadingDisplay = useCallback(() => {
-    if (!loading) return null;
+    if (!isLoading) return null;
     
     return (
       <Box 
@@ -304,20 +409,14 @@ const ShiftManagement: React.FC = () => {
         <Typography variant="body2" color="text.secondary">
           Loading shift management data...
         </Typography>
-        {retryCount > 0 && (
-          <Typography variant="caption" color="text.secondary">
-            Retrying... (Attempt {retryCount}/3)
-          </Typography>
-        )}
       </Box>
     );
-  }, [loading, retryCount]);
+  }, [isLoading]);
   
   // Dialog states
   const [assignDialogOpen, setAssignDialogOpen] = useState(false);
   const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
   const [selectedTeamLeader, setSelectedTeamLeader] = useState<TeamLeader | null>(null);
-  const [shiftHistory, setShiftHistory] = useState<ShiftAssignment[]>([]);
   
   // Form states
   const [assignmentForm, setAssignmentForm] = useState({
@@ -328,310 +427,38 @@ const ShiftManagement: React.FC = () => {
     notes: ''
   });
 
-  // Helper function to get auth token
-  const getAuthToken = async () => {
-    try {
-      const { data: { session } } = await authClient.auth.getSession();
-      console.log('🔍 Session data:', session);
-      console.log('🔍 Access token:', session?.access_token ? 'Present' : 'Missing');
-      return session?.access_token || null;
-    } catch (error) {
-      console.error('Error getting auth token:', error);
-      return null;
-    }
-  };
-
-  // Test authentication endpoint
-  const testAuthentication = async (signal?: AbortSignal) => {
-    try {
-      const token = await getAuthToken();
-      if (!token) {
-        console.warn('No auth token available for testing');
-        return;
-      }
-
-      console.log('🔍 Testing authentication with token:', token.substring(0, 20) + '...');
+  // OPTIMIZED: Use React Query for shift history
+  const { data: shiftHistory = [], isLoading: historyLoading } = useQuery({
+    queryKey: ['shiftHistory', selectedTeamLeader?.id],
+    queryFn: async () => {
+      if (!selectedTeamLeader?.id) return [];
       
-      const response = await fetch(`${API_BASE_URL}/shifts/test-auth`, {
+      const token = await getAuthToken();
+      if (!token) return [];
+
+      const response = await fetch(`${API_BASE_URL}/shifts/history/${selectedTeamLeader.id}`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        signal,
+        signal: AbortSignal.timeout(10000)
       });
       
-      console.log('🔍 Auth test response status:', response.status);
+      if (!response.ok) return [];
       
-      if (response.ok) {
         const data = await response.json();
-        console.log('✅ Authentication test successful:', data);
-      } else {
-        const errorText = await response.text();
-        console.error('❌ Authentication test failed:', errorText);
-      }
-    } catch (error) {
-      console.error('❌ Authentication test error:', error);
-    }
-  };
+      return data.data || [];
+    },
+    enabled: !!selectedTeamLeader?.id,
+    staleTime: 2 * 60 * 1000, // 2 minutes
+    gcTime: 5 * 60 * 1000, // 5 minutes
+  });
 
-  // Fetch shift types with abort signal support
-  const fetchShiftTypes = useCallback(async (signal?: AbortSignal) => {
-    try {
+  // OPTIMIZED: Use React Query mutations for better error handling
+  const assignShiftMutation = useMutation({
+    mutationFn: async (formData: typeof assignmentForm) => {
       const token = await getAuthToken();
-      if (!token) {
-        console.warn('No auth token available, using mock shift types');
-        setShiftTypes([
-          { id: '1', name: 'Midnight Shift', description: '12:00 AM - 8:00 AM', start_time: '00:00:00', end_time: '08:00:00', color: '#1a237e', is_active: true },
-          { id: '2', name: 'Morning Shift', description: '6:00 AM - 2:00 PM', start_time: '06:00:00', end_time: '14:00:00', color: '#2e7d32', is_active: true },
-          { id: '3', name: 'Afternoon Shift', description: '2:00 PM - 10:00 PM', start_time: '14:00:00', end_time: '22:00:00', color: '#f57c00', is_active: true },
-          { id: '4', name: 'Evening Shift', description: '10:00 PM - 6:00 AM', start_time: '22:00:00', end_time: '06:00:00', color: '#5d4037', is_active: true },
-          { id: '5', name: 'Day Shift', description: '8:00 AM - 5:00 PM', start_time: '08:00:00', end_time: '17:00:00', color: '#1976d2', is_active: true },
-          { id: '6', name: 'Night Shift', description: '8:00 PM - 5:00 AM', start_time: '20:00:00', end_time: '05:00:00', color: '#424242', is_active: true }
-        ]);
-        return;
-      }
-
-      const response = await fetch(`${API_BASE_URL}/shifts/types`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        signal,
-      });
-      
-      if (!response.ok) {
-        // If backend is not available, use mock data
-        if (response.status === 404 || response.status === 0) {
-          console.warn('Backend not available, using mock shift types');
-          setShiftTypes([
-            { id: '1', name: 'Midnight Shift', description: '12:00 AM - 8:00 AM', start_time: '00:00:00', end_time: '08:00:00', color: '#1a237e', is_active: true },
-            { id: '2', name: 'Morning Shift', description: '6:00 AM - 2:00 PM', start_time: '06:00:00', end_time: '14:00:00', color: '#2e7d32', is_active: true },
-            { id: '3', name: 'Afternoon Shift', description: '2:00 PM - 10:00 PM', start_time: '14:00:00', end_time: '22:00:00', color: '#f57c00', is_active: true },
-            { id: '4', name: 'Evening Shift', description: '10:00 PM - 6:00 AM', start_time: '22:00:00', end_time: '06:00:00', color: '#5d4037', is_active: true },
-            { id: '5', name: 'Day Shift', description: '8:00 AM - 5:00 PM', start_time: '08:00:00', end_time: '17:00:00', color: '#1976d2', is_active: true },
-            { id: '6', name: 'Night Shift', description: '8:00 PM - 5:00 AM', start_time: '20:00:00', end_time: '05:00:00', color: '#424242', is_active: true }
-          ]);
-          return;
-        }
-        throw new Error('Failed to fetch shift types');
-      }
-      
-      const data = await response.json();
-      setShiftTypes(data.data);
-    } catch (error: any) {
-      if (error.name === 'AbortError') return;
-      console.error('Error fetching shift types:', error);
-      throw error;
-    }
-  }, []);
-
-  const fetchTeamLeadersWithShifts = useCallback(async (signal?: AbortSignal) => {
-    try {
-      const token = await getAuthToken();
-      if (!token) {
-        console.warn('No auth token available, showing empty team leaders list');
-        setTeamLeaders([]);
-        return;
-      }
-
-      const response = await fetch(`${API_BASE_URL}/shifts/team-leaders`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        signal,
-      });
-      
-      if (!response.ok) {
-        // If backend is not available, show empty state
-        if (response.status === 404 || response.status === 0) {
-          console.warn('Backend not available, showing empty team leaders list');
-          setTeamLeaders([]);
-          return;
-        }
-        throw new Error('Failed to fetch team leaders');
-      }
-      
-      const data = await response.json();
-      setTeamLeaders(data.data);
-    } catch (error: any) {
-      if (error.name === 'AbortError') return;
-      console.error('Error fetching team leaders:', error);
-      throw error;
-    }
-  }, []);
-
-  const fetchStatistics = useCallback(async (signal?: AbortSignal) => {
-    try {
-      const token = await getAuthToken();
-      if (!token) {
-        console.warn('No auth token available, showing empty statistics');
-        setStatistics({
-          totalTeamLeaders: 0,
-          assignedTeamLeaders: 0,
-          unassignedTeamLeaders: 0,
-          shiftDistribution: {},
-          assignmentRate: 0
-        });
-        return;
-      }
-
-      const response = await fetch(`${API_BASE_URL}/shifts/statistics`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        signal,
-      });
-      
-      if (!response.ok) {
-        // If backend is not available, show empty statistics
-        if (response.status === 404 || response.status === 0) {
-          console.warn('Backend not available, showing empty statistics');
-          setStatistics({
-            totalTeamLeaders: 0,
-            assignedTeamLeaders: 0,
-            unassignedTeamLeaders: 0,
-            shiftDistribution: {},
-            assignmentRate: 0
-          });
-          return;
-        }
-        throw new Error('Failed to fetch statistics');
-      }
-      
-      const data = await response.json();
-      setStatistics(data.data);
-    } catch (error: any) {
-      if (error.name === 'AbortError') return;
-      console.error('Error fetching statistics:', error);
-      throw error;
-    }
-  }, []);
-
-  const fetchShiftHistory = async (teamLeaderId: string) => {
-    try {
-      const token = await getAuthToken();
-      if (!token) {
-        console.warn('No auth token available, showing empty shift history');
-        setShiftHistory([]);
-        return;
-      }
-
-      const response = await fetch(`${API_BASE_URL}/shifts/history/${teamLeaderId}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-      
-      if (!response.ok) throw new Error('Failed to fetch shift history');
-      
-      const data = await response.json();
-      setShiftHistory(data.data);
-    } catch (error) {
-      console.error('Error fetching shift history:', error);
-      setError('Failed to fetch shift history');
-    }
-  };
-
-  // Online/offline detection
-  useEffect(() => {
-    const handleOnline = () => {
-      setIsOnline(true);
-      if (retryCount > 0) {
-        loadData();
-      }
-    };
-    const handleOffline = () => setIsOnline(false);
-    
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-    
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-    };
-  }, [retryCount]);
-
-  // Optimized data loading with retry logic
-  const loadData = useCallback(async (retryAttempt = 0) => {
-    if (!isOnline) {
-      setError('You are offline. Please check your internet connection.');
-      setLoading(false);
-      return;
-    }
-
-    setLoading(true);
-    setError(null);
-    
-    // Cancel previous request
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
-    
-    // Create new abort controller
-    abortControllerRef.current = new AbortController();
-    const signal = abortControllerRef.current.signal;
-
-    try {
-      // Test authentication first
-      await testAuthentication(signal);
-      
-      // Parallel data fetching with timeout
-      const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Request timeout')), 10000)
-      );
-      
-      const dataPromise = Promise.all([
-        fetchShiftTypes(signal),
-        fetchTeamLeadersWithShifts(signal),
-        fetchStatistics(signal)
-      ]);
-      
-      await Promise.race([dataPromise, timeoutPromise]);
-      
-      setError(null);
-      setRetryCount(0);
-    } catch (error: any) {
-      if (error.name === 'AbortError') {
-        console.log('Request was cancelled');
-        return;
-      }
-      
-      console.error('Error loading data:', error);
-      
-      if (retryAttempt < 3) {
-        setRetryCount(retryAttempt + 1);
-        setTimeout(() => loadData(retryAttempt + 1), 2000 * (retryAttempt + 1));
-      } else {
-        setError(`Failed to load data after ${retryAttempt + 1} attempts. ${error.message}`);
-      }
-    } finally {
-      setLoading(false);
-    }
-  }, [isOnline, retryCount]);
-
-  // Load data on component mount
-  useEffect(() => {
-    loadData();
-    
-    // Cleanup on unmount
-    return () => {
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-      }
-    };
-  }, [loadData]);
-
-  // Handle shift assignment
-  const handleAssignShift = async () => {
-    try {
-      const token = await getAuthToken();
-      if (!token) {
-        setError('Authentication required to assign shifts');
-        return;
-      }
+      if (!token) throw new Error('Authentication required');
 
       const response = await fetch(`${API_BASE_URL}/shifts/assign`, {
         method: 'POST',
@@ -639,21 +466,25 @@ const ShiftManagement: React.FC = () => {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(assignmentForm)
+        body: JSON.stringify(formData),
+        signal: AbortSignal.timeout(15000)
       });
       
       if (!response.ok) throw new Error('Failed to assign shift');
       
-      const data = await response.json();
-      setSuccessMessage(data.message);
+      return response.json();
+    },
+    onSuccess: (data, variables) => {
+      const teamLeader = teamLeaderLookup.get(variables.teamLeaderId);
+      const shift = shiftTypeLookup.get(variables.shiftTypeId);
       
-      // Refresh data
-      await Promise.all([
-        fetchTeamLeadersWithShifts(),
-        fetchStatistics()
-      ]);
+      if (teamLeader && shift) {
+        setSuccessMessage(`Shift "${shift.name}" assigned to ${teamLeader.first_name} ${teamLeader.last_name}`);
+      } else {
+        setSuccessMessage('Shift assigned successfully');
+      }
       
-      // Close dialog and reset form
+      queryClient.invalidateQueries({ queryKey: ['teamLeaders'] });
       setAssignDialogOpen(false);
       setAssignmentForm({
         teamLeaderId: '',
@@ -662,73 +493,107 @@ const ShiftManagement: React.FC = () => {
         endDate: '',
         notes: ''
       });
-      
-    } catch (error) {
-      console.error('Error assigning shift:', error);
-      setError('Failed to assign shift');
+    },
+    onError: (error: Error) => {
+      setError(error.message);
     }
-  };
+  });
 
-  // Handle viewing shift history
-  const handleViewHistory = async (teamLeader: TeamLeader) => {
-    setSelectedTeamLeader(teamLeader);
-    await fetchShiftHistory(teamLeader.id);
-    setHistoryDialogOpen(true);
-  };
-
-  // Handle deactivating shift
-  const handleDeactivateShift = async (shiftId: string) => {
-    try {
+  const deactivateShiftMutation = useMutation({
+    mutationFn: async (shiftId: string) => {
       const token = await getAuthToken();
-      if (!token) {
-        setError('Authentication required to deactivate shifts');
-        return;
-      }
+      if (!token) throw new Error('Authentication required');
 
       const response = await fetch(`${API_BASE_URL}/shifts/${shiftId}`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
-        }
+        },
+        signal: AbortSignal.timeout(15000)
       });
       
       if (!response.ok) throw new Error('Failed to deactivate shift');
       
-      const data = await response.json();
-      setSuccessMessage(data.message);
-      
-      // Refresh data
-      await Promise.all([
-        fetchTeamLeadersWithShifts(),
-        fetchStatistics()
-      ]);
-      
-    } catch (error) {
-      console.error('Error deactivating shift:', error);
-      setError('Failed to deactivate shift');
+      return response.json();
+    },
+    onSuccess: () => {
+      setSuccessMessage('Shift deactivated successfully');
+      queryClient.invalidateQueries({ queryKey: ['teamLeaders'] });
+    },
+    onError: (error: Error) => {
+      setError(error.message);
     }
-  };
+  });
 
-  // Refresh all data
-  const handleRefresh = async () => {
-    setLoading(true);
-    try {
-      await Promise.all([
-        fetchShiftTypes(),
-        fetchTeamLeadersWithShifts(),
-        fetchStatistics()
-      ]);
-      setSuccessMessage('Data refreshed successfully');
-    } catch (error) {
-      console.error('Error refreshing data:', error);
-      setError('Failed to refresh data');
-    } finally {
-      setLoading(false);
+  // OPTIMIZED: Memoized lookups for better performance
+  const teamLeaderLookup = useMemo(() => {
+    const lookup = new Map();
+    teamLeaders.forEach(tl => lookup.set(tl.id, tl));
+    return lookup;
+  }, [teamLeaders]);
+
+  const shiftTypeLookup = useMemo(() => {
+    const lookup = new Map();
+    shiftTypes.forEach(st => lookup.set(st.id, st));
+    return lookup;
+  }, [shiftTypes]);
+
+  // OPTIMIZED: Direct assignment without confirmation modal
+  const handleAssignShift = useCallback(() => {
+    assignShiftMutation.mutate(assignmentForm);
+  }, [assignShiftMutation, assignmentForm]);
+
+  const handleViewHistory = useCallback((teamLeader: TeamLeader) => {
+    setSelectedTeamLeader(teamLeader);
+    setHistoryDialogOpen(true);
+  }, []);
+
+  const handleDeactivateShift = useCallback((shiftId: string) => {
+    deactivateShiftMutation.mutate(shiftId);
+  }, [deactivateShiftMutation]);
+
+  // Pagination handlers
+  const handleChangePage = useCallback((event: unknown, newPage: number) => {
+    setPage(newPage);
+  }, []);
+
+  const handleChangeRowsPerPage = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    setRowsPerPage(parseInt(event.target.value, 10));
+    setPage(0); // Reset to first page when changing page size
+  }, []);
+
+  // Search and filter handlers
+  const handleSearchChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    setSearchTerm(event.target.value);
+    setPage(0); // Reset to first page when searching
+  }, []);
+
+  const handleStatusFilterChange = useCallback((event: any) => {
+    setStatusFilter(event.target.value);
+    setPage(0); // Reset to first page when filtering
+  }, []);
+
+
+  // OPTIMIZED: Removed test authentication function to reduce lag
+
+  // Auto-clear success messages
+  useEffect(() => {
+    if (successMessage) {
+      const timer = setTimeout(() => setSuccessMessage(''), 5000);
+      return () => clearTimeout(timer);
     }
-  };
+  }, [successMessage]);
 
-  if (loading) {
+  // Auto-clear error messages
+  useEffect(() => {
+    if (error) {
+      const timer = setTimeout(() => setError(null), 10000);
+      return () => clearTimeout(timer);
+    }
+  }, [error]);
+
+  if (isLoading) {
     return (
       <LayoutWithSidebar>
         <LoadingDisplay />
@@ -762,47 +627,6 @@ const ShiftManagement: React.FC = () => {
                 Manage team leader shifts and schedules efficiently
               </Typography>
             </Box>
-            <Box 
-              display="flex" 
-              gap={2}
-              sx={{
-                flexDirection: { xs: 'column', sm: 'row' },
-                alignItems: { xs: 'stretch', sm: 'center' },
-                width: { xs: '100%', sm: 'auto' }
-              }}
-            >
-              <Button
-                variant="outlined"
-                startIcon={<CustomSVGIcons.RefreshIcon />}
-                onClick={handleRefresh}
-                disabled={loading}
-                sx={{ 
-                  color: '#374151', 
-                  borderColor: '#d1d5db',
-                  transition: 'all 0.2s ease',
-                  '&:hover': {
-                    borderColor: '#9ca3af',
-                    backgroundColor: '#f9fafb',
-                  }
-                }}
-              >
-                Refresh
-              </Button>
-              <Button
-                variant="outlined"
-                onClick={() => testAuthentication()}
-                sx={{ 
-                  color: '#374151', 
-                  borderColor: '#d1d5db',
-                  transition: 'all 0.2s ease',
-                  '&:hover': {
-                    borderColor: '#9ca3af',
-                    backgroundColor: '#f9fafb',
-                  }
-                }}
-              >
-                Test Auth
-              </Button>
               <Button
                 variant="contained"
                 startIcon={<CustomSVGIcons.PlusIcon />}
@@ -818,7 +642,6 @@ const ShiftManagement: React.FC = () => {
               >
                 Assign Shift
               </Button>
-            </Box>
           </Box>
         </Box>
 
@@ -843,7 +666,7 @@ const ShiftManagement: React.FC = () => {
         )}
 
         {/* Enhanced Statistics Cards */}
-        {statistics && (
+        {memoizedStatistics && (
           <Grid container spacing={3} mb={4}>
             <Grid item xs={12} sm={6} lg={3}>
               <Card 
@@ -1070,11 +893,54 @@ const ShiftManagement: React.FC = () => {
         >
           <CardContent sx={{ p: 0 }}>
             <Box sx={{ p: 3, borderBottom: '1px solid', borderColor: 'divider' }}>
-              <Box display="flex" alignItems="center">
-                <CustomSVGIcons.TeamIcon />
-                <Typography variant="h6" sx={{ ml: 2, fontWeight: '600', color: '#111827' }}>
-                  Team Leaders & Current Shifts
-                </Typography>
+              <Box display="flex" alignItems="center" justifyContent="space-between" mb={3}>
+                <Box display="flex" alignItems="center">
+                  <CustomSVGIcons.TeamIcon />
+                  <Typography variant="h6" sx={{ ml: 2, fontWeight: '600', color: '#111827' }}>
+                    Team Leaders & Current Shifts
+                  </Typography>
+                </Box>
+                <Box display="flex" alignItems="center" gap={2}>
+                  <TextField
+                    size="small"
+                    placeholder="Search team leaders..."
+                    value={searchTerm}
+                    onChange={handleSearchChange}
+                    InputProps={{
+                      startAdornment: (
+                        <InputAdornment position="start">
+                          <Search sx={{ fontSize: 20, color: '#6b7280' }} />
+                        </InputAdornment>
+                      ),
+                    }}
+                    sx={{ 
+                      minWidth: 250,
+                      '& .MuiOutlinedInput-root': {
+                        borderRadius: 2,
+                        backgroundColor: '#f9fafb',
+                        '&:hover': {
+                          backgroundColor: '#f3f4f6',
+                        },
+                        '&.Mui-focused': {
+                          backgroundColor: 'white',
+                        }
+                      }
+                    }}
+                  />
+                  <FormControl size="small" sx={{ minWidth: 150 }}>
+                    <InputLabel>Status Filter</InputLabel>
+                    <Select
+                      value={statusFilter}
+                      label="Status Filter"
+                      onChange={handleStatusFilterChange}
+                      sx={{ borderRadius: 2 }}
+                    >
+                      <MenuItem value="all">All Status</MenuItem>
+                      <MenuItem value="assigned">Assigned</MenuItem>
+                      <MenuItem value="unassigned">Unassigned</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Box>
               </Box>
             </Box>
             <TableContainer>
@@ -1147,7 +1013,46 @@ const ShiftManagement: React.FC = () => {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {filteredTeamLeaders.map((leader, index) => (
+                  {teamLeadersLoading ? (
+                    // Loading skeleton rows
+                    Array.from({ length: rowsPerPage }).map((_, index) => (
+                      <TableRow key={`loading-${index}`}>
+                        <TableCell>
+                          <Box display="flex" alignItems="center">
+                            <CircularProgress size={20} sx={{ mr: 2 }} />
+                            <Box>
+                              <Typography variant="body2" sx={{ color: '#6b7280' }}>
+                                Loading...
+                              </Typography>
+                            </Box>
+                          </Box>
+                        </TableCell>
+                        <TableCell><CircularProgress size={16} /></TableCell>
+                        <TableCell><CircularProgress size={16} /></TableCell>
+                        <TableCell><CircularProgress size={16} /></TableCell>
+                        <TableCell><CircularProgress size={16} /></TableCell>
+                        <TableCell><CircularProgress size={16} /></TableCell>
+                      </TableRow>
+                    ))
+                  ) : filteredTeamLeaders.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={6} sx={{ textAlign: 'center', py: 4 }}>
+                        <Box display="flex" flexDirection="column" alignItems="center">
+                          <CustomSVGIcons.TeamIcon />
+                          <Typography variant="h6" color="#6b7280" sx={{ mt: 2 }}>
+                            No team leaders found
+                          </Typography>
+                          <Typography variant="body2" color="#9ca3af">
+                            {searchTerm || statusFilter !== 'all' 
+                              ? 'Try adjusting your search or filter criteria' 
+                              : 'No team leaders are currently registered'
+                            }
+                          </Typography>
+                        </Box>
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    filteredTeamLeaders.map((leader, index) => (
                     <TableRow 
                       key={leader.id}
                       sx={{ 
@@ -1315,6 +1220,7 @@ const ShiftManagement: React.FC = () => {
                               <IconButton
                                 size="small"
                                 onClick={() => handleDeactivateShift(leader.currentShift!.shift_id)}
+                                disabled={deactivateShiftMutation.isPending}
                                 sx={{ 
                                   color: '#dc2626',
                                   '&:hover': {
@@ -1331,10 +1237,43 @@ const ShiftManagement: React.FC = () => {
                         </Box>
                       </TableCell>
                     </TableRow>
-                  ))}
+                    ))
+                  )}
                 </TableBody>
               </Table>
             </TableContainer>
+            
+            {/* Pagination Controls */}
+            <Box sx={{ 
+              p: 2, 
+              borderTop: '1px solid #e5e7eb',
+              backgroundColor: '#f9fafb',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center'
+            }}>
+              <Typography variant="body2" color="#6b7280">
+                Showing {page * rowsPerPage + 1} to {Math.min((page + 1) * rowsPerPage, totalCount)} of {totalCount} team leaders
+              </Typography>
+              <TablePagination
+                component="div"
+                count={totalCount}
+                page={page}
+                onPageChange={handleChangePage}
+                rowsPerPage={rowsPerPage}
+                onRowsPerPageChange={handleChangeRowsPerPage}
+                rowsPerPageOptions={[5, 10, 25, 50]}
+                sx={{
+                  '& .MuiTablePagination-toolbar': {
+                    paddingLeft: 0,
+                    paddingRight: 0,
+                  },
+                  '& .MuiTablePagination-selectLabel, & .MuiTablePagination-displayedRows': {
+                    marginBottom: 0,
+                  }
+                }}
+              />
+            </Box>
           </CardContent>
         </Card>
 
@@ -1486,7 +1425,7 @@ const ShiftManagement: React.FC = () => {
             <Button 
               onClick={handleAssignShift}
               variant="contained"
-              disabled={!assignmentForm.teamLeaderId || !assignmentForm.shiftTypeId}
+              disabled={!assignmentForm.teamLeaderId || !assignmentForm.shiftTypeId || assignShiftMutation.isPending}
               sx={{ 
                 borderRadius: 2,
                 backgroundColor: '#111827',
@@ -1495,7 +1434,7 @@ const ShiftManagement: React.FC = () => {
                 }
               }}
             >
-              Assign Shift
+              {assignShiftMutation.isPending ? 'Assigning...' : 'Assign Shift'}
             </Button>
           </DialogActions>
         </Dialog>

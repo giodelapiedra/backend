@@ -36,7 +36,13 @@ export class SupabaseAPI {
   static async getCases() {
     const { data, error } = await dataClient
       .from('cases')
-      .select('*')
+      .select(`
+        *,
+        worker:users!cases_worker_id_fkey(id, first_name, last_name, email, phone),
+        clinician:users!cases_clinician_id_fkey(id, first_name, last_name, email, phone),
+        case_manager:users!cases_case_manager_id_fkey(id, first_name, last_name, email),
+        employer:users!cases_employer_id_fkey(id, first_name, last_name, email)
+      `)
       .order('created_at', { ascending: false });
     
     if (error) throw error;
@@ -46,12 +52,104 @@ export class SupabaseAPI {
   static async getCaseById(id: string) {
     const { data, error } = await dataClient
       .from('cases')
-      .select('*')
+      .select(`
+        *,
+        worker:users!cases_worker_id_fkey(
+          id, first_name, last_name, email, phone
+        ),
+        clinician:users!cases_clinician_id_fkey(
+          id, first_name, last_name, email, phone, specialty
+        ),
+        case_manager:users!cases_case_manager_id_fkey(
+          id, first_name, last_name, email
+        ),
+        employer:users!cases_employer_id_fkey(
+          first_name, last_name, email
+        ),
+        incident:incidents!cases_incident_id_fkey(
+          id, incident_type, severity, description, created_at
+        )
+      `)
       .eq('id', id)
       .single();
     
     if (error) throw error;
-    return { case: data };
+
+    // Transform to the shape expected by CaseDetails page
+    const transformed = {
+      _id: data.id,
+      caseNumber: data.case_number,
+      status: data.status,
+      priority: data.priority || 'medium',
+      // If injury details are stored as a JSON column on cases
+      injuryDetails: data.injury_details ? {
+        bodyPart: data.injury_details.body_part || data.injury_details.bodyPart || '',
+        injuryType: data.injury_details.injury_type || data.injury_details.injuryType || '',
+        severity: data.injury_details.severity || '',
+        description: data.injury_details.description || '',
+        dateOfInjury: data.injury_details.date_of_injury || data.injury_details.dateOfInjury || undefined,
+      } : undefined,
+      workRestrictions: data.work_restrictions || undefined,
+      createdAt: data.created_at,
+      updatedAt: data.updated_at,
+      expectedReturnDate: data.expected_return_date || undefined,
+      actualReturnDate: data.actual_return_date || undefined,
+      incident: data.incident ? {
+        incidentNumber: data.incident.id,
+        incidentDate: data.incident.created_at,
+        description: data.incident.description,
+        severity: data.incident.severity,
+        incidentType: data.incident.incident_type,
+        photos: data.incident.photos || [],
+      } : undefined,
+      caseManager: data.case_manager ? {
+        firstName: data.case_manager.first_name,
+        lastName: data.case_manager.last_name,
+        email: data.case_manager.email,
+      } : { firstName: '', lastName: '', email: '' },
+      clinician: data.clinician ? {
+        firstName: data.clinician.first_name,
+        lastName: data.clinician.last_name,
+        email: data.clinician.email,
+        specialty: data.clinician.specialty,
+        phone: data.clinician.phone,
+      } : undefined,
+      worker: {
+        id: data.worker?.id || '',
+        firstName: data.worker?.first_name || '',
+        lastName: data.worker?.last_name || '',
+        email: data.worker?.email || '',
+        phone: data.worker?.phone || '',
+      },
+      employer: data.employer ? {
+        firstName: data.employer.first_name,
+        lastName: data.employer.last_name,
+        email: data.employer.email,
+      } : undefined,
+      // Optional JSON arrays on cases row if present
+      notes: Array.isArray(data.notes) ? data.notes.map((n: any) => ({
+        author: {
+          _id: n.author?._id || n.author_id || '',
+          firstName: n.author?.firstName || n.author_first_name || '',
+          lastName: n.author?.lastName || n.author_last_name || '',
+        },
+        content: n.content,
+        timestamp: n.timestamp || n.created_at,
+        type: n.type,
+      })) : [],
+      lastCheckIn: data.last_check_in ? {
+        _id: data.last_check_in.id,
+        checkInDate: data.last_check_in.checkInDate || data.last_check_in.created_at,
+        painLevel: { current: data.last_check_in.painLevel?.current ?? data.last_check_in.pain_level_current ?? 0 },
+        workStatus: { workedToday: !!(data.last_check_in.workStatus?.workedToday ?? data.last_check_in.worked_today) },
+        functionalStatus: {
+          sleep: data.last_check_in.functionalStatus?.sleep ?? data.last_check_in.sleep ?? 0,
+          mood: data.last_check_in.functionalStatus?.mood ?? data.last_check_in.mood ?? 0,
+        },
+      } : undefined,
+    };
+
+    return { case: transformed };
   }
 
   static async createCase(caseData: any) {
@@ -451,30 +549,78 @@ export class SupabaseAPI {
   // Get team members for a team leader
   static async getTeamMembers(teamLeaderId: string, teamName?: string) {
     try {
-      console.log('Fetching team members for team leader:', teamLeaderId, 'team:', teamName);
+      console.log('🔄 SupabaseAPI.getTeamMembers - Team Leader ID:', teamLeaderId, 'Team:', teamName);
       
-      // If team name is provided, filter by that specific team
-      if (teamName) {
-        const { data, error } = await dataClient
+      // If team name is provided and not 'default', filter by that specific team
+      if (teamName && teamName !== 'default') {
+        // Try exact match first
+        let { data, error } = await dataClient
           .from('users')
           .select('*')
           .eq('role', 'worker')
           .eq('team', teamName)
           .order('created_at', { ascending: false });
         
+        // If no exact match, try case-insensitive match
+        if (!error && (!data || data.length === 0)) {
+          console.log('🔄 No exact team match, trying case-insensitive...');
+          const { data: caseInsensitiveData, error: caseInsensitiveError } = await dataClient
+            .from('users')
+            .select('*')
+            .eq('role', 'worker')
+            .ilike('team', teamName)
+            .order('created_at', { ascending: false });
+          
+          if (!caseInsensitiveError) {
+            data = caseInsensitiveData;
+            error = caseInsensitiveError;
+          }
+        }
+        
+        // If still no match, try partial match
+        if (!error && (!data || data.length === 0)) {
+          console.log('🔄 No case-insensitive match, trying partial match...');
+          const { data: partialData, error: partialError } = await dataClient
+            .from('users')
+            .select('*')
+            .eq('role', 'worker')
+            .ilike('team', `%${teamName}%`)
+            .order('created_at', { ascending: false });
+          
+          if (!partialError) {
+            data = partialData;
+            error = partialError;
+          }
+        }
+        
         if (error) throw error;
         
-        console.log('Team members fetched for team', teamName, ':', data);
+        console.log('✅ Team members fetched for team', teamName, ':', data?.length, 'members');
         return { teamMembers: data || [] };
       } else {
-        // If no team name, get team leader's managed teams and fetch all members from those teams
+        // If no team name provided, try multiple approaches
+        
+        // Approach 1: Get team leader's managed teams and fetch members from those teams
         const { data: teamLeader, error: leaderError } = await dataClient
           .from('users')
           .select('managed_teams, team')
           .eq('id', teamLeaderId)
           .single();
         
-        if (leaderError) throw leaderError;
+        if (leaderError) {
+          console.log('⚠️ Error fetching team leader info:', leaderError);
+          // Fallback: get all workers
+          const { data, error } = await dataClient
+            .from('users')
+            .select('*')
+            .eq('role', 'worker')
+            .order('created_at', { ascending: false });
+          
+          if (error) throw error;
+          
+          console.log('✅ Fallback: All workers fetched:', data?.length, 'members');
+          return { teamMembers: data || [] };
+        }
         
         console.log('Team leader managed teams:', teamLeader?.managed_teams);
         
@@ -485,21 +631,56 @@ export class SupabaseAPI {
         }
         
         if (managedTeams.length === 0) {
-          console.log('No managed teams found for team leader');
-          return { teamMembers: [] };
+          console.log('⚠️ No managed teams found for team leader, fetching all workers as fallback');
+          // Fallback: get all workers if no managed teams found
+          const { data, error } = await dataClient
+            .from('users')
+            .select('*')
+            .eq('role', 'worker')
+            .order('created_at', { ascending: false });
+          
+          if (error) throw error;
+          
+          console.log('✅ Fallback: All workers fetched:', data?.length, 'members');
+          return { teamMembers: data || [] };
         }
         
         // Fetch team members from all managed teams
-        const { data, error } = await dataClient
+        let { data, error } = await dataClient
           .from('users')
           .select('*')
           .eq('role', 'worker')
           .in('team', managedTeams)
           .order('created_at', { ascending: false });
         
+        // If no exact match, try case-insensitive matching for each managed team
+        if (!error && (!data || data.length === 0)) {
+          console.log('🔄 No exact managed teams match, trying case-insensitive...');
+          const caseInsensitivePromises = managedTeams.map(team => 
+            dataClient
+              .from('users')
+              .select('*')
+              .eq('role', 'worker')
+              .ilike('team', team)
+              .order('created_at', { ascending: false })
+          );
+          
+          const caseInsensitiveResults = await Promise.all(caseInsensitivePromises);
+          const allData = caseInsensitiveResults
+            .filter(result => !result.error)
+            .flatMap(result => result.data || []);
+          
+          // Remove duplicates based on id
+          const uniqueData = allData.filter((item, index, self) => 
+            index === self.findIndex(t => t.id === item.id)
+          );
+          
+          data = uniqueData;
+        }
+        
         if (error) throw error;
         
-        console.log('Team members fetched from managed teams:', data);
+        console.log('✅ Team members fetched from managed teams:', data?.length, 'members');
         return { teamMembers: data || [] };
       }
     } catch (error) {
@@ -511,7 +692,7 @@ export class SupabaseAPI {
   // Get analytics data for team leader
   static async getAnalyticsData(teamLeaderId: string) {
     try {
-      console.log('Fetching analytics data for team leader:', teamLeaderId);
+      console.log('📊 [TEAM FILTER] Fetching analytics data for team leader:', teamLeaderId);
       
       // Get team leader info
       const { data: teamLeader, error: leaderError } = await dataClient
@@ -528,6 +709,13 @@ export class SupabaseAPI {
         managedTeams.push(teamLeader.team);
       }
       
+      console.log('📊 [TEAM FILTER] Team Leader Info:', {
+        name: `${teamLeader.first_name} ${teamLeader.last_name}`,
+        primaryTeam: teamLeader.team,
+        managedTeams: managedTeams,
+        totalTeamsManaged: managedTeams.length
+      });
+      
       const { data: teamMembers, error: membersError } = await dataClient
         .from('users')
         .select('*')
@@ -540,8 +728,13 @@ export class SupabaseAPI {
       const teamMemberIds = teamMembers?.map(m => m.id) || [];
       let workReadinessData: any[] = [];
       
-      console.log('Team members found:', teamMembers.length);
-      console.log('Team member IDs:', teamMemberIds);
+      console.log('📊 [TEAM FILTER] Team members found:', teamMembers.length);
+      console.log('📊 [TEAM FILTER] Team member details:', teamMembers.map(m => ({
+        name: `${m.first_name} ${m.last_name}`,
+        team: m.team,
+        role: m.role
+      })));
+      console.log('📊 [TEAM FILTER] Team member IDs:', teamMemberIds);
       
       if (teamMemberIds.length > 0) {
         const { data: wrData, error: workReadinessError } = await dataClient
@@ -795,7 +988,21 @@ export class SupabaseAPI {
         }
       };
       
-      console.log('Analytics data fetched:', analyticsData);
+      console.log('✅ [TEAM FILTER] Analytics data successfully fetched for team:', {
+        teamLeader: `${teamLeader.first_name} ${teamLeader.last_name}`,
+        teams: managedTeams,
+        totalMembers: teamMembers?.length || 0,
+        workReadinessSubmissions: workReadinessData.length,
+        todaySubmissions: todaySubmissions.length,
+        assignments: {
+          total: total,
+          completed: completed,
+          pending: pending,
+          overdue: overdue
+        }
+      });
+      console.log('📊 [TEAM FILTER] IMPORTANT: All data shown is filtered for team(s):', managedTeams.join(', '));
+      
       return analyticsData;
     } catch (error) {
       console.error('Error fetching analytics data:', error);
@@ -1986,15 +2193,39 @@ export class SupabaseAPI {
   }
 
   // Unselected Worker Reasons API
-  async getUnselectedWorkerReasons(teamLeaderId: string) {
+  async getUnselectedWorkerReasons(teamLeaderId: string, options?: {
+    limit?: number;
+    offset?: number;
+    includeCount?: boolean;
+  }) {
     try {
-      const { data, error } = await dataClient
-        .from('unselected_workers')
-        .select('*')
-        .eq('team_leader_id', teamLeaderId);
+      const { data: { session } } = await authClient.auth.getSession();
+      if (!session) {
+        return { success: false, error: 'Not authenticated' };
+      }
+
+      // Use backend API for pagination support
+      const backendUrl = process.env.REACT_APP_API_URL || 'http://localhost:5001/api';
+      const params = new URLSearchParams();
+      params.append('teamLeaderId', teamLeaderId);
+      if (options?.limit) params.append('limit', options.limit.toString());
+      if (options?.offset) params.append('offset', options.offset.toString());
+      if (options?.includeCount) params.append('includeCount', 'true');
       
-      if (error) throw error;
-      return { success: true, data: data || [] };
+      const response = await fetch(`${backendUrl}/work-readiness-assignments/unselected?${params}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      return result;
     } catch (error) {
       console.error('Error fetching unselected worker reasons:', error);
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
@@ -2054,26 +2285,32 @@ export class SupabaseAPI {
           worker_id: data.worker_id,
           reason: data.reason,
           notes: data.notes || '',
+          // Ensure case_status provided for conflict target
+          case_status: 'open',
           assignment_date: new Date().toISOString().split('T')[0],
           updated_at: new Date().toISOString()
         };
 
         console.log('📤 Using direct Supabase upsert:', upsertData);
         
-        const { data: result, error } = await dataClient
-          .from('unselected_workers')
-          .upsert(upsertData, {
-            onConflict: 'team_leader_id,worker_id'
-          })
-          .select();
-        
-        if (error) {
+        // Try upsert using the exact unique constraint columns from the schema
+        try {
+          const { data: result, error } = await dataClient
+            .from('unselected_workers')
+            .upsert(upsertData, {
+              // Match the unselected_workers_unique_exact_duplicate constraint
+              onConflict: 'team_leader_id,worker_id,assignment_date,reason,notes,created_at'
+            })
+            .select();
+
+          if (error) throw error;
+
+          console.log('✅ Direct Supabase success:', result);
+          return { success: true, data: result };
+        } catch (error: any) {
           console.error('❌ Direct Supabase error:', error);
           throw error;
         }
-        
-        console.log('✅ Direct Supabase success:', result);
-        return { success: true, data: result };
       }
     } catch (error) {
       console.error('❌ Error saving unselected worker reason:', error);
@@ -2211,7 +2448,11 @@ export class SupabaseAPI {
     }
   }
 
-  async getAllClosedUnselectedWorkerCases(teamLeaderId: string) {
+  async getAllClosedUnselectedWorkerCases(teamLeaderId: string, options?: {
+    limit?: number;
+    offset?: number;
+    includeCount?: boolean;
+  }) {
     try {
       const { data: { session } } = await authClient.auth.getSession();
       if (!session) {
@@ -2221,7 +2462,12 @@ export class SupabaseAPI {
       // Try backend API first
       try {
         const backendUrl = process.env.REACT_APP_API_URL || 'http://localhost:5001/api';
-        const response = await fetch(`${backendUrl}/work-readiness-assignments/unselected/closed-all`, {
+        const params = new URLSearchParams();
+        if (options?.limit) params.append('limit', options.limit.toString());
+        if (options?.offset) params.append('offset', options.offset.toString());
+        if (options?.includeCount) params.append('includeCount', 'true');
+        
+        const response = await fetch(`${backendUrl}/work-readiness-assignments/unselected/closed-all?${params}`, {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
@@ -2234,12 +2480,12 @@ export class SupabaseAPI {
         }
 
         const result = await response.json();
-        return { success: true, data: result.data };
+        return result;
       } catch (backendError) {
         console.warn('⚠️ Backend API failed, falling back to direct Supabase:', backendError);
         
-        // Fallback to direct Supabase call
-        const { data, error } = await dataClient
+        // Fallback to direct Supabase call with pagination
+        let query = dataClient
           .from('closed_unselected_workers')
           .select(`
             *,
@@ -2252,13 +2498,37 @@ export class SupabaseAPI {
           `)
           .eq('team_leader_id', teamLeaderId)
           .order('closed_at', { ascending: false });
+        
+        // Add pagination if options provided
+        if (options?.limit) {
+          query = query.limit(options.limit);
+        }
+        if (options?.offset) {
+          query = query.range(options.offset, options.offset + (options.limit || 10) - 1);
+        }
+        
+        // Get count if requested
+        let totalCount = 0;
+        if (options?.includeCount) {
+          const { count } = await dataClient
+            .from('closed_unselected_workers')
+            .select('*', { count: 'exact', head: true })
+            .eq('team_leader_id', teamLeaderId);
+          totalCount = count || 0;
+        }
+        
+        const { data, error } = await query;
 
         if (error) {
           console.error('Database error in getAllClosedUnselectedWorkerCases:', error);
           return { success: false, error: `Database error: ${error.message}` };
         }
 
-        return { success: true, data };
+        return { 
+          success: true, 
+          data: data || [],
+          totalCount: options?.includeCount ? totalCount : undefined
+        };
       }
     } catch (error) {
       console.error('Error in getAllClosedUnselectedWorkerCases:', error);

@@ -8,6 +8,7 @@ import {
   setCurrentAssignment,
   setHasSubmittedToday,
   setTodaySubmission,
+  setClinicianAssignment,
 } from '../../store/slices/workerSlice';
 import { dataClient } from '../../lib/supabase';
 
@@ -104,12 +105,37 @@ export const useWorkerData = (userId: string | undefined) => {
     }
   }, [userId, dispatch, getPHToday]);
 
+  const checkClinicianAssignment = useCallback(async () => {
+    try {
+      if (!userId) return;
+      
+      console.log('🔍 Checking clinician assignment for worker...');
+      
+      const { WorkerClinicianService } = await import('../../utils/workerClinicianService');
+      const assignmentStatus = await WorkerClinicianService.getClinicianAssignmentStatus(userId);
+      
+      dispatch(setClinicianAssignment(assignmentStatus));
+      
+      if (assignmentStatus.hasAssignedClinician) {
+        console.log('✅ Worker has assigned clinician:', assignmentStatus.clinicianName);
+      } else {
+        console.log('⚠️ Worker has no assigned clinician');
+      }
+    } catch (error) {
+      console.error('❌ Error checking clinician assignment:', error);
+      dispatch(setClinicianAssignment({
+        hasAssignedClinician: false
+      }));
+    }
+  }, [userId, dispatch]);
+
   useEffect(() => {
     if (userId) {
       fetchWorkerData();
       checkTodaySubmission();
+      checkClinicianAssignment();
     }
-  }, [userId, fetchWorkerData, checkTodaySubmission]);
+  }, [userId, fetchWorkerData, checkTodaySubmission, checkClinicianAssignment]);
 
   return {
     cases,

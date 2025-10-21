@@ -15,7 +15,7 @@ export const NotificationService = {
         .insert({
           recipient_id: workerId,
           sender_id: teamLeaderId,
-          type: 'case_assigned',
+          type: 'case_assignment', // Fixed: use 'case_assignment' instead of 'case_assigned'
           title: 'New Work Readiness Assignment',
           message: `You have been assigned to complete a work readiness assessment. Due within 24 hours (${new Date(dueTime).toLocaleString()}).${notes ? ` Note: ${notes}` : ''}`,
           priority: 'high',
@@ -41,25 +41,38 @@ export const NotificationService = {
     caseId: string
   ) {
     try {
-      const { error } = await dataClient
+      console.log('🔔 Creating case assignment notification...');
+      console.log('Clinician ID:', clinicianId);
+      console.log('Case Manager ID:', caseManagerId);
+      console.log('Case ID:', caseId);
+
+      const { data, error } = await dataClient
         .from('notifications')
         .insert({
           recipient_id: clinicianId,
           sender_id: caseManagerId,
-          type: 'case_assigned',
+          type: 'case_assignment', // Fixed: use 'case_assignment' instead of 'case_assigned'
           title: 'New Case Assigned',
-          message: `A new case has been assigned to you.`,
+          message: `A new case has been assigned to you. Case ID: ${caseId}`,
           priority: 'high',
           metadata: {
             case_id: caseId,
             task_type: 'case_assignment'
-          }
-        });
+          },
+          is_read: false,
+          created_at: new Date().toISOString()
+        })
+        .select();
 
-      if (error) throw error;
+      if (error) {
+        console.error('❌ Error creating case assignment notification:', error);
+        throw error;
+      }
+
+      console.log('✅ Case assignment notification created successfully:', data);
       return true;
     } catch (error) {
-      console.error('Error sending case assignment notification:', error);
+      console.error('❌ Error sending case assignment notification:', error);
       return false;
     }
   },
@@ -78,7 +91,7 @@ export const NotificationService = {
         .insert({
           recipient_id: recipientId,
           sender_id: senderId,
-          type: 'case_assigned',
+          type: 'case_assignment', // Fixed: use 'case_assignment' instead of 'case_assigned'
           title: 'Case Update',
           message: `Case status updated to: ${status}${notes ? `. Notes: ${notes}` : ''}`,
           priority: 'medium',

@@ -72,6 +72,7 @@ interface RehabilitationPlan {
   planDescription: string;
   duration?: number; // Number of days the plan should last
   status: 'active' | 'inactive' | 'completed' | 'paused' | 'cancelled';
+  clinician_id: string;
   case: {
     _id: string;
     caseNumber: string;
@@ -84,6 +85,7 @@ interface RehabilitationPlan {
     email: string;
   };
   exercises: Exercise[];
+  dailyCompletions?: any[];
   completion?: {
     date: string;
     exercises: any[];
@@ -397,7 +399,7 @@ const WorkerRehabilitationPlan: React.FC = (): JSX.Element => {
       );
       setIsTodayCompleted(allCompleted);
 
-      // Calculate completed days
+      // Calculate completed days (fully completed days where all exercises are done)
       const completedDaysCount = dailyCompletions.filter((dc: any) => {
         const dayExercises = dc.exercises || [];
         const totalExercises = exercises.length;
@@ -407,12 +409,25 @@ const WorkerRehabilitationPlan: React.FC = (): JSX.Element => {
 
       const duration = selectedPlan.duration || 7;
 
+      // Calculate current day number
+      // If today has been completed (allCompleted = true), then today is counted in completedDaysCount
+      // We show "Day X" where X is the day you're currently on
+      // 
+      // Examples:
+      // - Start of Day 1 (0 days complete, today not complete): Show "Day 1" → completedDaysCount + 1 = 0 + 1 = 1 ✓
+      // - Just finished Day 1 (1 day complete, today IS complete): Show "Day 1" → completedDaysCount = 1 ✓  
+      // - Next morning Day 2 (1 day complete, today not complete): Show "Day 2" → completedDaysCount + 1 = 1 + 1 = 2 ✓
+      //
+      // So: If allCompleted (finished today), show completedDaysCount, otherwise show completedDaysCount + 1
+      const currentDayNumber = allCompleted ? completedDaysCount : (completedDaysCount + 1);
+
       const planData: RehabilitationPlan = {
         _id: selectedPlan.id,
         planName: selectedPlan.plan_name || 'Recovery Plan',
         planDescription: selectedPlan.plan_description || 'Daily recovery exercises',
         duration: duration,
         status: selectedPlan.status as 'active' | 'inactive' | 'completed' | 'paused' | 'cancelled',
+        clinician_id: selectedPlan.clinician_id || '',
         case: {
           _id: selectedPlan.case?.id || '',
           caseNumber: selectedPlan.case?.case_number || 'N/A',
@@ -427,7 +442,7 @@ const WorkerRehabilitationPlan: React.FC = (): JSX.Element => {
         exercises,
         progressStats: {
           totalDays: duration,
-          completedDays: completedDaysCount,
+          completedDays: currentDayNumber, // Show current day number (1-based)
           skippedDays: 0,
           consecutiveCompletedDays: 0,
           consecutiveSkippedDays: 0
@@ -518,7 +533,21 @@ const WorkerRehabilitationPlan: React.FC = (): JSX.Element => {
   // Submit exercise completion with pain data
   const submitExerciseCompletion = async () => {
     try {
-      if (!selectedExercise || !plan) return;
+      console.log('=== Starting submitExerciseCompletion ===');
+      console.log('selectedExercise:', selectedExercise);
+      console.log('painLevel:', painLevel);
+      console.log('plan:', plan);
+      
+      if (!selectedExercise || !plan) {
+        console.error('Missing required data:', { selectedExercise, plan });
+        return;
+      }
+      
+      if (painLevel === null || painLevel === undefined) {
+        console.error('Pain level not selected');
+        setError('Please select a pain level before submitting');
+        return;
+      }
       
       setLoading(true);
       
@@ -536,6 +565,9 @@ const WorkerRehabilitationPlan: React.FC = (): JSX.Element => {
         today = now.toISOString().split('T')[0];
       }
       
+      console.log('Today date:', today);
+      console.log('Plan ID:', plan._id);
+      
       // Fetch current plan data
       const { data: currentPlan, error: fetchError } = await dataClient
         .from('rehabilitation_plans')
@@ -545,8 +577,10 @@ const WorkerRehabilitationPlan: React.FC = (): JSX.Element => {
 
       if (fetchError) {
         console.error('Error fetching current plan:', fetchError);
-        throw fetchError;
+        throw new Error(`Failed to fetch plan: ${fetchError.message}`);
       }
+
+      console.log('Current plan fetched:', currentPlan);
 
       // Get existing daily completions or initialize
       const dailyCompletions = currentPlan?.daily_completions || [];
@@ -562,6 +596,8 @@ const WorkerRehabilitationPlan: React.FC = (): JSX.Element => {
         dailyCompletions.push(todayCompletion);
       }
 
+      console.log('Today completion record:', todayCompletion);
+
       // Add completed exercise with pain data
       const exerciseCompletion = {
         exerciseId: selectedExercise._id,
@@ -572,14 +608,18 @@ const WorkerRehabilitationPlan: React.FC = (): JSX.Element => {
         status: 'completed'
       };
 
+      console.log('Exercise completion data:', exerciseCompletion);
+
       // Check if exercise already completed today
       const existingIndex = todayCompletion.exercises.findIndex(
         (e: any) => e.exerciseId === selectedExercise._id
       );
 
       if (existingIndex >= 0) {
+        console.log('Updating existing exercise at index:', existingIndex);
         todayCompletion.exercises[existingIndex] = exerciseCompletion;
       } else {
+        console.log('Adding new exercise completion');
         todayCompletion.exercises.push(exerciseCompletion);
       }
 
@@ -588,12 +628,24 @@ const WorkerRehabilitationPlan: React.FC = (): JSX.Element => {
       const completedToday = todayCompletion.exercises.filter((e: any) => e.status === 'completed').length;
       const progressPercentage = Math.round((completedToday / totalExercises) * 100);
 
+      // Calculate completed days count
+      const completedDaysCount = dailyCompletions.filter((dc: any) => {
+        const dayExercises = dc.exercises || [];
+        const completedExercises = dayExercises.filter((e: any) => e.status === 'completed').length;
+        return totalExercises > 0 && completedExercises === totalExercises;
+      }).length;
+
       // Update progress_stats
       const progressStats = {
         lastCompletedDate: today,
-        totalExercises: totalExercises,
+        totalExercises,
         completedExercises: completedToday,
-        progressPercentage: progressPercentage
+        progressPercentage,
+        totalDays: plan.duration || 7,
+        completedDays: completedDaysCount,
+        skippedDays: 0,
+        consecutiveCompletedDays: 0,
+        consecutiveSkippedDays: 0
       };
 
       // Update Supabase
@@ -607,7 +659,7 @@ const WorkerRehabilitationPlan: React.FC = (): JSX.Element => {
 
       if (updateError) {
         console.error('Error updating plan:', updateError);
-        throw updateError;
+        throw new Error(`Failed to update plan: ${updateError.message}`);
       }
       
       // Remove the timer for this exercise
@@ -621,20 +673,67 @@ const WorkerRehabilitationPlan: React.FC = (): JSX.Element => {
       setPainLevel(null);
       setPainNotes('');
       
-      // Check if all exercises are completed
+      // Check if all exercises are completed for today
       if (progressPercentage === 100) {
+        console.log('🎉 All exercises completed for today!');
+        
+        // Notify clinician about daily completion
+        try {
+          const completedDay = progressStats.completedDays;
+          const workerName = `${user?.firstName || ''} ${user?.lastName || ''}`.trim();
+          
+          await dataClient.from('notifications').insert({
+            recipient_id: plan.clinician_id,
+            sender_id: user?.id,
+            type: 'rehab_plan_daily_completed',
+            title: 'Daily Rehabilitation Plan Completed',
+            message: `${workerName} has completed Day ${completedDay} of their rehabilitation plan "${plan.planName}" for case ${plan.case?.caseNumber}. Progress: ${completedDay}/${plan.duration || 7} days completed.`,
+            priority: 'medium',
+            metadata: {
+              plan_id: plan._id,
+              plan_name: plan.planName,
+              case_number: plan.case?.caseNumber,
+              worker_name: workerName,
+              completed_day: completedDay,
+              total_days: plan.duration || 7
+            }
+          });
+        } catch (error) {
+          console.error('Failed to send daily completion notification:', error);
+        }
+        
+        // Mark plan as completed if all days are done
+        if (progressStats.completedDays >= (plan.duration || 7)) {
+          try {
+            await dataClient
+              .from('rehabilitation_plans')
+              .update({
+                status: 'completed',
+                end_date: new Date().toISOString().split('T')[0],
+                updated_at: new Date().toISOString()
+              })
+              .eq('id', plan._id);
+          } catch (error) {
+            console.error('Error marking plan as completed:', error);
+          }
+        }
+        
         setIsTodayCompleted(true);
         setCompletionDialog(true);
       } else {
+        console.log(`Progress: ${progressPercentage}%`);
         setSuccessMessage(`Exercise completed! Progress: ${progressPercentage}% 🎉`);
         setTimeout(() => setSuccessMessage(''), 3000);
       }
       
       // Refresh the plan data
+      console.log('Refreshing plan data...');
       await fetchRehabilitationPlan();
+      console.log('=== Completed submitExerciseCompletion ===');
     } catch (err: any) {
-      console.error('Error submitting exercise completion:', err);
+      console.error('❌ Error submitting exercise completion:', err);
       setError(err.message || 'Failed to complete exercise');
+      setTimeout(() => setError(null), 5000);
     } finally {
       setCompletingExercise(null);
       setLoading(false);
@@ -934,6 +1033,28 @@ const WorkerRehabilitationPlan: React.FC = (): JSX.Element => {
         p: { xs: 2, sm: 3, md: 4 },
         minHeight: '100vh'
       }}>
+        {/* Error Message */}
+        {error && (
+          <Alert 
+            severity="error" 
+            onClose={() => setError(null)}
+            sx={{ mb: 3 }}
+          >
+            {error}
+          </Alert>
+        )}
+
+        {/* Success Message */}
+        {successMessage && (
+          <Alert 
+            severity="success" 
+            onClose={() => setSuccessMessage(null)}
+            sx={{ mb: 3 }}
+          >
+            {successMessage}
+          </Alert>
+        )}
+
         {/* Header - Clean and Simple */}
         <Box sx={{ mb: { xs: 3, md: 4 }, textAlign: 'center' }}>
           <Typography 
@@ -1420,99 +1541,303 @@ const WorkerRehabilitationPlan: React.FC = (): JSX.Element => {
           </DialogActions>
         </Dialog>
         
-        {/* Pain Level Dialog */}
+        {/* Pain Level Dialog - Enhanced UI/UX */}
         <Dialog
           open={painDialog}
           onClose={() => !loading && setPainDialog(false)}
-          maxWidth="sm"
+          maxWidth="md"
           fullWidth
+          PaperProps={{
+            sx: {
+              borderRadius: 4,
+              boxShadow: '0 20px 40px rgba(0,0,0,0.1)',
+              overflow: 'hidden'
+            }
+          }}
         >
-          <DialogTitle>
-            Rate Your Pain Level
-          </DialogTitle>
-          <DialogContent>
-            <Box sx={{ py: 2 }}>
-              <Typography variant="body1" gutterBottom>
-                How much pain did you experience during "{selectedExercise?.name}"?
-              </Typography>
-              
-              <Typography variant="body2" color="text.secondary" gutterBottom sx={{ mt: 2 }}>
-                Rate your pain from 0 (no pain) to 10 (worst pain imaginable)
-              </Typography>
-              
+          <DialogTitle sx={{ 
+            pb: 2, 
+            background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)',
+            borderBottom: '1px solid #e2e8f0'
+          }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
               <Box sx={{ 
-                display: 'flex', 
-                justifyContent: 'space-between', 
-                alignItems: 'center', 
-                my: 3,
-                mx: 2
+                width: 48, 
+                height: 48, 
+                borderRadius: 2, 
+                bgcolor: 'rgba(59, 130, 246, 0.1)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
               }}>
-                <Typography variant="body2" color="text.secondary">No Pain</Typography>
-                <Box sx={{ 
-                  display: 'flex', 
-                  gap: 1,
-                  flexWrap: 'wrap',
-                  justifyContent: 'center',
-                  width: '100%',
-                  maxWidth: 500,
-                  mx: 'auto'
-                }}>
-                  {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((level) => (
-                    <Button
-                      key={level}
-                      variant={painLevel === level ? "contained" : "outlined"}
-                      color={
-                        level <= 3 ? "success" : 
-                        level <= 6 ? "warning" : 
-                        "error"
-                      }
-                      onClick={() => setPainLevel(level)}
-                      sx={{ 
-                        minWidth: 40, 
-                        height: 40,
-                        borderRadius: '50%',
-                        p: 0
-                      }}
-                    >
-                      {level}
-                    </Button>
-                  ))}
-                </Box>
-                <Typography variant="body2" color="text.secondary">Severe Pain</Typography>
+                <Typography sx={{ fontSize: 24 }}>😊</Typography>
               </Box>
-              
-              <Box sx={{ mt: 3 }}>
-                <TextField
-                  fullWidth
-                  label="Additional Notes (Optional)"
-                  placeholder="Describe your pain (location, type, when it occurred, etc.)"
-                  multiline
-                  rows={3}
-                  value={painNotes}
-                  onChange={(e) => setPainNotes(e.target.value)}
-                  disabled={loading}
-                />
+              <Box>
+                <Typography variant="h6" sx={{ fontWeight: 600, color: '#1e293b' }}>
+                  How are you feeling?
+                </Typography>
+                <Typography variant="body2" sx={{ color: '#64748b', mt: 0.5 }}>
+                  Rate your pain level after "{selectedExercise?.name}"
+                </Typography>
               </Box>
             </Box>
+          </DialogTitle>
+          
+          <DialogContent sx={{ py: 4 }}>
+            {/* Pain Scale Visual Guide */}
+            <Box sx={{ 
+              mb: 4, 
+              p: 3, 
+              bgcolor: '#f8fafc', 
+              borderRadius: 3,
+              border: '1px solid #e2e8f0'
+            }}>
+              <Typography variant="h6" sx={{ 
+                fontWeight: 600, 
+                color: '#1e293b', 
+                mb: 2,
+                textAlign: 'center'
+              }}>
+                Pain Scale Guide
+              </Typography>
+              
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
+                <Box sx={{ textAlign: 'center', flex: 1 }}>
+                  <Typography variant="body2" sx={{ color: '#059669', fontWeight: 600 }}>
+                    0-3: Mild
+                  </Typography>
+                  <Typography variant="caption" sx={{ color: '#64748b' }}>
+                    Manageable discomfort
+                  </Typography>
+                </Box>
+                <Box sx={{ textAlign: 'center', flex: 1 }}>
+                  <Typography variant="body2" sx={{ color: '#d97706', fontWeight: 600 }}>
+                    4-6: Moderate
+                  </Typography>
+                  <Typography variant="caption" sx={{ color: '#64748b' }}>
+                    Noticeable but tolerable
+                  </Typography>
+                </Box>
+                <Box sx={{ textAlign: 'center', flex: 1 }}>
+                  <Typography variant="body2" sx={{ color: '#dc2626', fontWeight: 600 }}>
+                    7-10: Severe
+                  </Typography>
+                  <Typography variant="caption" sx={{ color: '#64748b' }}>
+                    Significant pain
+                  </Typography>
+                </Box>
+              </Box>
+            </Box>
+
+            {/* Enhanced Pain Rating Interface */}
+            <Box sx={{ mb: 4 }}>
+              <Typography variant="h6" sx={{ 
+                fontWeight: 600, 
+                color: '#1e293b', 
+                mb: 3,
+                textAlign: 'center'
+              }}>
+                Select your pain level
+              </Typography>
+              
+              {/* Pain Scale with Visual Indicators */}
+              <Box sx={{ 
+                display: 'flex', 
+                justifyContent: 'center',
+                alignItems: 'center',
+                gap: 1,
+                mb: 3,
+                flexWrap: 'wrap'
+              }}>
+                {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((level) => {
+                  const getColor = (level: number) => {
+                    if (level <= 3) return '#059669'; // Green
+                    if (level <= 6) return '#d97706'; // Orange
+                    return '#dc2626'; // Red
+                  };
+                  
+                  const getEmoji = (level: number) => {
+                    if (level === 0) return '😊';
+                    if (level <= 2) return '🙂';
+                    if (level <= 4) return '😐';
+                    if (level <= 6) return '😕';
+                    if (level <= 8) return '😣';
+                    return '😫';
+                  };
+                  
+                  const isSelected = painLevel === level;
+                  
+                  return (
+                    <Box
+                      key={level}
+                      onClick={() => setPainLevel(level)}
+                      sx={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s ease',
+                        transform: isSelected ? 'scale(1.1)' : 'scale(1)',
+                        '&:hover': {
+                          transform: 'scale(1.05)'
+                        }
+                      }}
+                    >
+                      {/* Number Circle */}
+                      <Box sx={{
+                        width: 50,
+                        height: 50,
+                        borderRadius: '50%',
+                        backgroundColor: isSelected ? getColor(level) : '#f1f5f9',
+                        border: `3px solid ${isSelected ? getColor(level) : '#e2e8f0'}`,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        mb: 1,
+                        transition: 'all 0.2s ease',
+                        boxShadow: isSelected ? `0 4px 12px ${getColor(level)}40` : '0 2px 4px rgba(0,0,0,0.1)'
+                      }}>
+                        <Typography sx={{ 
+                          fontWeight: 700, 
+                          fontSize: '1.1rem',
+                          color: isSelected ? 'white' : '#64748b'
+                        }}>
+                          {level}
+                        </Typography>
+                      </Box>
+                      
+                      {/* Emoji */}
+                      <Typography sx={{ fontSize: '1.5rem', mb: 0.5 }}>
+                        {getEmoji(level)}
+                      </Typography>
+                      
+                      {/* Label for key numbers */}
+                      {[0, 5, 10].includes(level) && (
+                        <Typography variant="caption" sx={{ 
+                          color: '#64748b',
+                          fontWeight: 500,
+                          textAlign: 'center',
+                          fontSize: '0.75rem'
+                        }}>
+                          {level === 0 ? 'No Pain' : level === 5 ? 'Moderate' : 'Severe'}
+                        </Typography>
+                      )}
+                    </Box>
+                  );
+                })}
+              </Box>
+              
+              {/* Selected Pain Level Display */}
+              {painLevel !== null && (
+                <Box sx={{ 
+                  textAlign: 'center',
+                  p: 2,
+                  bgcolor: '#f0f9ff',
+                  borderRadius: 2,
+                  border: '1px solid #bae6fd'
+                }}>
+                  <Typography variant="h6" sx={{ 
+                    fontWeight: 600, 
+                    color: '#0369a1',
+                    mb: 0.5
+                  }}>
+                    Pain Level: {painLevel}/10
+                  </Typography>
+                  <Typography variant="body2" sx={{ color: '#0369a1' }}>
+                    {painLevel <= 3 ? 'Mild discomfort - Great!' : 
+                     painLevel <= 6 ? 'Moderate pain - Manageable' : 
+                     'Severe pain - Please note this'}
+                  </Typography>
+                </Box>
+              )}
+            </Box>
+            
+            {/* Additional Notes Section */}
+            <Box sx={{ mt: 4 }}>
+              <Typography variant="h6" sx={{ 
+                fontWeight: 600, 
+                color: '#1e293b', 
+                mb: 2 
+              }}>
+                Additional Notes (Optional)
+              </Typography>
+              <TextField
+                fullWidth
+                placeholder="Describe your pain experience... (e.g., 'Sharp pain in lower back', 'Dull ache in shoulder', 'No pain at all')"
+                multiline
+                rows={4}
+                value={painNotes}
+                onChange={(e) => setPainNotes(e.target.value)}
+                disabled={loading}
+                sx={{
+                  '& .MuiOutlinedInput-root': {
+                    borderRadius: 2,
+                    '&:hover .MuiOutlinedInput-notchedOutline': {
+                      borderColor: '#3b82f6'
+                    },
+                    '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
+                      borderColor: '#3b82f6',
+                      borderWidth: 2
+                    }
+                  }
+                }}
+              />
+              <Typography variant="caption" sx={{ 
+                color: '#64748b', 
+                mt: 1, 
+                display: 'block' 
+              }}>
+                💡 Tip: Be specific about location, type of pain, and when it occurred
+              </Typography>
+            </Box>
           </DialogContent>
-          <DialogActions>
+          
+          <DialogActions sx={{ 
+            p: 3, 
+            background: '#f8fafc',
+            borderTop: '1px solid #e2e8f0'
+          }}>
             <Button 
               onClick={() => {
                 setPainDialog(false);
                 setCompletingExercise(null);
               }}
               disabled={loading}
+              sx={{
+                px: 3,
+                py: 1.5,
+                borderRadius: 2,
+                fontWeight: 600,
+                textTransform: 'none'
+              }}
             >
               Cancel
             </Button>
             <Button 
               onClick={submitExerciseCompletion}
               variant="contained" 
-              color="primary"
               disabled={painLevel === null || loading}
               startIcon={loading && <CircularProgress size={20} color="inherit" />}
+              sx={{
+                px: 4,
+                py: 1.5,
+                borderRadius: 2,
+                fontWeight: 600,
+                textTransform: 'none',
+                background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
+                boxShadow: '0 4px 12px rgba(59, 130, 246, 0.3)',
+                '&:hover': {
+                  background: 'linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%)',
+                  boxShadow: '0 6px 16px rgba(59, 130, 246, 0.4)'
+                },
+                '&:disabled': {
+                  background: '#cbd5e1',
+                  color: '#64748b',
+                  boxShadow: 'none'
+                }
+              }}
             >
-              {loading ? 'Submitting...' : 'Submit'}
+              {loading ? 'Submitting...' : 'Submit Pain Rating'}
             </Button>
           </DialogActions>
         </Dialog>

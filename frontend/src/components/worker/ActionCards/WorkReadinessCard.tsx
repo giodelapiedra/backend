@@ -121,4 +121,5 @@ const WorkReadinessCard: React.FC<WorkReadinessCardProps> = memo(({
 WorkReadinessCard.displayName = 'WorkReadinessCard';
 
 export default WorkReadinessCard;
+export {};
 

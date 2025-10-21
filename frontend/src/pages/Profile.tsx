@@ -1007,8 +1007,10 @@ const Profile: React.FC = React.memo(() => {
       setFormData(prev => ({
         ...prev,
         medicalInfo: {
-          ...(prev.medicalInfo || {}),
-          allergies: [...(prev.medicalInfo?.allergies || []), newAllergy.trim()]
+          bloodType: prev.medicalInfo?.bloodType || '',
+          allergies: [...(prev.medicalInfo?.allergies || []), newAllergy.trim()],
+          medications: prev.medicalInfo?.medications || [],
+          medicalConditions: prev.medicalInfo?.medicalConditions || []
         }
       }));
       setNewAllergy('');
@@ -1021,8 +1023,10 @@ const Profile: React.FC = React.memo(() => {
     setFormData(prev => ({
       ...prev,
       medicalInfo: {
-        ...(prev.medicalInfo || {}),
-        allergies: (prev.medicalInfo?.allergies || []).filter((_, i) => i !== index)
+        bloodType: prev.medicalInfo?.bloodType || '',
+        allergies: (prev.medicalInfo?.allergies || []).filter((_, i) => i !== index),
+        medications: prev.medicalInfo?.medications || [],
+        medicalConditions: prev.medicalInfo?.medicalConditions || []
       }
     }));
     setForceUpdate(prev => prev + 1);
@@ -1033,8 +1037,10 @@ const Profile: React.FC = React.memo(() => {
       setFormData(prev => ({
         ...prev,
         medicalInfo: {
-          ...(prev.medicalInfo || {}),
-          medications: [...(prev.medicalInfo?.medications || []), newMedication.trim()]
+          bloodType: prev.medicalInfo?.bloodType || '',
+          allergies: prev.medicalInfo?.allergies || [],
+          medications: [...(prev.medicalInfo?.medications || []), newMedication.trim()],
+          medicalConditions: prev.medicalInfo?.medicalConditions || []
         }
       }));
       setNewMedication('');
@@ -1047,8 +1053,10 @@ const Profile: React.FC = React.memo(() => {
     setFormData(prev => ({
       ...prev,
       medicalInfo: {
-        ...(prev.medicalInfo || {}),
-        medications: (prev.medicalInfo?.medications || []).filter((_, i) => i !== index)
+        bloodType: prev.medicalInfo?.bloodType || '',
+        allergies: prev.medicalInfo?.allergies || [],
+        medications: (prev.medicalInfo?.medications || []).filter((_, i) => i !== index),
+        medicalConditions: prev.medicalInfo?.medicalConditions || []
       }
     }));
     setForceUpdate(prev => prev + 1);
@@ -1059,7 +1067,9 @@ const Profile: React.FC = React.memo(() => {
       setFormData(prev => ({
         ...prev,
         medicalInfo: {
-          ...(prev.medicalInfo || {}),
+          bloodType: prev.medicalInfo?.bloodType || '',
+          allergies: prev.medicalInfo?.allergies || [],
+          medications: prev.medicalInfo?.medications || [],
           medicalConditions: [...(prev.medicalInfo?.medicalConditions || []), newCondition.trim()]
         }
       }));
@@ -1073,7 +1083,9 @@ const Profile: React.FC = React.memo(() => {
     setFormData(prev => ({
       ...prev,
       medicalInfo: {
-        ...(prev.medicalInfo || {}),
+        bloodType: prev.medicalInfo?.bloodType || '',
+        allergies: prev.medicalInfo?.allergies || [],
+        medications: prev.medicalInfo?.medications || [],
         medicalConditions: (prev.medicalInfo?.medicalConditions || []).filter((_, i) => i !== index)
       }
     }));

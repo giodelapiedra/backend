@@ -9,7 +9,7 @@ CREATE TABLE notifications (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     recipient_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     sender_id UUID REFERENCES users(id) ON DELETE SET NULL,
-    type VARCHAR(50) NOT NULL CHECK (type IN ('case_assignment', 'case_update', 'appointment_reminder', 'general')),
+    type VARCHAR(50) NOT NULL CHECK (type IN ('case_assignment', 'case_update', 'appointment_reminder', 'rehabilitation_plan_created', 'general')),
     title VARCHAR(255) NOT NULL,
     message TEXT NOT NULL,
     priority VARCHAR(20) DEFAULT 'medium' CHECK (priority IN ('low', 'medium', 'high', 'urgent')),
@@ -17,7 +17,8 @@ CREATE TABLE notifications (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     related_case_id UUID REFERENCES cases(id) ON DELETE CASCADE,
-    related_incident_id UUID REFERENCES incidents(id) ON DELETE CASCADE
+    related_incident_id UUID REFERENCES incidents(id) ON DELETE CASCADE,
+    metadata JSONB DEFAULT '{}'
 );
 
 -- Create indexes for better performance

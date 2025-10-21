@@ -1,24 +1,43 @@
 import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
 import { dataClient } from '../../lib/supabase';
 
+// Utility: Validate UUID format
+// Security: Enhanced UUID validation with better error handling
+const isValidUUID = (uuid: string): boolean => {
+  if (!uuid || typeof uuid !== 'string') {
+    return false;
+  }
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  return uuidRegex.test(uuid.trim());
+};
+
+// Security: Input sanitization utility
+const sanitizeString = (input: any, maxLength: number = 255): string => {
+  if (typeof input !== 'string') {
+    return '';
+  }
+  return input.trim().slice(0, maxLength);
+};
+
 export const teamsApi = createApi({
   reducerPath: 'teamsApi',
   baseQuery: fetchBaseQuery({
     baseUrl: '', // No fallback URL - use Supabase only
   }),
   tagTypes: ['Team', 'User'],
-  // Optimize for real-time updates
+  // Minimal auto refresh - only on reconnect, no aggressive refresh
   refetchOnFocus: false,
-  refetchOnReconnect: true,
-  refetchOnMountOrArgChange: 30, // Refetch if data is older than 30 seconds
+  refetchOnReconnect: true, // Reconnect only - essential for network issues
+  refetchOnMountOrArgChange: false, // No aggressive refresh
   endpoints: (builder) => ({
     getTeams: builder.query({
       queryFn: async (teamLeaderId: string = '') => {
         try {
-          console.log('getTeams query called with teamLeaderId:', teamLeaderId);
-          
-          if (!teamLeaderId) {
-            console.log('No teamLeaderId provided, returning empty teams');
+          // Validate input
+          if (!teamLeaderId || !teamLeaderId.trim()) {
+            if (process.env.NODE_ENV === 'development') {
+              console.log('No teamLeaderId provided');
+            }
             return { 
               data: { 
                 teams: [],
@@ -27,47 +46,36 @@ export const teamsApi = createApi({
               } 
             };
           }
-          
-          // Test Supabase connection first
-          console.log('Testing Supabase connection...');
-          const { error: testError } = await dataClient
-            .from('users')
-            .select('id')
-            .limit(1);
-          
-          if (testError) {
-            console.error('Supabase connection test failed:', testError);
-            throw testError;
+
+          // Validate UUID format for security
+          if (!isValidUUID(teamLeaderId)) {
+            throw new Error('Invalid team leader ID format');
           }
           
-          console.log('Supabase connection test successful');
-          
-          // Get team leader's managed teams
+          // Get team leader's managed teams (minimal query for performance)
           const { data: teamLeader, error: leaderError } = await dataClient
             .from('users')
-            .select('managed_teams, team, default_team, role, first_name, last_name')
+            .select('managed_teams, team, default_team')
             .eq('id', teamLeaderId)
             .single();
           
           if (leaderError) {
-            console.error('Error fetching team leader:', leaderError);
-            console.error('Leader error details:', JSON.stringify(leaderError, null, 2));
-            throw leaderError;
+            if (process.env.NODE_ENV === 'development') {
+              console.error('Error fetching team leader:', leaderError);
+            }
+            throw new Error('Failed to fetch team leader data');
           }
           
-          console.log('Team leader data:', teamLeader);
-          
-          // For site supervisors, they might not have managed_teams, so use their current team
+          // Build teams array efficiently
           let teams = teamLeader?.managed_teams || [];
           
-          // If no managed teams but has a current team, use that
+          // Add current team if not in managed teams
           if (teams.length === 0 && teamLeader?.team) {
             teams = [teamLeader.team];
           }
           
-          // If still no teams, try to get all unique teams from users table
+          // Fallback: Get all unique teams (only if no teams found)
           if (teams.length === 0) {
-            console.log('No teams found, fetching all available teams...');
             const { data: allTeams, error: allTeamsError } = await dataClient
               .from('users')
               .select('team')
@@ -75,24 +83,27 @@ export const teamsApi = createApi({
               .neq('team', '');
             
             if (!allTeamsError && allTeams) {
-              const uniqueTeams = Array.from(new Set(allTeams.map(t => t.team).filter(Boolean)));
-              teams = uniqueTeams;
-              console.log('Found available teams:', uniqueTeams);
+              teams = Array.from(new Set(allTeams.map(t => t.team).filter(Boolean)));
             }
           }
           
-          const result = { 
-            teams: teams,
-            currentTeam: teamLeader?.team || null,
-            defaultTeam: teamLeader?.default_team || teamLeader?.team || null
+          return { 
+            data: { 
+              teams,
+              currentTeam: teamLeader?.team || null,
+              defaultTeam: teamLeader?.default_team || teamLeader?.team || null
+            }
           };
-          
-          console.log('getTeams result:', result);
-          
-          return { data: result };
         } catch (error) {
-          console.error('getTeams error:', error);
-          return { error: { status: 500, data: error } };
+          if (process.env.NODE_ENV === 'development') {
+            console.error('getTeams error:', error);
+          }
+          return { 
+            error: { 
+              status: 500, 
+              data: error instanceof Error ? error.message : 'Failed to fetch teams'
+            } 
+          };
         }
       },
       providesTags: ['Team'],
@@ -101,16 +112,18 @@ export const teamsApi = createApi({
     getTeamMembers: builder.query({
       queryFn: async ({ teamLeaderId, teamName }: { teamLeaderId: string; teamName?: string }) => {
         try {
-          console.log('getTeamMembers query called with:', { teamLeaderId, teamName });
-          
-          if (!teamLeaderId) {
-            console.log('No teamLeaderId provided, returning empty team members');
+          // Validate input
+          if (!teamLeaderId || !teamLeaderId.trim()) {
             return { data: { teamMembers: [] } };
+          }
+
+          // Validate UUID
+          if (!isValidUUID(teamLeaderId)) {
+            throw new Error('Invalid team leader ID format');
           }
           
           // If team name is provided, filter by that specific team
           if (teamName) {
-            console.log('Filtering by team name:', teamName);
             const { data, error } = await dataClient
               .from('users')
               .select('*')
@@ -119,15 +132,12 @@ export const teamsApi = createApi({
               .order('created_at', { ascending: false });
             
             if (error) {
-              console.error('Error fetching team members:', error);
-              throw error;
+              throw new Error('Failed to fetch team members');
             }
             
-            console.log('Team members fetched for team', teamName, ':', data?.length || 0, 'members');
             return { data: { teamMembers: data || [] } };
           } else {
-            // If no team name, get team leader's managed teams and fetch all members from those teams
-            console.log('Getting team leader managed teams...');
+            // Get team leader's managed teams
             const { data: teamLeader, error: leaderError } = await dataClient
               .from('users')
               .select('managed_teams, team')
@@ -135,24 +145,20 @@ export const teamsApi = createApi({
               .single();
             
             if (leaderError) {
-              console.error('Error fetching team leader:', leaderError);
-              throw leaderError;
+              throw new Error('Failed to fetch team leader');
             }
             
-            console.log('Team leader managed teams:', teamLeader?.managed_teams);
-            
-            // Get all managed teams, including the current team
+            // Build managed teams array
             const managedTeams = teamLeader?.managed_teams || [];
             if (teamLeader?.team && !managedTeams.includes(teamLeader.team)) {
               managedTeams.push(teamLeader.team);
             }
             
             if (managedTeams.length === 0) {
-              console.log('No managed teams found for team leader');
               return { data: { teamMembers: [] } };
             }
             
-            // Fetch team members from all managed teams
+            // Fetch team members
             const { data, error } = await dataClient
               .from('users')
               .select('*')
@@ -161,16 +167,21 @@ export const teamsApi = createApi({
               .order('created_at', { ascending: false });
             
             if (error) {
-              console.error('Error fetching team members:', error);
-              throw error;
+              throw new Error('Failed to fetch team members');
             }
             
-            console.log('Team members fetched from managed teams:', data?.length || 0, 'members');
             return { data: { teamMembers: data || [] } };
           }
         } catch (error) {
-          console.error('getTeamMembers error:', error);
-          return { error: { status: 500, data: error } };
+          if (process.env.NODE_ENV === 'development') {
+            console.error('getTeamMembers error:', error);
+          }
+          return { 
+            error: { 
+              status: 500, 
+              data: error instanceof Error ? error.message : 'Failed to fetch team members'
+            } 
+          };
         }
       },
       providesTags: ['User'],
@@ -179,24 +190,34 @@ export const teamsApi = createApi({
     createTeam: builder.mutation({
       queryFn: async ({ teamName, teamLeaderId }: { teamName: string; teamLeaderId: string }) => {
         try {
-          // Get current user data to update managed_teams array
+          // Validate inputs
+          if (!teamName || !teamName.trim()) {
+            throw new Error('Team name is required');
+          }
+          if (!teamLeaderId || !isValidUUID(teamLeaderId)) {
+            throw new Error('Invalid team leader ID');
+          }
+
+          // Get current user data
           const { data: currentUser, error: fetchError } = await dataClient
             .from('users')
             .select('managed_teams, team')
             .eq('id', teamLeaderId)
             .single();
           
-          if (fetchError) throw fetchError;
+          if (fetchError) {
+            throw new Error('Failed to fetch user data');
+          }
 
-          // Add new team to existing managed teams array
+          // Add new team to managed teams
           const currentManagedTeams = currentUser?.managed_teams || [];
-          const updatedManagedTeams = [...currentManagedTeams, teamName];
+          const updatedManagedTeams = [...currentManagedTeams, teamName.trim()];
 
-          // Update the team leader's current team and managed teams
+          // Update user
           const { data: userData, error: userError } = await dataClient
             .from('users')
             .update({ 
-              team: teamName,
+              team: teamName.trim(),
               managed_teams: updatedManagedTeams,
               updated_at: new Date().toISOString()
             })
@@ -204,16 +225,26 @@ export const teamsApi = createApi({
             .select()
             .single();
           
-          if (userError) throw userError;
+          if (userError) {
+            throw new Error('Failed to create team');
+          }
 
           return { 
             data: { 
-              team: { name: teamName, team_leader_id: teamLeaderId }, 
+              team: { name: teamName.trim(), team_leader_id: teamLeaderId }, 
               user: userData 
             } 
           };
         } catch (error) {
-          return { error: { status: 500, data: error } };
+          if (process.env.NODE_ENV === 'development') {
+            console.error('createTeam error:', error);
+          }
+          return { 
+            error: { 
+              status: 500, 
+              data: error instanceof Error ? error.message : 'Failed to create team'
+            } 
+          };
         }
       },
       invalidatesTags: ['Team', 'User'],
@@ -222,20 +253,39 @@ export const teamsApi = createApi({
     updateUserTeam: builder.mutation({
       queryFn: async ({ userId, teamName }: { userId: string; teamName: string }) => {
         try {
+          // Validate inputs
+          if (!teamName || !teamName.trim()) {
+            throw new Error('Team name is required');
+          }
+          if (!userId || !isValidUUID(userId)) {
+            throw new Error('Invalid user ID');
+          }
+
           const { data, error } = await dataClient
             .from('users')
             .update({ 
-              team: teamName,
+              team: teamName.trim(),
               updated_at: new Date().toISOString()
             })
             .eq('id', userId)
             .select()
             .single();
           
-          if (error) throw error;
+          if (error) {
+            throw new Error('Failed to update user team');
+          }
+
           return { data: { user: data } };
         } catch (error) {
-          return { error: { status: 500, data: error } };
+          if (process.env.NODE_ENV === 'development') {
+            console.error('updateUserTeam error:', error);
+          }
+          return { 
+            error: { 
+              status: 500, 
+              data: error instanceof Error ? error.message : 'Failed to update team'
+            } 
+          };
         }
       },
       invalidatesTags: ['User'],
@@ -244,30 +294,48 @@ export const teamsApi = createApi({
     getUnselectedWorkers: builder.query({
       queryFn: async ({ teamLeaderId, date }: { teamLeaderId: string; date?: string }) => {
         try {
-          console.log('getUnselectedWorkers query called with:', { teamLeaderId, date });
+          console.log('🔍 getUnselectedWorkers called with:', { teamLeaderId, date });
           
-          if (!teamLeaderId) {
-            console.log('No teamLeaderId provided, returning empty unselected workers');
+          // Security: Validate and sanitize input
+          if (!teamLeaderId || typeof teamLeaderId !== 'string' || !isValidUUID(teamLeaderId)) {
+            console.warn('❌ Invalid teamLeaderId:', teamLeaderId);
             return { data: { unselectedWorkers: [] } };
           }
 
-          // Build URL - only add date parameter if provided
-          let url = `http://localhost:5001/api/work-readiness-assignments/unselected?teamLeaderId=${teamLeaderId}`;
-          if (date) {
-            url += `&date=${date}`;
-            console.log('🔍 Filtering by date:', date);
-          } else {
-            console.log('🔍 NO date filter - fetching ALL records');
+          // Security: Validate date format if provided
+          if (date && typeof date === 'string') {
+            const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+            if (!dateRegex.test(date)) {
+              console.warn('❌ Invalid date format:', date);
+              return { data: { unselectedWorkers: [] } };
+            }
           }
 
-          // Get fresh session token from Supabase
+          // Get API base URL from environment or use default
+          const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001/api';
+          
+          // Build URL securely with proper encoding
+          const params = new URLSearchParams();
+          params.append('teamLeaderId', teamLeaderId);
+          if (date) {
+            params.append('date', date);
+          }
+          
+          // Security: Validate API_BASE_URL
+          if (!API_BASE_URL || typeof API_BASE_URL !== 'string') {
+            throw new Error('Invalid API base URL configuration');
+          }
+          
+          const url = `${API_BASE_URL}/work-readiness-assignments/unselected?${params.toString()}`;
+          console.log('🔍 API URL:', url);
+
+          // Get session token
           const { data: { session }, error: sessionError } = await dataClient.auth.getSession();
           if (sessionError || !session?.access_token) {
-            console.error('❌ No valid session token available:', sessionError);
-            throw new Error('Authentication required. Please log in again.');
+            throw new Error('Authentication required');
           }
 
-          // Fetch unselected workers from the backend API
+          // Fetch from backend API
           const response = await fetch(url, {
             method: 'GET',
             headers: {
@@ -276,53 +344,58 @@ export const teamsApi = createApi({
             }
           });
 
-          console.log('API Response status:', response.status);
-          console.log('API Response headers:', response.headers);
-
           if (!response.ok) {
             const errorText = await response.text();
-            console.error('API Error Response:', errorText);
-            throw new Error(`HTTP error! status: ${response.status}, message: ${errorText.substring(0, 100)}`);
+            throw new Error(`API error: ${response.status}`);
           }
 
-          const responseText = await response.text();
-          console.log('API Response text:', responseText.substring(0, 200));
-          
-          let data;
-          try {
-            data = JSON.parse(responseText);
-          } catch (parseError) {
-            console.error('Failed to parse JSON response:', parseError);
-            console.error('Response was:', responseText);
-            throw new Error('Invalid JSON response from server');
+          // Security: Validate response before parsing
+          const contentType = response.headers.get('content-type');
+          if (!contentType || !contentType.includes('application/json')) {
+            throw new Error('Invalid response format');
           }
+
+          const responseData = await response.json();
+          console.log('🔍 API Response:', { status: response.status, data: responseData });
           
-          if (data.success && data.unselectedWorkers) {
-            console.log('🔍 Raw API response count:', data.unselectedWorkers.length);
-            console.log('🔍 Raw workers from API:', data.unselectedWorkers);
-            
-            // Show ALL unselected workers (including old cases that are not closed)
-            const allUnselectedWorkers = data.unselectedWorkers.filter((worker: any) => {
-              console.log('🔍 Checking worker:', worker.worker?.first_name, worker.worker?.last_name, 'case_status:', worker.case_status);
-              const isNotClosed = worker.case_status !== 'closed';
-              console.log('🔍 Include worker?', isNotClosed);
-              return isNotClosed;
+          // Security: Validate response structure
+          if (!responseData || typeof responseData !== 'object') {
+            throw new Error('Invalid response data structure');
+          }
+
+          // Backend returns { success: true, data: [...] }
+          // Extract the actual workers array from data.data
+          const workersArray = responseData.success && Array.isArray(responseData.data) 
+            ? responseData.data 
+            : [];
+
+          if (workersArray.length > 0) {
+            // Security: Validate each worker object
+            const validatedWorkers = workersArray.filter((worker: any) => {
+              return worker && 
+                     typeof worker === 'object' && 
+                     worker.worker && 
+                     typeof worker.worker === 'object' &&
+                     worker.worker.id &&
+                     worker.worker.first_name &&
+                     worker.worker.last_name;
             });
+
+            console.log('🔍 Total unselected workers:', workersArray.length);
+            console.log('🔍 Validated workers:', validatedWorkers.length);
             
-            console.log('✅ Unselected workers after filtering:', allUnselectedWorkers.length, 'workers (excluding closed cases)');
-            console.log('✅ Filtered workers data:', allUnselectedWorkers);
-            return { data: { unselectedWorkers: allUnselectedWorkers } };
-          } else {
-            console.log('❌ No unselected workers found or invalid response');
-            return { data: { unselectedWorkers: [] } };
+            return { data: { unselectedWorkers: validatedWorkers } };
           }
+
+          return { data: { unselectedWorkers: [] } };
         } catch (error) {
-          console.error('getUnselectedWorkers error:', error);
-          // Return a serializable error object
+          if (process.env.NODE_ENV === 'development') {
+            console.error('getUnselectedWorkers error:', error);
+          }
           return { 
             error: { 
               status: 500, 
-              data: error instanceof Error ? error.message : String(error) 
+              data: error instanceof Error ? error.message : 'Failed to fetch unselected workers'
             } 
           };
         }

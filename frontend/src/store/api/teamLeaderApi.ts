@@ -15,20 +15,79 @@ export const teamLeaderApi = createApi({
     getTeamLeaderAnalytics: builder.query({
       queryFn: async (teamLeaderId: string) => {
         try {
-          console.log('🔍 Fetching team leader analytics for:', teamLeaderId);
-          
           if (!teamLeaderId) {
             return { data: null };
           }
 
-          // Get team leader data
+          // Get team leader data (trust database for overdue status)
           const { data: teamLeaderData, error: leaderError } = await dataClient
             .from('users')
             .select('*')
             .eq('id', teamLeaderId)
             .single();
           
-          if (leaderError) throw leaderError;
+          if (leaderError) {
+            console.error('❌ Team leader not found:', leaderError);
+            // Return empty data for new accounts instead of throwing error
+            return { 
+              data: {
+                teamLeader: null,
+                teamMembers: [],
+                workReadiness: [],
+                todaySubmissions: [],
+                authenticationLogs: [],
+                metrics: {
+                  totalMembers: 0,
+                  todaySubmissionCount: 0,
+                  complianceRate: '0.0',
+                  loggedInCount: 0,
+                  managedTeams: []
+                }
+              }
+            };
+          }
+
+          // Handle team leader with no team setup yet
+          if (!teamLeaderData.team && !teamLeaderData.managed_teams) {
+            console.log('🔍 Team leader has no team setup yet');
+            return { 
+              data: {
+                teamLeader: teamLeaderData,
+                teamMembers: [],
+                workReadiness: [],
+                todaySubmissions: [],
+                authenticationLogs: [],
+                metrics: {
+                  totalMembers: 0,
+                  todaySubmissionCount: 0,
+                  complianceRate: '0.0',
+                  loggedInCount: 0,
+                  managedTeams: []
+                }
+              }
+            };
+          }
+
+          // Handle team leader with empty managed_teams array
+          if (teamLeaderData.managed_teams && teamLeaderData.managed_teams.length === 0) {
+            console.log('🔍 Team leader has empty managed teams');
+            return { 
+              data: {
+                teamLeader: teamLeaderData,
+                teamMembers: [],
+                workReadiness: [],
+                todaySubmissions: [],
+                authenticationLogs: [],
+                metrics: {
+                  totalMembers: 0,
+                  todaySubmissionCount: 0,
+                  complianceRate: '0.0',
+                  loggedInCount: 0,
+                  managedTeams: []
+                }
+              }
+            };
+          }
           
           // Get team members
           const managedTeams = teamLeaderData.managed_teams || [];
@@ -128,94 +187,161 @@ export const teamLeaderApi = createApi({
       providesTags: ['TeamLeaderAnalytics', 'TeamMembers', 'WorkReadiness'],
     }),
 
-    // Get work readiness trend data
+    // Get work readiness trend data - DIRECT FROM DATABASE
     getWorkReadinessTrend: builder.query({
       queryFn: async ({ teamLeaderId, days = 7 }: { teamLeaderId: string; days?: number }) => {
         try {
-          console.log('📊 Fetching work readiness trend for:', teamLeaderId, 'days:', days);
+          console.log('📊 [NEW LOGIC] Fetching work readiness for team_leader_id:', teamLeaderId);
           
           if (!teamLeaderId) {
+            console.log('❌ No team leader ID provided');
             return { data: [] };
           }
 
-          // Get team members
-          const { data: teamLeaderData, error: leaderError } = await dataClient
-            .from('users')
-            .select('managed_teams, team')
-            .eq('id', teamLeaderId)
-            .single();
-          
-          if (leaderError) throw leaderError;
+          // Calculate date range - FIXED: Include today in the range
+          const today = new Date();
+          const endDate = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
+          const startDate = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
+          // Go back (days - 1) to include today as one of the days
+          startDate.setDate(startDate.getDate() - (days - 1));
 
-          const managedTeams = teamLeaderData.managed_teams || [];
-          if (teamLeaderData.team && !managedTeams.includes(teamLeaderData.team)) {
-            managedTeams.push(teamLeaderData.team);
-          }
+          console.log('📅 Date range (FIXED - includes TODAY):', {
+            startDate: startDate.toISOString(),
+            endDate: endDate.toISOString(),
+            startDateFormatted: startDate.toLocaleDateString(),
+            endDateFormatted: endDate.toLocaleDateString(),
+            days: days,
+            includesYesterday: days > 1,
+            includesToday: true
+          });
 
-          const { data: teamMembers, error: membersError } = await dataClient
-            .from('users')
-            .select('id')
-            .eq('role', 'worker')
-            .in('team', managedTeams);
-          
-          if (membersError) throw membersError;
-
-          const teamMemberIds = teamMembers?.map(m => m.id) || [];
-          
-          if (teamMemberIds.length === 0) {
-            return { data: [] };
-          }
-
-          // Calculate date range
-          const endDate = new Date();
-          const startDate = new Date();
-          startDate.setDate(startDate.getDate() - days);
-
-          // Get work readiness data for the period
+          // DIRECT QUERY: Get ALL work_readiness records for this team leader
           const { data: workReadinessData, error: wrError } = await dataClient
             .from('work_readiness')
-            .select('readiness_level, submitted_at')
-            .in('worker_id', teamMemberIds)
+            .select('*')
+            .eq('team_leader_id', teamLeaderId)
             .gte('submitted_at', startDate.toISOString())
             .lte('submitted_at', endDate.toISOString())
             .order('submitted_at', { ascending: true });
 
-          if (wrError) throw wrError;
+          if (wrError) {
+            console.error('❌ Database query error:', wrError);
+            throw wrError;
+          }
 
-          // Group by date and readiness level
-          const trendData: any[] = [];
+          console.log('✅ RAW DATABASE RESULT:', {
+            totalRecords: workReadinessData?.length || 0,
+            records: workReadinessData
+          });
+
+          // Initialize date map with all dates in range
           const dateMap = new Map();
-
+          
+          // Create array of dates from startDate to today (inclusive)
           for (let i = 0; i < days; i++) {
             const date = new Date(startDate);
             date.setDate(date.getDate() + i);
+            // Use local date string to avoid timezone issues
             const dateKey = date.toISOString().split('T')[0];
             dateMap.set(dateKey, {
               date: dateKey,
-              fit: 0,
-              minor: 0,
-              not_fit: 0,
+              fitForWork: 0,
+              minorConcernsFitForWork: 0,
+              notFitForWork: 0,
               total: 0
             });
           }
 
-          // Count submissions by date and level
-          (workReadinessData || []).forEach((wr: any) => {
-            const dateKey = wr.submitted_at.split('T')[0];
-            if (dateMap.has(dateKey)) {
-              const dayData = dateMap.get(dateKey);
-              dayData[wr.readiness_level] = (dayData[wr.readiness_level] || 0) + 1;
-              dayData.total += 1;
-              dateMap.set(dateKey, dayData);
-            }
+          console.log('📅 Initialized date range:', {
+            totalDays: dateMap.size,
+            dates: Array.from(dateMap.keys()),
+            firstDate: Array.from(dateMap.keys())[0],
+            lastDate: Array.from(dateMap.keys())[dateMap.size - 1]
           });
 
-          // Convert to array
+          // If no data, return empty array with initialized dates
+          if (!workReadinessData || workReadinessData.length === 0) {
+            console.log('⚠️ NO DATA FOUND - returning empty trend with initialized dates');
+            const trendData: any[] = [];
+            dateMap.forEach((value) => {
+              trendData.push(value);
+            });
+            return { data: trendData };
+          }
+
+          // Process each record
+          console.log('🔄 Processing records from database...');
+          
+          workReadinessData.forEach((record: any, index: number) => {
+            // Extract date from submitted_at timestamp
+            const submittedDate = new Date(record.submitted_at);
+            const dateKey = submittedDate.toISOString().split('T')[0];
+            const level = record.readiness_level?.toLowerCase()?.trim();
+            
+            console.log(`\n📝 Record ${index + 1}/${workReadinessData.length}:`, {
+              id: record.id,
+              worker_id: record.worker_id,
+              submitted_at: record.submitted_at,
+              dateKey: dateKey,
+              readiness_level: record.readiness_level,
+              normalized_level: level,
+              dateInRange: dateMap.has(dateKey)
+            });
+
+            // Check if date is in our range
+            if (!dateMap.has(dateKey)) {
+              console.log(`  ⚠️ Date ${dateKey} not in range [${Array.from(dateMap.keys())[0]} to ${Array.from(dateMap.keys())[dateMap.size - 1]}]`);
+              return;
+            }
+
+            const dayData = dateMap.get(dateKey);
+            
+            // Map readiness levels to counts
+            if (level === 'fit' || level === 'fit_for_work') {
+              dayData.fitForWork++;
+              console.log(`  ✅ Fit for Work → Count: ${dayData.fitForWork}`);
+            } else if (level === 'minor' || level === 'minor_concerns' || level === 'minor_concerns_fit_for_work') {
+              dayData.minorConcernsFitForWork++;
+              console.log(`  ✅ Minor Concerns → Count: ${dayData.minorConcernsFitForWork}`);
+            } else if (level === 'not_fit' || level === 'not_fit_for_work') {
+              dayData.notFitForWork++;
+              console.log(`  ✅ Not Fit for Work → Count: ${dayData.notFitForWork}`);
+            } else {
+              console.log(`  ❌ Unknown level: "${level}" (raw: "${record.readiness_level}")`);
+            }
+            
+            dayData.total++;
+            dateMap.set(dateKey, dayData);
+          });
+
+          console.log('\n📊 Processing complete!');
+
+          // Convert map to array and sort by date
+          const trendData: any[] = [];
           dateMap.forEach((value) => {
             trendData.push(value);
           });
 
-          console.log('✅ Work readiness trend fetched successfully');
+          // Sort by date to ensure chronological order
+          trendData.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+          // Calculate summary statistics
+          const summary = {
+            totalDays: trendData.length,
+            totalSubmissions: trendData.reduce((sum, d) => sum + d.total, 0),
+            fitTotal: trendData.reduce((sum, d) => sum + d.fitForWork, 0),
+            minorTotal: trendData.reduce((sum, d) => sum + d.minorConcernsFitForWork, 0),
+            notFitTotal: trendData.reduce((sum, d) => sum + d.notFitForWork, 0),
+            dateRange: {
+              start: trendData[0]?.date,
+              end: trendData[trendData.length - 1]?.date
+            }
+          };
+
+          console.log('\n✅ ===== FINAL RESULT =====');
+          console.log('📊 Summary:', summary);
+          console.log('📈 Trend Data:', trendData);
+          console.log('=========================\n');
 
           return { data: trendData };
         } catch (error) {
@@ -230,12 +356,11 @@ export const teamLeaderApi = createApi({
     getWorkReadinessAssignments: builder.query({
       queryFn: async ({ teamLeaderId, date }: { teamLeaderId: string; date?: string }) => {
         try {
-          console.log('📋 Fetching work readiness assignments for:', teamLeaderId);
-          
           if (!teamLeaderId) {
             return { data: [] };
           }
 
+          // Fetch assignments with worker details (trust database for overdue status)
           let query = dataClient
             .from('work_readiness_assignments')
             .select(`
@@ -253,11 +378,11 @@ export const teamLeaderApi = createApi({
 
           if (error) throw error;
 
-          console.log('✅ Work readiness assignments fetched successfully');
-
           return { data: data || [] };
         } catch (error) {
-          console.error('❌ Error fetching work readiness assignments:', error);
+          if (process.env.NODE_ENV === 'development') {
+            console.error('Error fetching assignments:', error);
+          }
           return { error: { status: 500, data: error } };
         }
       },
@@ -340,7 +465,16 @@ export const teamLeaderApi = createApi({
             .eq('id', teamLeaderId)
             .single();
           
-          if (leaderError) throw leaderError;
+          if (leaderError) {
+            console.error('❌ Team leader not found for monthly performance:', leaderError);
+            return { data: { assignments: [], submissions: [], teamMembers: [] } };
+          }
+
+          // Handle team leader with no team setup
+          if (!teamLeaderData.team && (!teamLeaderData.managed_teams || teamLeaderData.managed_teams.length === 0)) {
+            console.log('🔍 Team leader has no team setup for monthly performance');
+            return { data: { assignments: [], submissions: [], teamMembers: [] } };
+          }
 
           const managedTeams = teamLeaderData.managed_teams || [];
           if (teamLeaderData.team && !managedTeams.includes(teamLeaderData.team)) {

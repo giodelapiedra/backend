@@ -176,6 +176,86 @@ class NotificationService {
       return false;
     }
   }
+
+  /**
+   * Create rehabilitation plan assignment notification
+   * @param {string} workerId - Worker ID
+   * @param {string} clinicianId - Clinician ID
+   * @param {string} planId - Rehabilitation Plan ID
+   * @param {string} planName - Plan name
+   * @param {string} caseNumber - Case number
+   * @returns {Promise<object>} Created notification
+   */
+  static async createRehabPlanAssignmentNotification(workerId, clinicianId, planId, planName, caseNumber) {
+    try {
+      const { data, error } = await supabaseAdmin
+        .from('notifications')
+        .insert({
+          recipient_id: workerId,
+          sender_id: clinicianId,
+          type: 'rehab_plan_assigned',
+          title: 'New Rehabilitation Plan Assigned',
+          message: `Your clinician has assigned you a new rehabilitation plan: "${planName}" for case ${caseNumber}. Please review and start your exercises.`,
+          priority: 'high',
+          metadata: {
+            plan_id: planId,
+            plan_name: planName,
+            case_number: caseNumber,
+            task_type: 'rehabilitation_plan'
+          },
+          is_read: false
+        })
+        .select('*')
+        .single();
+
+      if (error) throw error;
+      return data;
+    } catch (error) {
+      console.error('Error creating rehabilitation plan assignment notification:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Create rehabilitation plan completion notification
+   * @param {string} clinicianId - Clinician ID
+   * @param {string} workerId - Worker ID
+   * @param {string} planId - Rehabilitation Plan ID
+   * @param {string} planName - Plan name
+   * @param {string} caseNumber - Case number
+   * @param {string} workerName - Worker name
+   * @returns {Promise<object>} Created notification
+   */
+  static async createRehabPlanCompletionNotification(clinicianId, workerId, planId, planName, caseNumber, workerName) {
+    try {
+      const { data, error } = await supabaseAdmin
+        .from('notifications')
+        .insert({
+          recipient_id: clinicianId,
+          sender_id: workerId,
+          type: 'rehab_plan_completed',
+          title: 'Rehabilitation Plan Completed',
+          message: `${workerName} has completed their rehabilitation plan "${planName}" for case ${caseNumber}. Please review their progress and consider next steps.`,
+          priority: 'medium',
+          metadata: {
+            plan_id: planId,
+            plan_name: planName,
+            case_number: caseNumber,
+            worker_name: workerName,
+            task_type: 'rehabilitation_plan'
+          },
+          is_read: false
+        })
+        .select('*')
+        .single();
+
+      if (error) throw error;
+      return data;
+    } catch (error) {
+      console.error('Error creating rehabilitation plan completion notification:', error);
+      throw error;
+    }
+  }
 }
 
 module.exports = NotificationService;

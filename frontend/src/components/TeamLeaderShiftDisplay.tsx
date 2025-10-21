@@ -15,33 +15,32 @@ import {
   AccessTime,
   CalendarToday,
   Refresh,
+  CheckCircle,
+  Schedule as ScheduleIcon,
+  TrendingUp,
 } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext.supabase';
 import { authClient } from '../lib/supabase';
 
-// Custom SVG Icons for enhanced UI
-const CustomSVGIcons = {
-  ClockIcon: () => (
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2"/>
-      <path d="M12 6v6l4 2" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-    </svg>
-  ),
-  CalendarIcon: () => (
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <rect x="3" y="4" width="18" height="18" rx="2" ry="2" stroke="currentColor" strokeWidth="2"/>
-      <line x1="16" y1="2" x2="16" y2="6" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-      <line x1="8" y1="2" x2="8" y2="6" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-      <line x1="3" y1="10" x2="21" y2="10" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-    </svg>
-  ),
-  RefreshIcon: () => (
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <polyline points="23 4 23 10 17 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-      <polyline points="1 20 1 14 7 14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-      <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-    </svg>
-  ),
+// Utility function to get time until next shift
+const getTimeUntilNextShift = (startTime: string): string => {
+  const now = new Date();
+  const [hours, minutes] = startTime.split(':').map(Number);
+  const shiftStart = new Date();
+  shiftStart.setHours(hours, minutes, 0, 0);
+  
+  if (shiftStart <= now) {
+    shiftStart.setDate(shiftStart.getDate() + 1);
+  }
+  
+  const diffMs = shiftStart.getTime() - now.getTime();
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+  const diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+  
+  if (diffHours > 0) {
+    return `${diffHours}h ${diffMinutes}m`;
+  }
+  return `${diffMinutes}m`;
 };
 
 interface ShiftAssignment {
@@ -59,6 +58,8 @@ const TeamLeaderShiftDisplay: React.FC = () => {
   const [currentShift, setCurrentShift] = useState<ShiftAssignment | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [timeUntilNext, setTimeUntilNext] = useState<string>('');
 
   // API configuration
   const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001/api';
@@ -75,8 +76,14 @@ const TeamLeaderShiftDisplay: React.FC = () => {
   };
 
   // Fetch current shift assignment
-  const fetchCurrentShift = async () => {
+  const fetchCurrentShift = async (isRefresh = false) => {
     if (!user?.id) return;
+
+    if (isRefresh) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
 
     try {
       const token = await getAuthToken();
@@ -97,7 +104,7 @@ const TeamLeaderShiftDisplay: React.FC = () => {
         // Find the current active shift
         const activeShift = data.data?.find((shift: any) => shift.is_active);
         if (activeShift) {
-          setCurrentShift({
+          const shiftData = {
             shift_id: activeShift.id,
             shift_name: activeShift.shift_types.name,
             start_time: activeShift.shift_types.start_time,
@@ -105,101 +112,123 @@ const TeamLeaderShiftDisplay: React.FC = () => {
             color: activeShift.shift_types.color,
             effective_date: activeShift.effective_date,
             end_date: activeShift.end_date
-          });
+          };
+          setCurrentShift(shiftData);
+          
+          // Update time until next shift
+          setTimeUntilNext(getTimeUntilNextShift(shiftData.start_time));
         }
       }
     } catch (error) {
       console.error('Error fetching current shift:', error);
+      setError('Failed to load shift information');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
     }
   };
 
   // Load data on component mount
   useEffect(() => {
-    const loadData = async () => {
-      setLoading(true);
-      try {
-        await fetchCurrentShift();
-      } catch (error) {
-        console.error('Error loading shift data:', error);
-        setError('Failed to load shift information');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    loadData();
+    fetchCurrentShift();
   }, [user?.id]);
 
-  // Refresh data
-  const handleRefresh = async () => {
-    setLoading(true);
-    try {
-      await fetchCurrentShift();
-    } catch (error) {
-      console.error('Error refreshing shift data:', error);
-      setError('Failed to refresh shift information');
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Update time until next shift every minute
+  useEffect(() => {
+    if (!currentShift) return;
 
-  if (loading) {
-    return (
-      <Card sx={{ mb: 3 }}>
-        <CardContent>
-          <Box display="flex" alignItems="center" justifyContent="center" py={2}>
-            <CircularProgress size={24} sx={{ mr: 2 }} />
-            <Typography variant="body2" color="text.secondary">
-              Loading shift information...
-            </Typography>
-          </Box>
-        </CardContent>
-      </Card>
-    );
-  }
+    const interval = setInterval(() => {
+      setTimeUntilNext(getTimeUntilNextShift(currentShift.start_time));
+    }, 60000); // Update every minute
+
+    return () => clearInterval(interval);
+  }, [currentShift]);
+
 
   return (
     <Card 
+      elevation={0}
       sx={{ 
         mb: 3,
-        backgroundColor: 'white',
-        border: '1px solid #e5e7eb',
-        boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)',
-        transition: 'all 0.2s ease',
+        backgroundColor: '#FFFFFF',
+        border: '1px solid #E5E7EB',
+        borderRadius: 2,
+        boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
+        transition: 'all 0.2s ease-in-out',
         '&:hover': {
-          boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)',
+          boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
+          borderColor: '#D1D5DB'
         }
       }}
     >
-      <CardContent>
-        <Box display="flex" alignItems="center" justifyContent="space-between" mb={2}>
+      <CardContent sx={{ p: 3 }}>
+        {/* Header */}
+        <Box display="flex" alignItems="center" justifyContent="space-between" mb={3}>
           <Box display="flex" alignItems="center">
-            <CustomSVGIcons.ClockIcon />
-            <Typography variant="h6" component="h3" sx={{ ml: 1, fontWeight: '600', color: '#111827' }}>
-              Current Shift Assignment
-            </Typography>
+            <Box sx={{
+              p: 1,
+              borderRadius: 1,
+              backgroundColor: '#F3F4F6',
+              mr: 2
+            }}>
+              <ScheduleIcon sx={{ color: '#6B7280', fontSize: 20 }} />
+            </Box>
+            <Box>
+              <Typography variant="h6" fontWeight={600} color="#111827" sx={{ mb: 0.5 }}>
+                Current Shift Assignment
+              </Typography>
+              <Typography variant="body2" color="#6B7280">
+                Your active work schedule
+              </Typography>
+            </Box>
           </Box>
-          <Tooltip title="Refresh shift information">
+          <Tooltip title="Refresh shift data">
             <IconButton 
-              size="small" 
-              onClick={handleRefresh} 
-              disabled={loading}
-              sx={{
-                transition: 'all 0.2s ease',
-                '&:hover': {
-                  backgroundColor: '#f3f4f6',
-                }
+              onClick={() => fetchCurrentShift(true)}
+              disabled={refreshing}
+              size="small"
+              sx={{ 
+                color: '#6B7280',
+                backgroundColor: '#F9FAFB',
+                border: '1px solid #E5E7EB',
+                '&:hover': { 
+                  backgroundColor: '#F3F4F6',
+                  borderColor: '#D1D5DB'
+                },
+                transition: 'all 0.2s ease'
               }}
             >
-              <CustomSVGIcons.RefreshIcon />
+              {refreshing ? <CircularProgress size={16} sx={{ color: '#6B7280' }} /> : <Refresh sx={{ fontSize: 16 }} />}
             </IconButton>
           </Tooltip>
         </Box>
 
+        {/* Error State */}
         {error && (
-          <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
+          <Alert 
+            severity="error" 
+            sx={{ 
+              mb: 3,
+              borderRadius: 1,
+              backgroundColor: '#FEF2F2',
+              border: '1px solid #FECACA',
+              '& .MuiAlert-icon': {
+                color: '#DC2626'
+              }
+            }}
+          >
             {error}
           </Alert>
+        )}
+
+        {/* Loading State */}
+        {loading && (
+          <Box display="flex" flexDirection="column" alignItems="center" py={4}>
+            <CircularProgress size={32} sx={{ color: '#6B7280', mb: 2 }} />
+            <Typography variant="body2" color="#6B7280">
+              Loading shift information...
+            </Typography>
+          </Box>
         )}
 
         {currentShift ? (
@@ -207,72 +236,115 @@ const TeamLeaderShiftDisplay: React.FC = () => {
             {/* Current Shift Display */}
             <Box 
               sx={{ 
-                p: 2, 
+                p: 3, 
                 borderRadius: 2, 
-                backgroundColor: `${currentShift.color}15`,
-                border: `2px solid ${currentShift.color}`,
-                mb: 2
+                backgroundColor: '#F9FAFB',
+                border: '1px solid #E5E7EB',
+                mb: 3,
+                position: 'relative'
               }}
             >
-              <Box display="flex" alignItems="center" mb={1}>
-                <Box
-                  width={16}
-                  height={16}
-                  borderRadius="50%"
-                  bgcolor={currentShift.color}
-                  mr={2}
+              {/* Shift Header */}
+              <Box display="flex" alignItems="center" justifyContent="space-between" mb={2}>
+                <Box display="flex" alignItems="center">
+                  <Box
+                    sx={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: '50%',
+                      bgcolor: currentShift.color,
+                      mr: 2
+                    }}
+                  />
+                  <Typography variant="h5" fontWeight={600} color="#111827">
+                    {currentShift.shift_name}
+                  </Typography>
+                </Box>
+                <Chip 
+                  icon={<CheckCircle sx={{ fontSize: 16 }} />}
+                  label="Active" 
+                  size="small" 
+                  sx={{ 
+                    backgroundColor: '#D1FAE5',
+                    color: '#065F46',
+                    border: '1px solid #A7F3D0',
+                    fontWeight: 500,
+                    '& .MuiChip-icon': {
+                      color: '#065F46'
+                    }
+                  }}
                 />
-                <Typography variant="h5" fontWeight="bold" color={currentShift.color}>
-                  {currentShift.shift_name}
-                </Typography>
               </Box>
               
-              <Box display="flex" alignItems="center" mb={1}>
-                <CustomSVGIcons.ClockIcon />
-                <Typography variant="body1" fontWeight="medium" sx={{ ml: 1 }}>
+              {/* Shift Times */}
+              <Box display="flex" alignItems="center" mb={2}>
+                <AccessTime sx={{ color: '#6B7280', mr: 1.5, fontSize: 18 }} />
+                <Typography variant="h6" fontWeight={500} color="#374151">
                   {currentShift.start_time} - {currentShift.end_time}
                 </Typography>
               </Box>
 
-              <Box display="flex" alignItems="center" mb={1}>
-                <CustomSVGIcons.CalendarIcon />
-                <Typography variant="body2" color="text.secondary" sx={{ ml: 1 }}>
+              {/* Effective Dates */}
+              <Box display="flex" alignItems="center" mb={2}>
+                <CalendarToday sx={{ color: '#6B7280', mr: 1.5, fontSize: 18 }} />
+                <Typography variant="body1" color="#6B7280">
                   Effective: {new Date(currentShift.effective_date).toLocaleDateString()}
                   {currentShift.end_date && ` - ${new Date(currentShift.end_date).toLocaleDateString()}`}
                 </Typography>
               </Box>
 
-              <Chip 
-                label="Active" 
-                size="small" 
-                color="success" 
-                variant="outlined"
-                sx={{ mt: 1 }}
-              />
+              {/* Time Until Next Shift */}
+              {timeUntilNext && (
+                <Box sx={{ 
+                  p: 2, 
+                  borderRadius: 1, 
+                  backgroundColor: '#FFFBEB',
+                  border: '1px solid #FDE68A'
+                }}>
+                  <Box display="flex" alignItems="center">
+                    <TrendingUp sx={{ color: '#92400E', mr: 1, fontSize: 16 }} />
+                    <Typography variant="body2" fontWeight={500} color="#92400E">
+                      Next shift starts in: {timeUntilNext}
+                    </Typography>
+                  </Box>
+                </Box>
+              )}
             </Box>
 
-            {/* Simple Status Message */}
-            <Box sx={{ mt: 2 }}>
-              <Typography variant="body2" color="text.secondary" textAlign="center">
+            {/* Status Message */}
+            <Box sx={{ 
+              p: 2, 
+              borderRadius: 1, 
+              backgroundColor: '#F3F4F6',
+              border: '1px solid #E5E7EB'
+            }}>
+              <Typography variant="body2" color="#6B7280">
                 {currentShift.end_date ? 
                   `Assignment ends ${new Date(currentShift.end_date).toLocaleDateString()}` :
-                  'Ongoing assignment'
+                  'Ongoing assignment - No end date set'
                 }
               </Typography>
             </Box>
           </Box>
-        ) : (
-          <Box textAlign="center" py={4}>
-            <CustomSVGIcons.ClockIcon />
-            <Typography variant="h6" color="text.secondary" gutterBottom sx={{ mt: 2, fontWeight: 'bold' }}>
+        ) : !loading && (
+          <Box textAlign="center" py={6}>
+            <Box sx={{
+              p: 2,
+              borderRadius: '50%',
+              backgroundColor: '#F3F4F6',
+              display: 'inline-flex',
+              mb: 3
+            }}>
+              <ScheduleIcon sx={{ fontSize: 32, color: '#9CA3AF' }} />
+            </Box>
+            <Typography variant="h6" fontWeight={600} color="#374151" gutterBottom>
               No Shift Assigned
             </Typography>
-            <Typography variant="body2" color="text.secondary">
+            <Typography variant="body2" color="#6B7280" sx={{ maxWidth: 300, mx: 'auto' }}>
               You don't have an active shift assignment. Contact your site supervisor for shift scheduling.
             </Typography>
           </Box>
         )}
-
       </CardContent>
     </Card>
   );

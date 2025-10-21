@@ -14,12 +14,13 @@ import { Box, Typography, Button, Card, CardContent, Grid, Fade, Tabs, Tab } fro
 import { 
   People, 
   Assignment, 
-  CheckCircle
+  CheckCircle,
+  Warning as WarningIcon
 } from '@mui/icons-material';
+import IncidentManagement from '../../components/IncidentManagement';
 import StatCard from '../../components/StatCard';
 // TrendChart moved inline to TeamAnalytics.tsx
 import RecentActivityItem from '../../components/RecentActivityItem';
-import MonthlyAssignmentTracking from '../../components/MonthlyAssignmentTracking';
 import TeamLeaderShiftDisplay from '../../components/TeamLeaderShiftDisplay';
 import {
   Chart as ChartJS,
@@ -1740,26 +1741,28 @@ const TeamLeaderDashboard: React.FC = () => {
             },
           }}
         >
-          <Tab iconPosition="start" icon={<Assignment sx={{ fontSize: 18 }} />} label="Monthly Tracking" />
           <Tab iconPosition="start" icon={<People sx={{ fontSize: 18 }} />} label="Team Members" />
+          <Tab iconPosition="start" icon={<WarningIcon sx={{ fontSize: 18 }} />} label="Incident Management" />
         </Tabs>
       </Box>
 
-      {/* Tab 0: Monthly Assignment Performance Tracking (MAIN/DEFAULT) */}
-      {mainTab === 0 && user?.id && user?.team && (
-        <Box sx={{ mb: 4, p: { xs: 1, md: 0 } }}>
-          <MonthlyAssignmentTracking 
-            teamLeaderId={user.id} 
-            team={user.team} 
-          />
-        </Box>
-      )}
-
-      {/* Tab 1: Team Members */}
-      {mainTab === 1 && (
+      {/* Tab 0: Team Members */}
+      {mainTab === 0 && (
         <React.Fragment>
           {/* Team Members content moved here from below */}
         </React.Fragment>
+      )}
+
+      {/* Tab 1: Incident Management */}
+      {mainTab === 1 && (
+        <Fade in timeout={500}>
+          <Box>
+            <IncidentManagement 
+              teamLeaderId={user?.id || ''} 
+              team={user?.team || ''} 
+            />
+          </Box>
+        </Fade>
       )}
 
 

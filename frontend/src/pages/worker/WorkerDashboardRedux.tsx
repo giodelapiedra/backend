@@ -5,10 +5,8 @@ import { useNavigate } from 'react-router-dom';
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState } from '../../store';
 import {
-  setShowSimpleCheckIn,
   setShowSimpleWorkReadiness,
   clearSuccessMessage,
-  closeCheckIn,
   closeWorkReadiness,
   setShowCycleWelcome,
 } from '../../store/slices/workerSlice';
@@ -19,10 +17,8 @@ import LayoutWithSidebar from '../../components/LayoutWithSidebar';
 // Worker Components
 import WelcomeHeader from '../../components/worker/WelcomeHeader';
 import GoalTrackingCard from '../../components/GoalTrackingCard';
-import SimpleCheckIn from '../../components/SimpleCheckIn';
 import SimpleWorkReadiness from '../../components/SimpleWorkReadiness';
 import {
-  DailyCheckInCard,
   RecoveryExercisesCard,
   WorkReadinessCard,
   ReportIncidentCard,
@@ -45,18 +41,15 @@ const WorkerDashboardRedux: React.FC = memo(() => {
   const {
     loading,
     successMessage,
-    showSimpleCheckIn,
     showSimpleWorkReadiness,
     showCycleWelcome,
-    checkInLoading,
-    checkInSuccess,
-    checkInError,
     currentAssignment,
     todaySubmission,
     hasSubmittedToday,
     hasCompletedExercisesToday,
     exerciseCompletionTime,
     cycleWelcomeMessage,
+    clinicianAssignment,
   } = useSelector((state: RootState) => state.worker);
 
   // Custom hooks
@@ -78,10 +71,6 @@ const WorkerDashboardRedux: React.FC = memo(() => {
   }, [user?.role, handleLoginCycle]);
 
   // Callback handlers
-  const handleCheckInClick = useCallback(() => {
-    dispatch(setShowSimpleCheckIn(true));
-  }, [dispatch]);
-
   const handleRehabPlanClick = useCallback(() => {
     navigate('/worker/rehabilitation-plan');
   }, [navigate]);
@@ -90,19 +79,9 @@ const WorkerDashboardRedux: React.FC = memo(() => {
     dispatch(setShowSimpleWorkReadiness(true));
   }, [dispatch]);
 
-  const handleCloseCheckIn = useCallback(() => {
-    dispatch(closeCheckIn());
-  }, [dispatch]);
-
   const handleCloseWorkReadiness = useCallback(() => {
     dispatch(closeWorkReadiness());
   }, [dispatch]);
-
-  const handleSimpleCheckInSubmit = useCallback(async (data: any) => {
-    // Check-in logic handled by SimpleCheckIn component
-    console.log('Check-in submitted:', data);
-    await fetchWorkerData();
-  }, [fetchWorkerData]);
 
   if (loading) {
     return (
@@ -156,16 +135,13 @@ const WorkerDashboardRedux: React.FC = memo(() => {
           mx: 'auto',
           px: { xs: 2, sm: 0 }
         }}>
-          {/* Daily Check-In Card - Only for Package 2+ */}
-          {user?.package && user.package !== 'package1' && (
-            <DailyCheckInCard onClick={handleCheckInClick} />
-          )}
-
           {/* Recovery Exercises Card - Only for Package 2+ */}
           {user?.package && user.package !== 'package1' && (
             <RecoveryExercisesCard 
               hasCompletedExercisesToday={hasCompletedExercisesToday}
               exerciseCompletionTime={exerciseCompletionTime}
+              hasAssignedClinician={clinicianAssignment.hasAssignedClinician}
+              clinicianName={clinicianAssignment.clinicianName}
               onClick={handleRehabPlanClick}
             />
           )}
@@ -181,17 +157,6 @@ const WorkerDashboardRedux: React.FC = memo(() => {
           {/* Report Incident Card */}
           <ReportIncidentCard onClick={() => {/* Navigate to incident reporting */}} />
         </Grid>
-
-        {/* SimpleCheckIn Modal */}
-        {showSimpleCheckIn && (
-          <SimpleCheckIn
-            onSubmit={handleSimpleCheckInSubmit}
-            onClose={handleCloseCheckIn}
-            loading={checkInLoading}
-            success={checkInSuccess}
-            error={checkInError}
-          />
-        )}
 
         {/* SimpleWorkReadiness Modal */}
         {showSimpleWorkReadiness && (
@@ -265,4 +230,9 @@ const WorkerDashboardRedux: React.FC = memo(() => {
 WorkerDashboardRedux.displayName = 'WorkerDashboardRedux';
 
 export default WorkerDashboardRedux;
+
+
+
+
+
 

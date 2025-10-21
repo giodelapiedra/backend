@@ -30,6 +30,7 @@ import { format, addMonths, subMonths, startOfMonth, endOfMonth, eachDayOfInterv
 import { useAuth } from '../../contexts/AuthContext.supabase';
 import { dataClient } from '../../lib/supabase';
 import LayoutWithSidebar from '../../components/LayoutWithSidebar';
+import backendApi from '../../utils/backendApi';
 
 interface Appointment {
   _id: string;
@@ -426,6 +427,9 @@ const AppointmentCalendar: React.FC = () => {
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [dialogOpen, setDialogOpen] = useState<boolean>(false);
   
+  // OPTIMIZATION: Add cache for API responses
+  const [appointmentsCache, setAppointmentsCache] = useState<Map<string, Appointment[]>>(new Map());
+  
   const { user } = useAuth();
   
   // Function to get appointments for a specific date
@@ -461,44 +465,128 @@ const AppointmentCalendar: React.FC = () => {
     });
   }, []);
   
-  // Fetch appointments
+  // OPTIMIZED: Fetch appointments with caching and abort controller
   useEffect(() => {
+    if (!user) return;
+    
+    // Create abort controller for cleanup
+    const abortController = new AbortController();
+    let timeoutId: NodeJS.Timeout;
+    
     const fetchAppointments = async () => {
-      if (!user) return;
-      
       try {
-        setLoading(true);
-        setError(null); // Clear previous errors
         const startDate = startOfMonth(currentMonth);
         const endDate = endOfMonth(currentMonth);
         
-        // Format dates for API query
-        const formattedStartDate = format(startDate, 'yyyy-MM-dd');
-        const formattedEndDate = format(endDate, 'yyyy-MM-dd');
+        // Create cache key
+        const cacheKey = `${format(currentMonth, 'yyyy-MM')}-${user.id}`;
         
-        // Appointments table doesn't exist yet, so we'll use mock data
-        const appointmentsData: any[] = [];
+        // OPTIMIZATION: Check cache first
+        if (appointmentsCache.has(cacheKey)) {
+          console.log('✅ Using cached appointments for', cacheKey);
+          setAppointments(appointmentsCache.get(cacheKey)!);
+          setLoading(false);
+          return;
+        }
+        
+        setLoading(true);
+        setError(null);
+        
+        console.log('🔄 Fetching appointments from API:', format(currentMonth, 'MMMM yyyy'));
+        
+        // Format dates for API query
+        const formattedStartDate = startDate.toISOString();
+        const formattedEndDate = endDate.toISOString();
+        
+        // Set timeout for slow requests
+        timeoutId = setTimeout(() => {
+          if (!abortController.signal.aborted) {
+            console.warn('⚠️ Request taking longer than expected...');
+          }
+        }, 3000);
+        
+        // Fetch with abort signal
+        const response = await backendApi.get(
+          `/appointments/calendar?start=${formattedStartDate}&end=${formattedEndDate}`,
+          { signal: abortController.signal }
+        );
+        
+        clearTimeout(timeoutId);
+        
+        const calendarEvents = Array.isArray(response.data) ? response.data : [];
+        console.log('✅ Received', calendarEvents.length, 'appointments');
+        
+        // Transform calendar events to appointment format
+        const appointmentsData = calendarEvents.map((event: any) => ({
+          _id: event.id,
+          case: {
+            _id: event.extendedProps?.caseId || '',
+            caseNumber: event.extendedProps?.caseNumber || '',
+            worker: {
+              _id: '',
+              firstName: event.extendedProps?.worker?.split(' ')[0] || '',
+              lastName: event.extendedProps?.worker?.split(' ')[1] || '',
+              email: ''
+            }
+          },
+          worker: {
+            _id: '',
+            firstName: event.extendedProps?.worker?.split(' ')[0] || '',
+            lastName: event.extendedProps?.worker?.split(' ')[1] || '',
+            email: ''
+          },
+          clinician: {
+            _id: '',
+            firstName: event.extendedProps?.clinician?.split(' ')[0] || '',
+            lastName: event.extendedProps?.clinician?.split(' ')[1] || '',
+            email: ''
+          },
+          appointmentType: event.extendedProps?.appointmentType || 'consultation',
+          scheduledDate: event.start,
+          duration: event.extendedProps?.duration || 60,
+          status: event.extendedProps?.status || 'scheduled',
+          notes: event.extendedProps?.notes || '',
+          location: event.extendedProps?.location || 'clinic',
+          telehealthInfo: event.extendedProps?.telehealthInfo
+        }));
+        
+        // OPTIMIZATION: Store in cache
+        setAppointmentsCache(prev => new Map(prev).set(cacheKey, appointmentsData));
         setAppointments(appointmentsData);
+        
       } catch (err: any) {
-        setError(err.message || 'Failed to fetch appointments');
+        // Don't show error if request was aborted (component unmounted)
+        if (err.name === 'CanceledError' || err.name === 'AbortError') {
+          console.log('Request aborted');
+          return;
+        }
+        
+        setError('Failed to fetch appointments. Please try again.');
         console.error('Error fetching appointments:', err);
       } finally {
         setLoading(false);
+        clearTimeout(timeoutId);
       }
     };
     
     fetchAppointments();
-  }, [currentMonth, user]); // Include user dependency
+    
+    // Cleanup function
+    return () => {
+      abortController.abort();
+      clearTimeout(timeoutId);
+    };
+  }, [currentMonth, user?.id]); // FIXED: Only depend on user.id, not entire user object
   
-  // Handle previous month
+  // OPTIMIZED: Handle previous month with functional update
   const handlePreviousMonth = useCallback(() => {
-    setCurrentMonth(subMonths(currentMonth, 1));
-  }, [currentMonth]);
+    setCurrentMonth(prev => subMonths(prev, 1));
+  }, []); // No dependencies - uses functional update
   
-  // Handle next month
+  // OPTIMIZED: Handle next month with functional update
   const handleNextMonth = useCallback(() => {
-    setCurrentMonth(addMonths(currentMonth, 1));
-  }, [currentMonth]);
+    setCurrentMonth(prev => addMonths(prev, 1));
+  }, []); // No dependencies - uses functional update
   
   // Handle date click
   const handleDateClick = useCallback((date: Date) => {

@@ -7,10 +7,10 @@ export const casesApi = createApi({
     baseUrl: '', // No fallback URL - use Supabase only
   }),
   tagTypes: ['Case', 'Incident', 'User'],
-  // Optimize for real-time updates
+  // Minimal auto refresh - only on reconnect, no aggressive refresh
   refetchOnFocus: false,
-  refetchOnReconnect: true,
-  refetchOnMountOrArgChange: 30, // Refetch if data is older than 30 seconds
+  refetchOnReconnect: true, // Reconnect only - essential for network issues
+  refetchOnMountOrArgChange: false, // No aggressive refresh
   endpoints: (builder) => ({
     getClinicianCases: builder.query({
       queryFn: async (clinicianId: string) => {
@@ -18,21 +18,47 @@ export const casesApi = createApi({
           const { data, error } = await dataClient
             .from('cases')
             .select(`
-              *,
-              worker:users!cases_worker_id_fkey(id, first_name, last_name, email),
-              case_manager:users!cases_case_manager_id_fkey(id, first_name, last_name, email),
-              clinician:users!cases_clinician_id_fkey(id, first_name, last_name, email),
-              incident:incidents!cases_incident_id_fkey(id, incident_type, description, severity)
+              id,
+              case_number,
+              status,
+              priority,
+              worker_id,
+              employer_id,
+              case_manager_id,
+              clinician_id,
+              incident_id,
+              created_at,
+              updated_at,
+              worker:worker_id(id, first_name, last_name, email),
+              case_manager:case_manager_id(id, first_name, last_name, email),
+              clinician:clinician_id(id, first_name, last_name, email),
+              incident:incident_id(id, incident_type, severity, description)
             `)
             .eq('clinician_id', clinicianId)
             .order('created_at', { ascending: false });
 
           if (error) throw error;
 
+          // Debug: Log the actual data structure
+          console.log('🔍 Supabase query result:', data);
+          if (data && data.length > 0) {
+            console.log('🔍 First case structure:', data[0]);
+            console.log('🔍 Worker type:', typeof data[0].worker, Array.isArray(data[0].worker));
+          }
+
+          // Transform arrays to single objects if needed
+          const transformedData = (data || []).map((caseItem: any) => ({
+            ...caseItem,
+            worker: Array.isArray(caseItem.worker) ? caseItem.worker[0] || null : caseItem.worker,
+            case_manager: Array.isArray(caseItem.case_manager) ? caseItem.case_manager[0] || null : caseItem.case_manager,
+            clinician: Array.isArray(caseItem.clinician) ? caseItem.clinician[0] || null : caseItem.clinician,
+            incident: Array.isArray(caseItem.incident) ? caseItem.incident[0] || null : caseItem.incident,
+          }));
+
           return { 
             data: { 
-              cases: data || [], 
-              total: data?.length || 0
+              cases: transformedData, 
+              total: transformedData.length
             } 
           };
         } catch (error) {
@@ -54,10 +80,21 @@ export const casesApi = createApi({
           let query = dataClient
             .from('cases')
             .select(`
-              *,
-              worker:users!worker_id(id, first_name, last_name, email),
-              case_manager:users!case_manager_id(id, first_name, last_name, email),
-              incident:incidents!incident_id(id, severity, incident_type, description, reported_by)
+              id,
+              case_number,
+              status,
+              priority,
+              worker_id,
+              employer_id,
+              case_manager_id,
+              clinician_id,
+              incident_id,
+              created_at,
+              updated_at,
+              worker:worker_id(id, first_name, last_name, email),
+              case_manager:case_manager_id(id, first_name, last_name, email),
+              clinician:clinician_id(id, first_name, last_name, email),
+              incident:incident_id(id, incident_type, severity, description)
             `, { count: 'exact' });
           
           // Apply case manager filter (unless includeAll is true)
@@ -81,10 +118,26 @@ export const casesApi = createApi({
             .range(offset, offset + limit - 1);
           
           if (error) throw error;
+
+          // Debug: Log the actual data structure
+          console.log('🔍 getCases query result:', data);
+          if (data && data.length > 0) {
+            console.log('🔍 First case structure:', data[0]);
+            console.log('🔍 Worker type:', typeof data[0].worker, Array.isArray(data[0].worker));
+          }
+
+          // Transform arrays to single objects if needed
+          const transformedData = (data || []).map((caseItem: any) => ({
+            ...caseItem,
+            worker: Array.isArray(caseItem.worker) ? caseItem.worker[0] || null : caseItem.worker,
+            case_manager: Array.isArray(caseItem.case_manager) ? caseItem.case_manager[0] || null : caseItem.case_manager,
+            clinician: Array.isArray(caseItem.clinician) ? caseItem.clinician[0] || null : caseItem.clinician,
+            incident: Array.isArray(caseItem.incident) ? caseItem.incident[0] || null : caseItem.incident,
+          }));
           
           return { 
             data: { 
-              cases: data || [], 
+              cases: transformedData, 
               pagination: {
                 page,
                 limit,
@@ -107,16 +160,37 @@ export const casesApi = createApi({
           const { data, error } = await dataClient
             .from('cases')
             .select(`
-              *,
-              worker:users!worker_id(id, first_name, last_name, email),
-              case_manager:users!case_manager_id(id, first_name, last_name, email),
-              incident:incidents!incident_id(id, severity, incident_type, description, reported_by)
+              id,
+              case_number,
+              status,
+              priority,
+              worker_id,
+              employer_id,
+              case_manager_id,
+              clinician_id,
+              incident_id,
+              created_at,
+              updated_at,
+              worker:worker_id(id, first_name, last_name, email),
+              case_manager:case_manager_id(id, first_name, last_name, email),
+              clinician:clinician_id(id, first_name, last_name, email),
+              incident:incident_id(id, incident_type, severity, description)
             `)
             .eq('id', id)
             .single();
           
           if (error) throw error;
-          return { data: { case: data } };
+
+          // Transform arrays to single objects if needed
+          const transformedData = {
+            ...data,
+            worker: Array.isArray(data.worker) ? data.worker[0] || null : data.worker,
+            case_manager: Array.isArray(data.case_manager) ? data.case_manager[0] || null : data.case_manager,
+            clinician: Array.isArray(data.clinician) ? data.clinician[0] || null : data.clinician,
+            incident: Array.isArray(data.incident) ? data.incident[0] || null : data.incident,
+          };
+
+          return { data: { case: transformedData } };
         } catch (error) {
           return { error: { status: 500, data: error } };
         }
@@ -132,15 +206,36 @@ export const casesApi = createApi({
             .from('cases')
             .insert(caseData)
             .select(`
-              *,
-              worker:users!worker_id(id, first_name, last_name, email),
-              case_manager:users!case_manager_id(id, first_name, last_name, email),
-              incident:incidents!incident_id(id, severity, incident_type, description, reported_by)
+              id,
+              case_number,
+              status,
+              priority,
+              worker_id,
+              employer_id,
+              case_manager_id,
+              clinician_id,
+              incident_id,
+              created_at,
+              updated_at,
+              worker:worker_id(id, first_name, last_name, email),
+              case_manager:case_manager_id(id, first_name, last_name, email),
+              clinician:clinician_id(id, first_name, last_name, email),
+              incident:incident_id(id, incident_type, severity, description)
             `)
             .single();
           
           if (error) throw error;
-          return { data: { case: data } };
+
+          // Transform arrays to single objects if needed
+          const transformedData = {
+            ...data,
+            worker: Array.isArray(data.worker) ? data.worker[0] || null : data.worker,
+            case_manager: Array.isArray(data.case_manager) ? data.case_manager[0] || null : data.case_manager,
+            clinician: Array.isArray(data.clinician) ? data.clinician[0] || null : data.clinician,
+            incident: Array.isArray(data.incident) ? data.incident[0] || null : data.incident,
+          };
+
+          return { data: { case: transformedData } };
         } catch (error) {
           return { error: { status: 500, data: error } };
         }
@@ -166,15 +261,36 @@ export const casesApi = createApi({
             .update(updates)
             .eq('id', id)
             .select(`
-              *,
-              worker:users!worker_id(id, first_name, last_name, email),
-              case_manager:users!case_manager_id(id, first_name, last_name, email),
-              incident:incidents!incident_id(id, severity, incident_type, description, reported_by)
+              id,
+              case_number,
+              status,
+              priority,
+              worker_id,
+              employer_id,
+              case_manager_id,
+              clinician_id,
+              incident_id,
+              created_at,
+              updated_at,
+              worker:worker_id(id, first_name, last_name, email),
+              case_manager:case_manager_id(id, first_name, last_name, email),
+              clinician:clinician_id(id, first_name, last_name, email),
+              incident:incident_id(id, incident_type, severity, description)
             `)
             .single();
           
           if (error) throw error;
-          return { data: { case: data } };
+
+          // Transform arrays to single objects if needed
+          const transformedData = {
+            ...data,
+            worker: Array.isArray(data.worker) ? data.worker[0] || null : data.worker,
+            case_manager: Array.isArray(data.case_manager) ? data.case_manager[0] || null : data.case_manager,
+            clinician: Array.isArray(data.clinician) ? data.clinician[0] || null : data.clinician,
+            incident: Array.isArray(data.incident) ? data.incident[0] || null : data.incident,
+          };
+
+          return { data: { case: transformedData } };
         } catch (error) {
           return { error: { status: 500, data: error } };
         }

@@ -26,24 +26,25 @@ import ClinicianAnalytics from './pages/clinician/ClinicianAnalytics';
 import EmployerDashboard from './pages/employer/EmployerDashboard';
 import Analytics from './pages/employer/Analytics';
 import CaseManagerDashboardRedux from './pages/caseManager/CaseManagerDashboardRedux';
+import CaseManagerAnalytics from './pages/caseManager/CaseManagerAnalytics';
 import SiteSupervisorDashboardRedux from './pages/siteSupervisor/SiteSupervisorDashboardRedux';
-import TeamLeaderMonitoring from './pages/siteSupervisor/TeamLeaderMonitoring';
 import ShiftManagement from './pages/siteSupervisor/ShiftManagement';
 import MultiTeamAnalytics from './components/MultiTeamAnalytics';
 import GPInsurerDashboard from './pages/gpInsurer/GPInsurerDashboard';
-import TeamLeaderDashboard from './pages/teamLeader/TeamLeaderDashboard';
+import TeamLeaderDashboardRedux from './pages/teamLeader/TeamLeaderDashboardRedux';
 import TeamAnalytics from './pages/teamLeader/TeamAnalytics';
 import TeamMemberManagement from './pages/teamLeader/TeamMemberManagement';
-import WorkReadinessDashboard from './pages/teamLeader/WorkReadinessDashboard';
 import AssessmentLogs from './pages/teamLeader/AssessmentLogs';
 import WorkReadinessAssignments from './pages/teamLeader/WorkReadinessAssignments';
+import WorkReadinessKPIPage from './pages/WorkReadinessKPIPage';
+import IncidentManagementPage from './pages/teamLeader/IncidentManagement';
 import Cases from './pages/Cases';
 import CaseDetails from './pages/CaseDetails';
-import CheckInsPage from './pages/CheckInsPage';
 import Appointments from './pages/Appointments';
 import Profile from './pages/Profile';
 import Notifications from './pages/Notifications';
 import NotFound from './pages/NotFound';
+import BackendConnectionTest from './components/BackendConnectionTest';
 import './styles/dashboard.css';
 
 // Lazy-loaded components
@@ -319,15 +320,15 @@ function App() {
               </ProtectedRoute>
             } />
             
-            <Route path="/site-supervisor" element={
-              <ProtectedRoute allowedRoles={['site_supervisor']}>
-                <SiteSupervisorDashboardRedux />
+            <Route path="/case-manager/analytics" element={
+              <ProtectedRoute allowedRoles={['case_manager']}>
+                <CaseManagerAnalytics />
               </ProtectedRoute>
             } />
             
-            <Route path="/site-supervisor/team-monitoring" element={
+            <Route path="/site-supervisor" element={
               <ProtectedRoute allowedRoles={['site_supervisor']}>
-                <TeamLeaderMonitoring />
+                <SiteSupervisorDashboardRedux />
               </ProtectedRoute>
             } />
             
@@ -351,7 +352,7 @@ function App() {
             
             <Route path="/team-leader" element={
               <ProtectedRoute allowedRoles={['team_leader']}>
-                <TeamLeaderDashboard />
+                <TeamLeaderDashboardRedux />
               </ProtectedRoute>
             } />
             
@@ -367,12 +368,6 @@ function App() {
               </ProtectedRoute>
             } />
             
-            <Route path="/team-leader/work-readiness" element={
-              <ProtectedRoute allowedRoles={['team_leader']}>
-                <WorkReadinessDashboard />
-              </ProtectedRoute>
-            } />
-            
             <Route path="/team-leader/assignments" element={
               <ProtectedRoute allowedRoles={['team_leader']}>
                 <WorkReadinessAssignments />
@@ -382,6 +377,18 @@ function App() {
             <Route path="/team-leader/assessment-logs" element={
               <ProtectedRoute allowedRoles={['team_leader']}>
                 <AssessmentLogs />
+              </ProtectedRoute>
+            } />
+            
+            <Route path="/team-leader/work-readiness-kpi" element={
+              <ProtectedRoute allowedRoles={['team_leader']}>
+                <WorkReadinessKPIPage />
+              </ProtectedRoute>
+            } />
+            
+            <Route path="/team-leader/incidents" element={
+              <ProtectedRoute allowedRoles={['team_leader']}>
+                <IncidentManagementPage />
               </ProtectedRoute>
             } />
             
@@ -395,12 +402,6 @@ function App() {
             <Route path="/cases/:id" element={
               <ProtectedRoute>
                 <CaseDetails />
-              </ProtectedRoute>
-            } />
-            
-            <Route path="/check-ins" element={
-              <ProtectedRoute allowedRoles={['clinician', 'case_manager', 'admin']}>
-                <CheckInsPage />
               </ProtectedRoute>
             } />
             
@@ -427,6 +428,8 @@ function App() {
                 <Notifications />
               </ProtectedRoute>
             } />
+            
+            <Route path="/debug" element={<BackendConnectionTest />} />
             
             <Route path="*" element={<NotFound />} />
               </Routes>

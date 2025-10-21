@@ -4,6 +4,7 @@ import { teamsApi } from './api/teamsApi';
 import { casesApi } from './api/casesApi';
 import { teamLeaderApi } from './api/teamLeaderApi';
 import { workerApi } from './api/workerApi';
+import { caseManagerAnalyticsApi } from './api/caseManagerAnalyticsApi';
 import incidentsReducer from './slices/incidentsSlice';
 import teamsReducer from './slices/teamsSlice';
 import casesReducer from './slices/casesSlice';
@@ -24,6 +25,7 @@ export const store = configureStore({
     [casesApi.reducerPath]: casesApi.reducer,
     [teamLeaderApi.reducerPath]: teamLeaderApi.reducer,
     [workerApi.reducerPath]: workerApi.reducer,
+    [caseManagerAnalyticsApi.reducerPath]: caseManagerAnalyticsApi.reducer,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware().concat(
@@ -31,7 +33,8 @@ export const store = configureStore({
       teamsApi.middleware,
       casesApi.middleware,
       teamLeaderApi.middleware,
-      workerApi.middleware
+      workerApi.middleware,
+      caseManagerAnalyticsApi.middleware
     ),
 });
 
