@@ -9,3 +9,41 @@ services:
         value: production
       - key: PORT
         value: 5000
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: FRONTEND_URL
+        value: https://work-readiness-frontend.onrender.com
+      - key: USE_SUPABASE
+        value: true
+      - key: LOG_LEVEL
+        value: info
+      - key: ENABLE_SCHEDULED_JOBS
+        value: true
+    healthCheckPath: /health
+    plan: starter
+
+  - type: web
+    name: work-readiness-frontend
+    env: static
+    buildCommand: cd frontend && npm install && npm run build
+    staticPublishPath: ./frontend/build
+    envVars:
+      - key: NODE_VERSION
+        value: 18.18.0
+      - key: REACT_APP_API_URL
+        value: https://work-readiness-backend.onrender.com/api
+      - key: REACT_APP_BACKEND_URL
+        value: https://work-readiness-backend.onrender.com
+      - key: REACT_APP_SUPABASE_URL
+        sync: false
+      - key: REACT_APP_SUPABASE_ANON_KEY
+        sync: false
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    plan: starter
