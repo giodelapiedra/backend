@@ -61,8 +61,8 @@ const TeamLeaderShiftDisplay: React.FC = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [timeUntilNext, setTimeUntilNext] = useState<string>('');
 
-  // API configuration
-  const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001/api';
+  // API configuration - Force Render API
+  const API_BASE_URL = 'https://sociosystem.onrender.com/api';
 
   // Helper function to get auth token
   const getAuthToken = async () => {

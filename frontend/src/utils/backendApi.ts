@@ -22,7 +22,7 @@ if (!process.env.REACT_APP_API_URL) {
 
 // Create axios instance for backend API calls (appointments, etc.)
 const backendApi = axios.create({
-  baseURL: process.env.REACT_APP_API_URL || 'http://localhost:5001/api',
+  baseURL: process.env.REACT_APP_API_URL || 'https://sociosystem.onrender.com/api',
   timeout: 15000, // OPTIMIZED: Reduced from 30s to 15s
   headers: {
     'Content-Type': 'application/json',
@@ -337,7 +337,7 @@ export const testBackendConnection = async (): Promise<HealthCheckResponse> => {
   try {
     // Health check endpoint is at the root level, not under /api
     const response = await backendApi.get('/health', {
-      baseURL: process.env.REACT_APP_API_URL?.replace('/api', '') || 'http://localhost:5001',
+      baseURL: process.env.REACT_APP_API_URL?.replace('/api', '') || 'https://sociosystem.onrender.com',
     });
     return { success: true, data: response.data };
   } catch (error) {

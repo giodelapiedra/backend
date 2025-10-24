@@ -2,7 +2,7 @@ import axios from 'axios';
 
 // Create axios instance with base configuration
 const api = axios.create({
-  baseURL: process.env.REACT_APP_API_URL || 'http://localhost:5001/api',
+  baseURL: process.env.REACT_APP_API_URL || 'https://sociosystem.onrender.com/api',
   timeout: 15000,
   withCredentials: true, // Important for CSRF and cookie-based auth
   headers: {
@@ -13,7 +13,7 @@ const api = axios.create({
 // Function to get CSRF token
 export const getCSRFToken = async (): Promise<string> => {
   try {
-    const response = await axios.get(`${process.env.REACT_APP_API_URL || 'http://localhost:5001/api'}/csrf-token`);
+    const response = await axios.get(`${process.env.REACT_APP_API_URL || 'https://sociosystem.onrender.com/api'}/csrf-token`);
     return response.data.csrfToken;
   } catch (error) {
     console.warn('Could not get CSRF token:', error);
