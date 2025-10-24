@@ -1,0 +1,261 @@
+# Work Readiness System - Backend API
+
+A comprehensive Node.js backend API for the Work Readiness System, built with Express.js and Supabase.
+
+## 🚀 Features
+
+- **KPI Tracking System** - Comprehensive goal and performance tracking
+- **Work Readiness Assessments** - Daily worker assessments and cycle management
+- **Team Analytics** - Multi-team performance analytics and insights
+- **Shift Management** - Shift-based deadline and assignment system
+- **Real-time Notifications** - Smart notification system with scheduled jobs
+- **Performance Monitoring** - Memory usage tracking and optimization
+- **Security Features** - Rate limiting, CORS protection, and security headers
+
+## 🛠️ Technology Stack
+
+- **Node.js** - Runtime environment
+- **Express.js** - Web framework
+- **Supabase** - Database and authentication
+- **Winston** - Structured logging
+- **Redis** - Caching (optional)
+- **CORS** - Cross-origin resource sharing
+
+## 📋 Prerequisites
+
+- Node.js (v18 or higher)
+- npm (v8 or higher)
+- Supabase account and project
+
+## 🚀 Quick Start
+
+### 1. Clone the Repository
+
+```bash
+git clone https://github.com/giodelapiedra/backend.git
+cd backend
+```
+
+### 2. Install Dependencies
+
+```bash
+npm install
+```
+
+### 3. Environment Setup
+
+Create a `.env` file in the root directory:
+
+```env
+# Supabase Configuration
+SUPABASE_URL=your_supabase_url
+SUPABASE_ANON_KEY=your_supabase_anon_key
+SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
+
+# Server Configuration
+PORT=5001
+NODE_ENV=development
+USE_SUPABASE=true
+
+# Frontend URL (for CORS)
+FRONTEND_URL=http://localhost:3000
+
+# Logging Configuration
+LOG_LEVEL=info
+ENABLE_SCHEDULED_JOBS=true
+```
+
+### 4. Start the Server
+
+```bash
+# Development mode
+npm run dev
+
+# Production mode
+npm start
+```
+
+The API will be available at:
+- **Local Development**: `http://localhost:5001`
+- **Production**: `https://sociosystem.onrender.com`
+
+## 📚 API Endpoints
+
+### Health Check
+- `GET /health` - Server health status with memory info
+
+### KPI System
+- `GET /api/goal-kpi/worker-weekly-progress` - Worker weekly progress
+- `GET /api/goal-kpi/worker-assignment-kpi` - Worker assignment KPI
+- `GET /api/goal-kpi/team-weekly-kpi` - Team weekly KPI
+- `GET /api/goal-kpi/team-monitoring-dashboard` - Team monitoring dashboard
+- `GET /api/goal-kpi/monthly-performance-tracking` - Monthly performance tracking
+- `POST /api/goal-kpi/login-cycle` - Handle login cycle
+- `POST /api/goal-kpi/assessment-submission` - Handle assessment submission
+
+### Work Readiness Assignments
+- `GET /api/work-readiness-assignments` - Get assignments
+- `POST /api/work-readiness-assignments` - Create assignment
+- `PUT /api/work-readiness-assignments/:id` - Update assignment
+
+### Multi-Team Analytics
+- `GET /api/multi-team-analytics/team-leader-performance` - Team leader performance
+- `GET /api/multi-team-analytics/team-comparison` - Team comparison
+- `GET /api/multi-team-analytics/performance-trends` - Performance trends
+
+### Shifts
+- `GET /api/shifts` - Get shifts
+- `POST /api/shifts` - Create shift
+- `PUT /api/shifts/:id` - Update shift
+
+### Team Leaders
+- `GET /api/team-leaders` - Get team leaders
+- `GET /api/team-leaders/:id/workers` - Get team leader's workers
+
+## 🔧 Configuration
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `SUPABASE_URL` | Supabase project URL | Required |
+| `SUPABASE_ANON_KEY` | Supabase anonymous key | Required |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key | Required |
+| `PORT` | Server port | 5001 |
+| `NODE_ENV` | Environment mode | development |
+| `FRONTEND_URL` | Frontend URL for CORS | http://localhost:3000 |
+| `LOG_LEVEL` | Logging level | info |
+| `ENABLE_SCHEDULED_JOBS` | Enable scheduled jobs | false |
+
+### CORS Configuration
+
+The API supports CORS for the following origins:
+- `http://localhost:3000` (development)
+- `https://your-frontend-render-url.onrender.com` (production)
+- Any `.onrender.com` subdomain
+
+## 🚀 Deployment
+
+### Current Deployment Status
+✅ **Live API**: [https://sociosystem.onrender.com](https://sociosystem.onrender.com)
+✅ **Deploy Hook**: [https://api.render.com/deploy/srv-d3h66offte5s73clv38g?key=bpCf4kQr8Zc](https://api.render.com/deploy/srv-d3h66offte5s73clv38g?key=bpCf4kQr8Zc)
+
+### Render.com Deployment
+
+1. **Connect GitHub Repository**
+   - Go to [Render Dashboard](https://dashboard.render.com)
+   - Click "New +" → "Web Service"
+   - Connect your GitHub repository
+
+2. **Configure Service**
+   - **Name**: `kpi-api`
+   - **Environment**: `Node`
+   - **Build Command**: `npm install`
+   - **Start Command**: `npm start`
+   - **Health Check Path**: `/health`
+
+3. **Environment Variables**
+   Set the following environment variables in Render:
+   ```
+   NODE_ENV=production
+   PORT=10000
+   SUPABASE_URL=your_supabase_url
+   SUPABASE_ANON_KEY=your_supabase_anon_key
+   SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
+   FRONTEND_URL=https://sociosystem.onrender.com
+   USE_SUPABASE=true
+   LOG_LEVEL=info
+   ENABLE_SCHEDULED_JOBS=true
+   ```
+
+4. **Deploy**
+   - Click "Create Web Service"
+   - Render will automatically deploy your application
+
+### Using render.yaml
+
+The repository includes a `render.yaml` file for automatic deployment configuration.
+
+### Automatic Deployment
+
+The project includes GitHub Actions workflow for automatic deployment:
+
+1. **Push to main branch** - Automatically triggers deployment
+2. **Manual deployment** - Use the deploy hook URL
+3. **Pull request** - Runs tests but doesn't deploy
+
+### Deploy Hook Usage
+
+To manually trigger a deployment, use:
+```bash
+curl -X POST https://api.render.com/deploy/srv-d3h66offte5s73clv38g?key=bpCf4kQr8Zc
+```
+
+## 📊 Performance Monitoring
+
+The API includes built-in performance monitoring:
+
+- **Memory Usage Tracking** - Monitors heap usage and triggers garbage collection
+- **Request Performance** - Tracks request duration and response times
+- **Health Check Endpoint** - Provides server status and memory information
+- **Graceful Shutdown** - Handles SIGTERM and SIGINT signals properly
+
+### Memory Management
+
+- Automatic garbage collection when memory usage exceeds 800MB
+- Emergency garbage collection when memory usage exceeds 1GB
+- Memory usage logging every 30 seconds
+
+## 🔒 Security Features
+
+- **Rate Limiting** - Prevents API abuse
+- **CORS Protection** - Configurable cross-origin resource sharing
+- **Security Headers** - Helmet.js security headers
+- **Input Validation** - Request validation and sanitization
+- **Error Handling** - Structured error responses
+
+## 📝 Logging
+
+The API uses Winston for structured logging:
+
+- **Info Level** - General application flow
+- **Warn Level** - Potential issues
+- **Error Level** - Errors and exceptions
+- **Business Level** - Business logic events
+
+## 🧪 Testing
+
+```bash
+# Run health check
+curl http://localhost:5001/health
+
+# Test API endpoints
+curl http://localhost:5001/api/goal-kpi/worker-weekly-progress?workerId=test
+```
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+## 📄 License
+
+This project is licensed under the MIT License.
+
+## 👨‍💻 Author
+
+**Gio dela Piedra** - GitHub: [@giodelapiedra](https://github.com/giodelapiedra)
+
+## 🙏 Acknowledgments
+
+- Supabase for the database and authentication
+- Express.js for the web framework
+- Winston for structured logging
+- Render for deployment platform
+
+---
+
+**Made with ❤️ for better work readiness management**
