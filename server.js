@@ -45,7 +45,8 @@ app.use(additionalSecurityHeaders);
 app.options('*', (req, res) => {
   res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Origin, Accept');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Origin, Accept, X-CSRF-Token');
+  res.header('Access-Control-Allow-Credentials', 'true'); // ✅ FIXED: Enable credentials
   res.header('Access-Control-Max-Age', '86400');
   res.status(200).end();
 });
@@ -57,14 +58,11 @@ app.use(
     'http://localhost:3000',
     'http://127.0.0.1:3000',
     'https://sociosystem.onrender.com',
-    'https://work-readiness-frontend.onrender.com',
-    'https://frontend-eight-kappa-69.vercel.app',
-    /\.onrender\.com$/,
-    /\.vercel\.app$/,
+      /\.onrender\.com$/,
   ],
-  credentials: false,
+  credentials: true, // ✅ FIXED: Enable credentials for CORS
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Origin', 'Accept'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Origin', 'Accept', 'X-CSRF-Token'],
   optionsSuccessStatus: 200,
     preflightContinue: false,
     maxAge: 86400,
@@ -220,32 +218,39 @@ logger.info('Loading API routes...');
 const goalKpiRoutes = require('./routes/goalKpi');
 const workReadinessAssignmentRoutes = require('./routes/workReadinessAssignments');
 const multiTeamAnalyticsRoutes = require('./routes/multiTeamAnalytics');
+const caseManagerAnalyticsRoutes = require('./routes/caseManagerAnalytics');
 const shiftRoutes = require('./routes/shifts');
 
 const caseRoutes = require('./routes/cases');
 const appointmentRoutes = require('./routes/appointments');
 const clinicianRoutes = require('./routes/clinicians');
 const teamLeaderRoutes = require('./routes/teamLeader');
+// Use Supabase admin routes
+const adminRoutes = require('./routes/admin.supabase');
 
 app.use('/api/goal-kpi', goalKpiRoutes);
 app.use('/api/work-readiness-assignments', workReadinessAssignmentRoutes);
 app.use('/api/multi-team-analytics', multiTeamAnalyticsRoutes);
+app.use('/api/analytics/case-manager', caseManagerAnalyticsRoutes);
 app.use('/api/shifts', shiftRoutes);
 app.use('/api/cases', caseRoutes);
 app.use('/api/appointments', appointmentRoutes);
 app.use('/api/clinicians', clinicianRoutes);
 app.use('/api/team-leaders', teamLeaderRoutes);
+app.use('/api/admin', adminRoutes);
 
 logger.info('API routes mounted', {
   routes: [
     '/api/goal-kpi',
     '/api/work-readiness-assignments',
     '/api/multi-team-analytics',
+    '/api/analytics/case-manager',
     '/api/shifts',
     '/api/cases',
     '/api/appointments',
     '/api/clinicians',
     '/api/team-leaders',
+    '/api/admin',
   ],
 });
 

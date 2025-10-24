@@ -798,15 +798,25 @@ router.put('/:id', [
 
 // @route   DELETE /api/rehabilitation-plans/:id
 // @desc    Delete rehabilitation plan
-// @access  Private (Admin only)
+// @access  Private (Clinician, Case Manager, Admin)
 router.delete('/:id', [
   authMiddleware,
-  roleMiddleware('admin'),
+  roleMiddleware('clinician', 'case_manager', 'admin'),
   handleValidationErrors
 ], asyncHandler(async (req, res) => {
   const plan = await RehabilitationPlan.findById(req.params.id);
   if (!plan) {
     return res.status(404).json({ message: 'Rehabilitation plan not found' });
+  }
+
+  // Check if user can delete this plan
+  const canDelete = 
+    req.user.role === 'admin' ||
+    req.user.role === 'case_manager' ||
+    (req.user.role === 'clinician' && plan.clinician.toString() === req.user._id.toString());
+
+  if (!canDelete) {
+    return res.status(403).json({ message: 'Access denied' });
   }
 
   await RehabilitationPlan.findByIdAndDelete(req.params.id);

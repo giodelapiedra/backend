@@ -106,53 +106,8 @@ class ScheduledJobRunner {
     
     console.log('🚀 Starting scheduled jobs...');
     
-    // Check for missed check-ins every day at 9 AM
-    this.jobs.set('checkInReminders', cron.schedule('0 9 * * *', async () => {
-      console.log('⏰ Running daily check-in reminders...');
-      await SmartNotificationService.checkMissedCheckIns();
-    }, {
-      scheduled: true,
-      timezone: 'Asia/Manila'
-    }));
-    
-    // Check for overdue cases every day at 10 AM
-    this.jobs.set('overdueCases', cron.schedule('0 10 * * *', async () => {
-      console.log('⏰ Running overdue case checks...');
-      await SmartNotificationService.checkOverdueCases();
-    }, {
-      scheduled: true,
-      timezone: 'Asia/Manila'
-    }));
-    
-    // Check for rehab milestones every day at 11 AM
-    this.jobs.set('rehabMilestones', cron.schedule('0 11 * * *', async () => {
-      console.log('⏰ Running rehabilitation milestone checks...');
-      await SmartNotificationService.checkRehabMilestones();
-    }, {
-      scheduled: true,
-      timezone: 'Asia/Manila'
-    }));
-    
-    // Check for upcoming appointments every day at 2 PM
-    this.jobs.set('appointmentReminders', cron.schedule('0 14 * * *', async () => {
-      console.log('⏰ Running appointment reminders...');
-      await SmartNotificationService.checkUpcomingAppointments();
-    }, {
-      scheduled: true,
-      timezone: 'Asia/Manila'
-    }));
-    
-  // Manual overdue marking only - no automatic detection
-  // Team leaders can manually mark assignments as overdue after due time
-    
-    // Run all checks every 6 hours for critical notifications
-    this.jobs.set('allChecks', cron.schedule('0 */6 * * *', async () => {
-      console.log('⏰ Running all smart notification checks...');
-      await SmartNotificationService.runAllChecks();
-    }, {
-      scheduled: true,
-      timezone: 'Asia/Manila'
-    }));
+    // Manual overdue marking only - no automatic detection
+    // Team leaders can manually mark assignments as overdue after due time
     
     this.isRunning = true;
     console.log(`✅ Started ${this.jobs.size} scheduled jobs`);
@@ -160,11 +115,6 @@ class ScheduledJobRunner {
     // Log job schedule
     console.log('📅 Job Schedule:');
     console.log('  - Overdue assignments: Manual only (team leader control)');
-    console.log('  - Check-in reminders: Daily at 9:00 AM');
-    console.log('  - Overdue cases: Daily at 10:00 AM');
-    console.log('  - Rehab milestones: Daily at 11:00 AM');
-    console.log('  - Appointment reminders: Daily at 2:00 PM');
-    console.log('  - All checks: Every 6 hours');
   }
   
   // Stop all scheduled jobs
@@ -213,21 +163,7 @@ class ScheduledJobRunner {
       case 'markOverdueAssignments':
         await this.markOverdueAssignments();
         break;
-      case 'checkInReminders':
-        await SmartNotificationService.checkMissedCheckIns();
-        break;
-      case 'overdueCases':
-        await SmartNotificationService.checkOverdueCases();
-        break;
-      case 'rehabMilestones':
-        await SmartNotificationService.checkRehabMilestones();
-        break;
-      case 'appointmentReminders':
-        await SmartNotificationService.checkUpcomingAppointments();
-        break;
-      case 'allChecks':
-        await SmartNotificationService.runAllChecks();
-        break;
+      // Only manual overdue marking is supported
       default:
         throw new Error(`Unknown job: ${jobName}`);
     }

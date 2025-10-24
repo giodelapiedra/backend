@@ -397,9 +397,84 @@ class GoalTrackingService {
       const actualReadinessLevel = readiness_level || readinessLevel;
       const actualFatigueLevel = fatigue_level || fatigueLevel;
 
+      // Get worker's team and team leader info
+      let teamLeaderId = null;
+      let workerTeam = worker.team || null;
+
+      // PRIORITY 1: Use worker's assigned team_leader_id if it exists
+      if (worker.team_leader_id) {
+        teamLeaderId = worker.team_leader_id;
+        logger.logBusiness('Using Worker\'s Assigned Team Leader', { 
+          workerId, 
+          workerTeam: worker.team,
+          teamLeaderId: worker.team_leader_id,
+          source: 'worker.team_leader_id (DIRECT ASSIGNMENT)'
+        });
+      }
+      // PRIORITY 2: Look up team leader if worker has team but no direct team_leader_id
+      else if (worker.team) {
+        try {
+          const { supabase } = require('../config/supabase');
+          
+          // Look for team leader who manages this team (in managed_teams array)
+          const { data: teamLeader, error: teamLeaderError } = await supabase
+            .from('users')
+            .select('id, first_name, last_name, managed_teams')
+            .eq('role', 'team_leader')
+            .eq('is_active', true)
+            .contains('managed_teams', [worker.team])
+            .single();
+          
+          if (!teamLeaderError && teamLeader) {
+            teamLeaderId = teamLeader.id;
+            logger.logBusiness('Found Team Leader via Managed Teams', { 
+              workerId, 
+              workerTeam: worker.team,
+              teamLeaderId: teamLeader.id, 
+              teamLeaderName: `${teamLeader.first_name} ${teamLeader.last_name}`,
+              managedTeams: teamLeader.managed_teams,
+              source: 'managed_teams lookup'
+            });
+          } else {
+            // Fallback: try to find team leader by team field
+            const { data: fallbackLeader, error: fallbackError } = await supabase
+              .from('users')
+              .select('id, first_name, last_name, team')
+              .eq('role', 'team_leader')
+              .eq('team', worker.team)
+              .eq('is_active', true)
+              .single();
+            
+            if (!fallbackError && fallbackLeader) {
+              teamLeaderId = fallbackLeader.id;
+              logger.logBusiness('Found Team Leader via Team Field', { 
+                workerId, 
+                workerTeam: worker.team,
+                teamLeaderId: fallbackLeader.id, 
+                teamLeaderName: `${fallbackLeader.first_name} ${fallbackLeader.last_name}`,
+                source: 'team field lookup (fallback)'
+              });
+            } else {
+              logger.warn('Team Leader Not Found for Worker', { 
+                workerId, 
+                workerTeam: worker.team,
+                teamLeaderError: teamLeaderError?.message,
+                fallbackError: fallbackError?.message
+              });
+            }
+          }
+        } catch (error) {
+          logger.error('Error finding team leader', { error: error.message, workerId, workerTeam: worker.team });
+        }
+      } else {
+        logger.warn('Worker has no team assigned', { workerId });
+      }
+
       // Transform assessment data to match database schema
       const transformedAssessmentData = {
         worker_id: workerId,
+        team_leader_id: teamLeaderId,
+        team: workerTeam,
         readiness_level: actualReadinessLevel,
         fatigue_level: actualFatigueLevel,
         mood: assessmentData.mood,
@@ -431,9 +506,20 @@ class GoalTrackingService {
 
       } else {
         // Create new assessment with cycle data
-        logger.logBusiness('Creating New Assessment with Cycle Data');
+        logger.logBusiness('Creating New Assessment with Cycle Data', {
+          workerId,
+          teamLeaderId,
+          team: workerTeam,
+          readinessLevel: actualReadinessLevel
+        });
         savedAssessment = await workReadinessRepo.createAssessment(transformedAssessmentData);
-        logger.logBusiness('New Assessment Saved with Cycle Data', { assessmentId: savedAssessment.id });
+        logger.logBusiness('New Assessment Saved with Cycle Data', { 
+          assessmentId: savedAssessment.id,
+          workerId: savedAssessment.worker_id,
+          teamLeaderId: savedAssessment.team_leader_id,
+          team: savedAssessment.team,
+          readinessLevel: savedAssessment.readiness_level
+        });
       }
 
       // Update assignment status to completed

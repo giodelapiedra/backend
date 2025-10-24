@@ -1108,7 +1108,16 @@ exports.getUnselectedWorkers = async (req, res) => {
     const teamLeaderId = req.query.teamLeaderId || req.user.id;
     const { date } = req.query;
     
-    console.log('Getting unselected workers for team leader:', teamLeaderId);
+    // Get pagination parameters
+    const limit = parseInt(req.query.limit) || 10;
+    const offset = parseInt(req.query.offset) || 0;
+    const includeCount = req.query.includeCount === 'true';
+    
+    console.log('Getting unselected workers for team leader:', teamLeaderId, {
+      limit,
+      offset,
+      includeCount
+    });
 
     let query = supabaseAdmin
       .from('unselected_workers')
@@ -1119,10 +1128,31 @@ exports.getUnselectedWorkers = async (req, res) => {
         )
       `)
       .eq('team_leader_id', teamLeaderId)
-      .order('assignment_date', { ascending: false });
+      .eq('case_status', 'open')
+      .order('created_at', { ascending: false });
 
     if (date) {
       query = query.eq('assignment_date', date);
+    }
+
+    // Add pagination
+    query = query.range(offset, offset + limit - 1);
+
+    // Get count if requested
+    let totalCount = 0;
+    if (includeCount) {
+      let countQuery = supabaseAdmin
+        .from('unselected_workers')
+        .select('*', { count: 'exact', head: true })
+        .eq('team_leader_id', teamLeaderId)
+        .eq('case_status', 'open');
+      
+      if (date) {
+        countQuery = countQuery.eq('assignment_date', date);
+      }
+      
+      const { count } = await countQuery;
+      totalCount = count || 0;
     }
 
     const { data, error } = await query;
@@ -1132,12 +1162,17 @@ exports.getUnselectedWorkers = async (req, res) => {
       return res.status(500).json({ error: 'Failed to fetch unselected workers' });
     }
 
-    console.log('✅ Found', data?.length || 0, 'unselected workers');
-    console.log('📋 Workers:', data);
+    console.log(`✅ Found ${data?.length || 0} unselected workers (total: ${totalCount})`);
 
     res.json({ 
       success: true,
-      unselectedWorkers: data || [],
+      data: data || [],
+      totalCount: includeCount ? totalCount : undefined,
+      pagination: {
+        limit,
+        offset,
+        hasMore: includeCount ? (offset + limit) < totalCount : undefined
+      },
       count: data?.length || 0
     });
 
@@ -1186,9 +1221,9 @@ exports.saveUnselectedWorkerReason = async (req, res) => {
     }
 
     // Verify the worker exists and is assigned to this team leader
-    const { data: worker, error: workerError } = await supabaseAdmin
+        const { data: worker, error: workerError } = await supabaseAdmin
       .from('users')
-      .select('id, first_name, last_name, role')
+          .select('id, first_name, last_name, role, team')
       .eq('id', worker_id)
       .eq('role', 'worker')
       .single();
@@ -1201,9 +1236,9 @@ exports.saveUnselectedWorkerReason = async (req, res) => {
     }
 
     // Verify team leader exists
-    const { data: teamLeader, error: teamLeaderError } = await supabaseAdmin
+        const { data: teamLeader, error: teamLeaderError } = await supabaseAdmin
       .from('users')
-      .select('id, first_name, last_name, role')
+          .select('id, first_name, last_name, role, team')
       .eq('id', team_leader_id)
       .eq('role', 'team_leader')
       .single();
@@ -1215,56 +1250,38 @@ exports.saveUnselectedWorkerReason = async (req, res) => {
       });
     }
 
-    // Check if there's an existing open case for this worker
-    const { data: existingCase, error: checkError } = await supabaseAdmin
+    // Always create a new case for each incident
+    // This allows multiple incidents per worker (e.g., sick, then accident)
+    console.log('🆕 Creating new incident case for worker:', worker_id);
+    
+    // Add timestamp to notes to ensure uniqueness
+    const timestamp = new Date().toISOString();
+    const uniqueNotes = notes ? `${notes} (Reported: ${timestamp})` : `Incident reported at ${timestamp}`;
+    
+        const insertData = {
+      team_leader_id: team_leader_id,
+      worker_id: worker_id,
+      reason: reason,
+      notes: uniqueNotes,
+      assignment_date: new Date().toISOString().split('T')[0],
+      case_status: 'open',
+      created_at: timestamp,
+          updated_at: timestamp,
+          // Prefer worker's team; fallback to team leader's team if missing
+          team: worker?.team || teamLeader?.team || null
+    };
+
+    console.log('📝 Insert data:', insertData);
+
+    const insertResult = await supabaseAdmin
       .from('unselected_workers')
-      .select('*')
-      .eq('team_leader_id', team_leader_id)
-      .eq('worker_id', worker_id)
-      .eq('case_status', 'open')
-      .single();
-
-    let result;
-    let error;
-
-    if (existingCase) {
-      // Update existing open case
-      console.log('📝 Updating existing open case:', existingCase.id);
-      const updateData = {
-        reason: reason,
-        notes: notes || '',
-        updated_at: new Date().toISOString()
-      };
-      
-      const updateResult = await supabaseAdmin
-        .from('unselected_workers')
-        .update(updateData)
-        .eq('id', existingCase.id)
-        .select();
-      
-      result = updateResult.data;
-      error = updateResult.error;
-    } else {
-      // Create new case
-      console.log('🆕 Creating new case for worker:', worker_id);
-      const insertData = {
-        team_leader_id: team_leader_id,
-        worker_id: worker_id,
-        reason: reason,
-        notes: notes || '',
-        assignment_date: new Date().toISOString().split('T')[0],
-        case_status: 'open',
-        updated_at: new Date().toISOString()
-      };
-
-      const insertResult = await supabaseAdmin
-        .from('unselected_workers')
-        .insert(insertData)
-        .select();
-      
-      result = insertResult.data;
-      error = insertResult.error;
-    }
+      .insert(insertData)
+      .select();
+    
+    const result = insertResult.data;
+    const error = insertResult.error;
+    
+    console.log('📋 Insert result:', { result, error });
 
     if (error) {
       console.error('❌ Supabase error details:', {
@@ -1446,9 +1463,21 @@ exports.getClosedUnselectedWorkerCases = async (req, res) => {
 exports.getAllClosedUnselectedWorkerCases = async (req, res) => {
   try {
     const teamLeaderId = req.user.id;
+    
+    // Get pagination parameters
+    const limit = parseInt(req.query.limit) || 10;
+    const offset = parseInt(req.query.offset) || 0;
+    const includeCount = req.query.includeCount === 'true';
 
-    // Get all closed cases for the team leader with worker details
-    const { data: closedCases, error } = await supabaseAdmin
+    console.log('📋 getAllClosedUnselectedWorkerCases called', {
+      teamLeaderId,
+      limit,
+      offset,
+      includeCount
+    });
+
+    // Build query
+    let query = supabaseAdmin
       .from('closed_unselected_workers')
       .select(`
         *,
@@ -1462,6 +1491,21 @@ exports.getAllClosedUnselectedWorkerCases = async (req, res) => {
       .eq('team_leader_id', teamLeaderId)
       .order('closed_at', { ascending: false });
 
+    // Add pagination
+    query = query.range(offset, offset + limit - 1);
+
+    // Get count if requested
+    let totalCount = 0;
+    if (includeCount) {
+      const { count } = await supabaseAdmin
+        .from('closed_unselected_workers')
+        .select('*', { count: 'exact', head: true })
+        .eq('team_leader_id', teamLeaderId);
+      totalCount = count || 0;
+    }
+
+    const { data: closedCases, error } = await query;
+
     if (error) {
       console.error('Error fetching all closed cases:', error);
       return res.status(500).json({ 
@@ -1470,10 +1514,18 @@ exports.getAllClosedUnselectedWorkerCases = async (req, res) => {
       });
     }
 
+    console.log(`✅ Found ${closedCases?.length || 0} closed cases (total: ${totalCount})`);
+
     res.json({ 
       success: true,
-      data: closedCases,
-      message: `Found ${closedCases.length} closed cases`
+      data: closedCases || [],
+      totalCount: includeCount ? totalCount : undefined,
+      pagination: {
+        limit,
+        offset,
+        hasMore: includeCount ? (offset + limit) < totalCount : undefined
+      },
+      message: `Found ${closedCases?.length || 0} closed cases`
     });
 
   } catch (error) {

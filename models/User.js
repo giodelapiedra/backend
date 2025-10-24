@@ -88,7 +88,7 @@ const userSchema = new mongoose.Schema({
   }],
   package: {
     type: String,
-    enum: ['package1', 'package2', 'package3'],
+    enum: ['package1', 'package2', 'package3', 'package4'],
     default: 'package1'
   },
   isActive: {

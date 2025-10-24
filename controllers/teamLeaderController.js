@@ -515,8 +515,30 @@ const createUser = async (req, res) => {
       return res.status(404).json({ message: 'Team leader not found' });
     }
     
-    // Use provided team or default team
-    let assignedTeam = team || teamLeader.team || 'Default Team';
+    // Use provided team or create a default team for the team leader
+    let assignedTeam = team;
+    
+    if (!assignedTeam) {
+      // If no team provided, use team leader's team or create a default one
+      if (teamLeader.team) {
+        assignedTeam = teamLeader.team;
+      } else {
+        // Create a default team name based on team leader's name
+        const teamLeaderName = `${teamLeader.first_name}_${teamLeader.last_name}`.replace(/\s+/g, '_').toUpperCase();
+        assignedTeam = `TEAM_${teamLeaderName}`;
+        
+        // Update team leader's team
+        await supabase
+          .from('users')
+          .update({ 
+            team: assignedTeam,
+            default_team: assignedTeam,
+            managed_teams: [assignedTeam],
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', req.user.id);
+      }
+    }
 
     // Create Supabase Auth user first
     const { createClient } = require('@supabase/supabase-js');
@@ -552,9 +574,10 @@ const createUser = async (req, res) => {
 
     console.log('Supabase Auth user created:', authData.user.id);
 
-    // Hash the password for storage in password_hash column
-    const crypto = require('crypto');
-    const passwordHash = crypto.createHash('sha256').update(password).digest('hex').substring(0, 20);
+    // Hash the password for storage in password_hash column using bcrypt
+    const bcrypt = require('bcryptjs');
+    const salt = await bcrypt.genSalt(12);
+    const passwordHash = await bcrypt.hash(password, salt);
 
     // Create user profile in Supabase database
     const userData = {
