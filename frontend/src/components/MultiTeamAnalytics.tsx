@@ -209,20 +209,6 @@ const MultiTeamAnalytics: React.FC = memo(() => {
     return () => clearTimeout(timer);
   }, [selectedDate, dateRangeMode, startDate, endDate]);
   
-  // Auto-refresh every 30 seconds for real-time updates
-  useEffect(() => {
-    const refreshInterval = setInterval(() => {
-      // Clear cache and refetch for current date/range
-      const cacheKey = dateRangeMode === 'range' 
-        ? `range_${startDate}_${endDate}`
-        : `data_${selectedDate}`;
-      cacheRef.current.delete(cacheKey);
-      fetchMultiTeamData();
-    }, 30000); // 30 seconds
-    
-    return () => clearInterval(refreshInterval);
-  }, [selectedDate, dateRangeMode, startDate, endDate]);
-
   const fetchMultiTeamData = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -238,22 +224,13 @@ const MultiTeamAnalytics: React.FC = memo(() => {
       // Check cache first
       if (cacheRef.current.has(cacheKey)) {
         const cached = cacheRef.current.get(cacheKey);
-        const cacheAge = Date.now() - cached.timestamp;
-        
-        console.log('📦 Cache found, age:', cacheAge, 'ms');
-        
-        // Use cache if less than 30 seconds old
-        if (cacheAge < 30000) {
-        console.log('✅ Using cached data');
+        console.log('📦 Using cached data');
         setTeamPerformance(cached.teamPerformance);
         setMultiTeamMetrics(cached.multiTeamMetrics);
         setTeamLeaderPerformance(cached.teamLeaderPerformance);
         setInsights(cached.insights);
         setLoading(false);
         return;
-        } else {
-          console.log('⏰ Cache expired, fetching fresh data');
-        }
       } else {
         console.log('🆕 No cache found, fetching fresh data');
       }
@@ -469,13 +446,12 @@ const MultiTeamAnalytics: React.FC = memo(() => {
       setTeamLeaderPerformance(processedTeamLeaderPerformance);
       setInsights(generatedInsights);
 
-      // Cache the result with timestamp for proper expiration
+      // Cache the result
       cacheRef.current.set(cacheKey, {
         teamPerformance: processedTeamPerformance,
         multiTeamMetrics: processedMultiTeamMetrics,
         teamLeaderPerformance: processedTeamLeaderPerformance,
-        insights: generatedInsights,
-        timestamp: Date.now()
+        insights: generatedInsights
       });
 
     } catch (err) {

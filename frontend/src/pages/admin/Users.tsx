@@ -99,6 +99,10 @@ const Users: React.FC = memo(() => {
   const [pageSize, setPageSize] = useState(10);
   const [totalUsers, setTotalUsers] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
+  const [totalActiveUsers, setTotalActiveUsers] = useState(0);
+  const [totalClinicians, setTotalClinicians] = useState(0);
+  const [totalWorkers, setTotalWorkers] = useState(0);
+  const [totalTeamLeaders, setTotalTeamLeaders] = useState(0);
   const [userForm, setUserForm] = useState({
     firstName: '',
     lastName: '',
@@ -129,7 +133,6 @@ const Users: React.FC = memo(() => {
   const fetchUsers = useCallback(async () => {
     try {
       setLoading(true);
-      console.log('🔄 Fetching users from Supabase...');
       
       let query = dataClient
         .from('users')
@@ -156,12 +159,9 @@ const Users: React.FC = memo(() => {
       const { data, error, count } = await query;
       
       if (error) {
-        console.error('❌ Error fetching users:', error);
         setError('Failed to fetch users: ' + error.message);
         return;
       }
-      
-      console.log('✅ Users fetched:', data?.length);
       
       // Transform snake_case to camelCase for frontend compatibility
       const transformedUsers = (data || []).map((user: any) => ({
@@ -187,12 +187,33 @@ const Users: React.FC = memo(() => {
       setTotalPages(Math.ceil((count || 0) / pageSize));
       setError('');
     } catch (err: any) {
-      console.error('❌ Error fetching users:', err);
       setError(err.message || 'Failed to fetch users');
     } finally {
       setLoading(false);
     }
   }, [currentPage, pageSize, searchTerm, roleFilter, statusFilter]);
+
+  // Fetch total counts for stats cards - optimized with parallel calls
+  const fetchTotalCounts = useCallback(async () => {
+    try {
+      // Run all count queries in parallel for better performance
+      const [totalUsersRes, activeUsersRes, cliniciansRes, workersRes, teamLeadersRes] = await Promise.all([
+        dataClient.from('users').select('*', { count: 'exact', head: true }),
+        dataClient.from('users').select('*', { count: 'exact', head: true }).eq('is_active', true),
+        dataClient.from('users').select('*', { count: 'exact', head: true }).eq('role', 'clinician'),
+        dataClient.from('users').select('*', { count: 'exact', head: true }).eq('role', 'worker'),
+        dataClient.from('users').select('*', { count: 'exact', head: true }).eq('role', 'team_leader')
+      ]);
+      
+      setTotalUsers(totalUsersRes.count || 0);
+      setTotalActiveUsers(activeUsersRes.count || 0);
+      setTotalClinicians(cliniciansRes.count || 0);
+      setTotalWorkers(workersRes.count || 0);
+      setTotalTeamLeaders(teamLeadersRes.count || 0);
+    } catch (err: any) {
+      // Silent error handling for stats cards
+    }
+  }, []);
 
   // Check if page access verification is needed
   useEffect(() => {
@@ -211,8 +232,9 @@ const Users: React.FC = memo(() => {
   useEffect(() => {
     if (pageAccessVerified && showPageContent) {
       fetchUsers();
+      fetchTotalCounts();
     }
-  }, [fetchUsers, pageAccessVerified, showPageContent]);
+  }, [fetchUsers, fetchTotalCounts, pageAccessVerified, showPageContent]);
 
   // Reset to page 1 when filters change
   useEffect(() => {
@@ -316,7 +338,6 @@ const Users: React.FC = memo(() => {
         formData.append('profileImage', profilePhoto);
         
         // For now, skip file upload and create user without photo
-        console.log('⚠️ File upload not implemented yet, creating user without photo');
         const userData = {
           first_name: userForm.firstName.trim(),
           last_name: userForm.lastName.trim(),
@@ -340,7 +361,6 @@ const Users: React.FC = memo(() => {
           .single();
         
         if (error) {
-          console.error('❌ Error creating user:', error);
           setError('Failed to create user: ' + error.message);
           return;
         }
@@ -375,7 +395,6 @@ const Users: React.FC = memo(() => {
           .single();
         
         if (error) {
-          console.error('❌ Error creating user:', error);
           setError('Failed to create user: ' + error.message);
           return;
         }
@@ -388,8 +407,8 @@ const Users: React.FC = memo(() => {
       setSuccessDialog(true);
       resetUserForm();
       fetchUsers();
+      fetchTotalCounts();
     } catch (err: any) {
-      console.error('Error creating user:', err);
       const errorMessage = err.response?.data?.message || 'Failed to create user';
       setError(errorMessage);
     } finally {
@@ -409,22 +428,10 @@ const Users: React.FC = memo(() => {
       }
       
       const userId = editingUser._id || editingUser.id;
-      console.log('🔍 Admin Update User Debug:', {
-        userId,
-        profilePhoto: profilePhoto ? 'File selected' : 'No file',
-        profilePhotoType: profilePhoto ? typeof profilePhoto : 'null',
-        profilePhotoName: profilePhoto ? profilePhoto.name : 'N/A',
-        editingUserProfileImage: editingUser.profileImage,
-        profilePhotoState: profilePhoto
-      });
-      
-      // Force a re-render to see current state
-      console.log('🔄 Current profilePhoto state:', profilePhoto);
       
       let response;
       
       if (profilePhoto) {
-        console.log('📸 Creating FormData with profile photo:', profilePhoto.name);
         // Create FormData for file upload
         const formData = new FormData();
         formData.append('firstName', userForm.firstName.trim());
@@ -450,9 +457,7 @@ const Users: React.FC = memo(() => {
         
         formData.append('profileImage', profilePhoto);
         
-        console.log('Updating user with FormData (including profile photo)');
         // For now, skip file upload and update user without photo
-        console.log('⚠️ File upload not implemented yet, updating user without photo');
         const updateData1: any = {
           first_name: userForm.firstName.trim(),
           last_name: userForm.lastName.trim(),
@@ -477,14 +482,12 @@ const Users: React.FC = memo(() => {
           .single();
         
         if (error) {
-          console.error('❌ Error updating user:', error);
           setError('Failed to update user: ' + error.message);
           return;
         }
         
         response = { data };
       } else {
-        console.log('📝 No profile photo selected, using JSON request');
         // Regular JSON request without photo
         const updateData: any = {
           firstName: userForm.firstName.trim(),
@@ -509,7 +512,6 @@ const Users: React.FC = memo(() => {
           }
         }
 
-        console.log('Updating user with JSON data (no profile photo)');
         const updateData2: any = {
           first_name: userForm.firstName.trim(),
           last_name: userForm.lastName.trim(),
@@ -534,7 +536,6 @@ const Users: React.FC = memo(() => {
           .single();
         
         if (error) {
-          console.error('❌ Error updating user:', error);
           setError('Failed to update user: ' + error.message);
           return;
         }
@@ -542,18 +543,14 @@ const Users: React.FC = memo(() => {
         response = { data };
       }
       
-      console.log('Update response:', response.data);
       
       setSuccessMessage('User updated successfully!');
       setUserDialog(false);
       setEditingUser(null);
       resetUserForm();
       fetchUsers();
+      fetchTotalCounts();
     } catch (err: any) {
-      console.error('Error updating user:', err);
-      console.error('Error response:', err.response?.data);
-      console.error('Error status:', err.response?.status);
-      
       let errorMessage = 'Failed to update user';
       
       if (err.response?.data?.message) {
@@ -582,24 +579,20 @@ const Users: React.FC = memo(() => {
     
     try {
       setLoading(true);
-      console.log('Deleting user with ID:', userId);
       const { error } = await dataClient
         .from('users')
         .delete()
         .eq('id', userId);
       
       if (error) {
-        console.error('❌ Error deleting user:', error);
         setError('Failed to delete user: ' + error.message);
         return;
       }
       
-      console.log('✅ User deleted successfully');
       setSuccessMessage('User deleted successfully!');
       fetchUsers();
+      fetchTotalCounts();
     } catch (err: any) {
-      console.error('Error deleting user:', err);
-      console.error('Error response:', err.response?.data);
       setError(err.response?.data?.message || 'Failed to delete user');
     } finally {
       setLoading(false);
@@ -656,7 +649,6 @@ const Users: React.FC = memo(() => {
       }
       
     } catch (err: any) {
-      console.error('Error verifying password:', err);
       setPasswordError('Password verification failed');
     } finally {
       setVerifyingPassword(false);
@@ -665,7 +657,6 @@ const Users: React.FC = memo(() => {
 
 
   const openEditDialog = useCallback((user: User) => {
-    console.log('🔍 Edit requested for user:', user);
     
     // Always require password verification for each edit
     setPendingEditUser(user);
@@ -688,24 +679,19 @@ const Users: React.FC = memo(() => {
 
   const formatDate = useCallback((dateString: string | undefined) => {
     if (!dateString) {
-      console.log('No date string provided');
       return 'N/A';
     }
     
     try {
-      console.log('Formatting date:', dateString);
       const date = new Date(dateString);
       
       if (isNaN(date.getTime())) {
-        console.warn('Invalid date string:', dateString);
         return 'Invalid Date';
       }
       
       const formatted = date.toLocaleDateString();
-      console.log('Formatted date:', formatted);
       return formatted;
     } catch (error) {
-      console.error('Error formatting date:', error, 'Date string:', dateString);
       return 'Invalid Date';
     }
   }, []);
@@ -802,7 +788,7 @@ const Users: React.FC = memo(() => {
                       TOTAL USERS
                     </Typography>
                     <Typography variant="h4" sx={{ fontWeight: 700, color: '#1a1a1a', fontSize: { xs: '1.5rem', sm: '2rem' } }}>
-                      {users.length}
+                      {totalUsers}
                     </Typography>
                   </Box>
                   <Avatar sx={{ bgcolor: '#e3f2fd', width: { xs: 40, sm: 56 }, height: { xs: 40, sm: 56 } }}>
@@ -818,10 +804,10 @@ const Users: React.FC = memo(() => {
                 <Box display="flex" alignItems="center" justifyContent="space-between">
                   <Box>
                     <Typography variant="body2" color="text.secondary" sx={{ mb: 1, fontWeight: 500, fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>
-                      ACTIVE USERS
+                      TEAM LEADERS
                     </Typography>
                     <Typography variant="h4" sx={{ fontWeight: 700, color: '#1a1a1a', fontSize: { xs: '1.5rem', sm: '2rem' } }}>
-                      {users.filter(u => u.isActive).length}
+                      {totalTeamLeaders}
                     </Typography>
                   </Box>
                   <Avatar sx={{ bgcolor: '#e8f5e8', width: { xs: 40, sm: 56 }, height: { xs: 40, sm: 56 } }}>
@@ -840,7 +826,7 @@ const Users: React.FC = memo(() => {
                       CLINICIANS
                     </Typography>
                     <Typography variant="h4" sx={{ fontWeight: 700, color: '#1a1a1a', fontSize: { xs: '1.5rem', sm: '2rem' } }}>
-                      {users.filter(u => u.role === 'clinician').length}
+                      {totalClinicians}
                     </Typography>
                   </Box>
                   <Avatar sx={{ bgcolor: '#f3e5f5', width: { xs: 40, sm: 56 }, height: { xs: 40, sm: 56 } }}>
@@ -859,7 +845,7 @@ const Users: React.FC = memo(() => {
                       WORKERS
                     </Typography>
                     <Typography variant="h4" sx={{ fontWeight: 700, color: '#1a1a1a', fontSize: { xs: '1.5rem', sm: '2rem' } }}>
-                      {users.filter(u => u.role === 'worker').length}
+                      {totalWorkers}
                     </Typography>
                   </Box>
                   <Avatar sx={{ bgcolor: '#fff3e0', width: { xs: 40, sm: 56 }, height: { xs: 40, sm: 56 } }}>

@@ -53,6 +53,23 @@ const AdminDashboard: React.FC = () => {
   const [userDialog, setUserDialog] = useState(false);
   const [editingUser, setEditingUser] = useState<any>(null);
   
+  // Statistics state (optimized)
+  const [stats, setStats] = useState({
+    totalUsers: 0,
+    activeCases: 0,
+    closedCases: 0,
+    assessments: 0,
+    totalAppointments: 0,
+    avgResolution: 0,
+    roleCounts: {
+      clinicians: 0,
+      workers: 0,
+      managers: 0,
+      supervisors: 0,
+      teamLeaders: 0
+    }
+  });
+  
   // Pagination states
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -86,36 +103,124 @@ const AdminDashboard: React.FC = () => {
   const [roleFilter, setRoleFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
 
-  const fetchUsers = useCallback(async () => {
+  // Optimized data fetching - single API call for dashboard data
+  const fetchDashboardData = useCallback(async () => {
     try {
       setLoading(true);
-      console.log('🔄 Fetching users from backend API...');
+      console.log('🔄 Fetching dashboard data...');
       
-      const response = await api.get('/admin/users', {
-        params: {
-          page: currentPage,
-          limit: pageSize,
-          search: searchTerm,
-          role: roleFilter,
-          status: statusFilter
-        }
-      });
+      // Fetch paginated users and statistics in parallel
+      const [usersResponse, totalUsersResponse, statsResponse] = await Promise.all([
+        api.get('/admin/users', {
+          params: {
+            page: currentPage,
+            limit: pageSize,
+            search: searchTerm,
+            role: roleFilter,
+            status: statusFilter
+          }
+        }),
+        // Get total users count without filters
+        api.get('/admin/users', {
+          params: {
+            page: 1,
+            limit: 1
+          }
+        }),
+        api.get('/admin/statistics').catch(() => ({ data: null })) // Graceful fallback
+      ]);
       
-      console.log('✅ Users fetched:', response.data.users?.length);
-      setUsers(response.data.users || []);
-      setTotalUsers(response.data.pagination?.totalUsers || 0);
-      setTotalPages(response.data.pagination?.totalPages || 0);
+      // Set users data
+      setUsers(usersResponse.data.users || []);
+      setTotalUsers(totalUsersResponse.data.pagination?.totalUsers || 0);
+      setTotalPages(usersResponse.data.pagination?.totalPages || 0);
+      
+      // Set statistics data (with fallback)
+      if (statsResponse.data) {
+        console.log('📊 Statistics API Response:', statsResponse.data);
+        setStats(statsResponse.data);
+      } else {
+        console.log('⚠️ No statistics data received, using fallback');
+        // Fallback: calculate role counts from current users
+        const currentUsers = usersResponse.data.users || [];
+        const roleCounts = currentUsers.reduce((acc, user) => {
+          acc[user.role] = (acc[user.role] || 0) + 1;
+          return acc;
+        }, {} as Record<string, number>);
+        
+        setStats({
+          totalUsers: usersResponse.data.pagination?.totalUsers || 0,
+          activeCases: 0,
+          closedCases: 0,
+          assessments: 0,
+          totalAppointments: 0,
+          avgResolution: 0,
+          roleCounts: {
+            clinicians: roleCounts.clinician || 0,
+            workers: roleCounts.worker || 0,
+            managers: roleCounts.case_manager || 0,
+            supervisors: roleCounts.site_supervisor || 0,
+            teamLeaders: roleCounts.team_leader || 0
+          }
+        });
+      }
+      
+      console.log('✅ Dashboard data fetched successfully');
     } catch (err: any) {
-      console.error('❌ Error fetching users:', err);
-      setError(err.response?.data?.message || 'Failed to fetch users');
+      console.error('❌ Error fetching dashboard data:', err);
+      setError(err.response?.data?.message || 'Failed to fetch dashboard data');
+      
+      // Fallback: try to get at least users data
+      try {
+        const usersResponse = await api.get('/admin/users', {
+          params: {
+            page: currentPage,
+            limit: pageSize,
+            search: searchTerm,
+            role: roleFilter,
+            status: statusFilter
+          }
+        });
+        
+        setUsers(usersResponse.data.users || []);
+        setTotalUsers(usersResponse.data.pagination?.totalUsers || 0);
+        setTotalPages(usersResponse.data.pagination?.totalPages || 0);
+        
+        // Calculate role counts from users as fallback
+        const currentUsers = usersResponse.data.users || [];
+        const roleCounts = currentUsers.reduce((acc, user) => {
+          acc[user.role] = (acc[user.role] || 0) + 1;
+          return acc;
+        }, {} as Record<string, number>);
+        
+        setStats({
+          totalUsers: usersResponse.data.pagination?.totalUsers || 0,
+          activeCases: 0,
+          closedCases: 0,
+          assessments: 0,
+          totalAppointments: 0,
+          avgResolution: 0,
+          roleCounts: {
+            clinicians: roleCounts.clinician || 0,
+            workers: roleCounts.worker || 0,
+            managers: roleCounts.case_manager || 0,
+            supervisors: roleCounts.site_supervisor || 0,
+            teamLeaders: roleCounts.team_leader || 0
+          }
+        });
+        
+        console.log('✅ Fallback data loaded successfully');
+      } catch (fallbackErr) {
+        console.error('❌ Fallback also failed:', fallbackErr);
+      }
     } finally {
       setLoading(false);
     }
   }, [currentPage, pageSize, searchTerm, roleFilter, statusFilter]);
 
   useEffect(() => {
-    fetchUsers();
-  }, [currentPage, pageSize, fetchUsers]);
+    fetchDashboardData();
+  }, [fetchDashboardData]);
 
   // Pagination handlers
   const handlePageChange = (page: number) => {
@@ -196,7 +301,7 @@ const AdminDashboard: React.FC = () => {
       setUserDialog(false);
       setSuccessDialog(true);
       resetUserForm();
-      fetchUsers();
+      fetchDashboardData(); // Single optimized refresh
     } catch (err: any) {
       console.error('❌ Error creating user:', err);
       const errorMessage = err.response?.data?.message || err.response?.data?.error || 'Failed to create user';
@@ -260,7 +365,7 @@ const AdminDashboard: React.FC = () => {
       setUserDialog(false);
       setEditingUser(null);
       resetUserForm();
-      fetchUsers();
+      fetchDashboardData(); // Single optimized refresh
     } catch (err: any) {
       console.error('❌ Error updating user:', err);
       const errorMessage = err.response?.data?.message || err.response?.data?.error || 'Failed to update user';
@@ -347,18 +452,18 @@ const AdminDashboard: React.FC = () => {
     return colors[role] || 'default';
   };
 
-  const getRoleStats = () => {
-    const stats = {
-      clinicians: users.filter(u => u.role === 'clinician').length,
-      workers: users.filter(u => u.role === 'worker').length,
-      managers: users.filter(u => u.role === 'case_manager').length,
-      supervisors: users.filter(u => u.role === 'site_supervisor').length,
-      teamLeaders: users.filter(u => u.role === 'team_leader').length,
-    };
-    return stats;
+  // Real-time role statistics from API (no estimation needed)
+  const roleStats = stats.roleCounts || {
+    clinicians: 0,
+    workers: 0,
+    managers: 0,
+    supervisors: 0,
+    teamLeaders: 0
   };
-
-  const stats = getRoleStats();
+  
+  // Debug role statistics
+  console.log('🔍 Current role stats:', roleStats);
+  console.log('🔍 Stats object:', stats);
 
   if (loading) {
     return (
@@ -374,7 +479,7 @@ const AdminDashboard: React.FC = () => {
     <LayoutWithSidebar>
       <Box>
         {/* Header */}
-        <Box sx={{ mb: 4, px: { xs: 1, sm: 0 } }}>
+        <Box sx={{ mb: 4 }}>
           <Typography variant="h3" component="h1" sx={{ 
             fontWeight: 700, 
             mb: 1,
@@ -390,13 +495,13 @@ const AdminDashboard: React.FC = () => {
         </Box>
 
         {error && (
-          <Alert severity="error" sx={{ mb: 3, borderRadius: 2, mx: { xs: 1, sm: 0 } }} onClose={() => setError('')}>
+          <Alert severity="error" sx={{ mb: 3, borderRadius: 2 }} onClose={() => setError('')}>
             {error}
           </Alert>
         )}
 
         {successMessage && (
-          <Alert severity="success" sx={{ mb: 3, borderRadius: 2, mx: { xs: 1, sm: 0 } }} onClose={() => setSuccessMessage('')}>
+          <Alert severity="success" sx={{ mb: 3, borderRadius: 2 }} onClose={() => setSuccessMessage('')}>
             {successMessage}
           </Alert>
         )}
@@ -404,10 +509,10 @@ const AdminDashboard: React.FC = () => {
         {/* Statistics Cards */}
         <Box sx={{ 
           display: 'grid', 
-          gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', lg: 'repeat(4, 1fr)' },
+          gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(3, 1fr)', lg: 'repeat(5, 1fr)' },
           gap: { xs: 2, sm: 3 }, 
           mb: 4,
-          px: { xs: 1, sm: 0 }
+          justifyContent: 'center'
         }}>
           <Card sx={{ 
             height: '100%',
@@ -423,7 +528,7 @@ const AdminDashboard: React.FC = () => {
                     Total Users
                   </Typography>
                   <Typography variant="h3" sx={{ fontWeight: 700, fontSize: { xs: '1.5rem', sm: '2rem' } }}>
-                    {users.length}
+                    {loading ? '...' : totalUsers}
                   </Typography>
                 </Box>
                 <IconButton sx={{ color: 'white', opacity: 0.8, p: { xs: 0.5, sm: 1 } }}>
@@ -465,7 +570,7 @@ const AdminDashboard: React.FC = () => {
                     Active Cases
                   </Typography>
                   <Typography variant="h3" sx={{ fontWeight: 700, fontSize: { xs: '1.5rem', sm: '2rem' } }}>
-                    23
+                    {loading ? '...' : stats.activeCases}
                   </Typography>
                 </Box>
                 <IconButton sx={{ color: 'white', opacity: 0.8, p: { xs: 0.5, sm: 1 } }}>
@@ -495,7 +600,7 @@ const AdminDashboard: React.FC = () => {
 
           <Card sx={{ 
             height: '100%',
-            background: 'linear-gradient(135deg, #FF8C00 0%, #FFA500 100%)',
+            background: 'linear-gradient(135deg, #32CD32 0%, #7CFC00 100%)',
             color: 'white',
             position: 'relative',
             overflow: 'hidden',
@@ -504,10 +609,10 @@ const AdminDashboard: React.FC = () => {
               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
                 <Box>
                   <Typography variant="body2" sx={{ opacity: 0.9, mb: 1, fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>
-                    Assessments
+                    Closed Cases
                   </Typography>
                   <Typography variant="h3" sx={{ fontWeight: 700, fontSize: { xs: '1.5rem', sm: '2rem' } }}>
-                    45
+                    {loading ? '...' : stats.closedCases}
                   </Typography>
                 </Box>
                 <IconButton sx={{ color: 'white', opacity: 0.8, p: { xs: 0.5, sm: 1 } }}>
@@ -515,9 +620,9 @@ const AdminDashboard: React.FC = () => {
                 </IconButton>
               </Box>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Assessment sx={{ fontSize: { xs: 16, sm: 20 } }} />
+                <Assignment sx={{ fontSize: { xs: 16, sm: 20 } }} />
                 <Typography variant="body2" sx={{ opacity: 0.9, fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>
-                  This month
+                  Successfully Resolved
                 </Typography>
               </Box>
             </CardContent>
@@ -549,7 +654,7 @@ const AdminDashboard: React.FC = () => {
                     Avg Resolution
                   </Typography>
                   <Typography variant="h3" sx={{ fontWeight: 700, fontSize: { xs: '1.5rem', sm: '2rem' } }}>
-                    12.5
+                    {loading ? '...' : stats.avgResolution}
                   </Typography>
                 </Box>
                 <IconButton sx={{ color: 'white', opacity: 0.8, p: { xs: 0.5, sm: 1 } }}>
@@ -576,6 +681,48 @@ const AdminDashboard: React.FC = () => {
               }}
             />
           </Card>
+
+          <Card sx={{ 
+            height: '100%',
+            background: 'linear-gradient(135deg, #FF8C00 0%, #FFA500 100%)',
+            color: 'white',
+            position: 'relative',
+            overflow: 'hidden',
+          }}>
+            <CardContent sx={{ position: 'relative', zIndex: 2, p: { xs: 2, sm: 3 } }}>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
+                <Box>
+                  <Typography variant="body2" sx={{ opacity: 0.9, mb: 1, fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>
+                    Team Leaders
+                  </Typography>
+                  <Typography variant="h3" sx={{ fontWeight: 700, fontSize: { xs: '1.5rem', sm: '2rem' } }}>
+                    {loading ? '...' : roleStats.teamLeaders}
+                  </Typography>
+                </Box>
+                <IconButton sx={{ color: 'white', opacity: 0.8, p: { xs: 0.5, sm: 1 } }}>
+                  <MoreVert sx={{ fontSize: { xs: 16, sm: 20 } }} />
+                </IconButton>
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Group sx={{ fontSize: { xs: 16, sm: 20 } }} />
+                <Typography variant="body2" sx={{ opacity: 0.9, fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>
+                  Managing Teams
+                </Typography>
+              </Box>
+            </CardContent>
+            <Box
+              sx={{
+                position: 'absolute',
+                top: -20,
+                right: -20,
+                width: { xs: 60, sm: 80 },
+                height: { xs: 60, sm: 80 },
+                borderRadius: '50%',
+                background: 'rgba(255,255,255,0.1)',
+                zIndex: 1,
+              }}
+            />
+          </Card>
         </Box>
 
         {/* Quick Actions */}
@@ -583,7 +730,7 @@ const AdminDashboard: React.FC = () => {
           display: 'grid', 
           gridTemplateColumns: { xs: '1fr', lg: '2fr 1fr' },
           gap: { xs: 2, sm: 3 },
-          px: { xs: 1, sm: 0 }
+          mb: 3
         }}>
           <Card sx={{ height: '100%' }}>
             <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
@@ -630,22 +777,22 @@ const AdminDashboard: React.FC = () => {
                 }}>
                   <Box sx={{ textAlign: 'center', p: { xs: 1.5, sm: 2 }, backgroundColor: 'rgba(123, 104, 238, 0.05)', borderRadius: 2 }}>
                     <Group sx={{ fontSize: { xs: 24, sm: 32 }, color: '#7B68EE', mb: 1 }} />
-                    <Typography variant="h6" sx={{ fontWeight: 600, fontSize: { xs: '1rem', sm: '1.25rem' } }}>{stats.clinicians}</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 600, fontSize: { xs: '1rem', sm: '1.25rem' } }}>{roleStats.clinicians}</Typography>
                     <Typography variant="body2" color="text.secondary" sx={{ fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>Clinicians</Typography>
                   </Box>
                   <Box sx={{ textAlign: 'center', p: { xs: 1.5, sm: 2 }, backgroundColor: 'rgba(32, 178, 170, 0.05)', borderRadius: 2 }}>
                     <LocalHospital sx={{ fontSize: { xs: 24, sm: 32 }, color: '#20B2AA', mb: 1 }} />
-                    <Typography variant="h6" sx={{ fontWeight: 600, fontSize: { xs: '1rem', sm: '1.25rem' } }}>{stats.workers}</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 600, fontSize: { xs: '1rem', sm: '1.25rem' } }}>{roleStats.workers}</Typography>
                     <Typography variant="body2" color="text.secondary" sx={{ fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>Workers</Typography>
                   </Box>
                   <Box sx={{ textAlign: 'center', p: { xs: 1.5, sm: 2 }, backgroundColor: 'rgba(255, 140, 0, 0.05)', borderRadius: 2 }}>
                     <Assignment sx={{ fontSize: { xs: 24, sm: 32 }, color: '#FF8C00', mb: 1 }} />
-                    <Typography variant="h6" sx={{ fontWeight: 600, fontSize: { xs: '1rem', sm: '1.25rem' } }}>{stats.managers}</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 600, fontSize: { xs: '1rem', sm: '1.25rem' } }}>{roleStats.managers}</Typography>
                     <Typography variant="body2" color="text.secondary" sx={{ fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>Managers</Typography>
                   </Box>
                   <Box sx={{ textAlign: 'center', p: { xs: 1.5, sm: 2 }, backgroundColor: 'rgba(255, 107, 107, 0.05)', borderRadius: 2 }}>
                     <Schedule sx={{ fontSize: { xs: 24, sm: 32 }, color: '#FF6B6B', mb: 1 }} />
-                    <Typography variant="h6" sx={{ fontWeight: 600, fontSize: { xs: '1rem', sm: '1.25rem' } }}>{stats.supervisors}</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 600, fontSize: { xs: '1rem', sm: '1.25rem' } }}>{roleStats.supervisors}</Typography>
                     <Typography variant="body2" color="text.secondary" sx={{ fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>Supervisors</Typography>
                   </Box>
                 </Box>
@@ -659,40 +806,72 @@ const AdminDashboard: React.FC = () => {
                 mb: 3,
                 fontSize: { xs: '1.25rem', sm: '1.5rem' }
               }}>
-                System Overview
+                Quick Insights
               </Typography>
                 
+                {/* Team Performance */}
                 <Box sx={{ mb: 3 }}>
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                    <Typography variant="body2" sx={{ fontSize: { xs: '0.875rem', sm: '1rem' } }}>System Health</Typography>
-                    <Typography variant="body2" sx={{ fontWeight: 600, fontSize: { xs: '0.875rem', sm: '1rem' } }}>98%</Typography>
+                    <Typography variant="body2" sx={{ fontSize: { xs: '0.875rem', sm: '1rem' } }}>Team Performance</Typography>
+                    <Typography variant="body2" sx={{ fontWeight: 600, fontSize: { xs: '0.875rem', sm: '1rem' } }}>
+                      {loading ? '...' : `${roleStats.teamLeaders} Teams Active`}
+                    </Typography>
                   </Box>
                   <Box sx={{ width: '100%', height: { xs: 6, sm: 8 }, backgroundColor: 'rgba(0,0,0,0.1)', borderRadius: 4, overflow: 'hidden' }}>
-                    <Box sx={{ width: '98%', height: '100%', background: 'linear-gradient(90deg, #7B68EE 0%, #20B2AA 100%)', borderRadius: 4 }} />
+                    <Box sx={{ 
+                      width: `${loading ? 0 : Math.min((roleStats.teamLeaders || 0) * 15, 100)}%`, 
+                      height: '100%', 
+                      background: 'linear-gradient(90deg, #7B68EE 0%, #20B2AA 100%)', 
+                      borderRadius: 4 
+                    }} />
                   </Box>
                 </Box>
 
+                {/* Case Resolution Rate */}
                 <Box sx={{ mb: 3 }}>
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                    <Typography variant="body2" sx={{ fontSize: { xs: '0.875rem', sm: '1rem' } }}>Storage Used</Typography>
-                    <Typography variant="body2" sx={{ fontWeight: 600, fontSize: { xs: '0.875rem', sm: '1rem' } }}>2.4GB</Typography>
+                    <Typography variant="body2" sx={{ fontSize: { xs: '0.875rem', sm: '1rem' } }}>Resolution Rate</Typography>
+                    <Typography variant="body2" sx={{ fontWeight: 600, fontSize: { xs: '0.875rem', sm: '1rem' } }}>
+                      {loading ? '...' : `${stats.avgResolution || 0} days avg`}
+                    </Typography>
                   </Box>
                   <Box sx={{ width: '100%', height: { xs: 6, sm: 8 }, backgroundColor: 'rgba(0,0,0,0.1)', borderRadius: 4, overflow: 'hidden' }}>
-                    <Box sx={{ width: '60%', height: '100%', background: 'linear-gradient(90deg, #FF8C00 0%, #FFA500 100%)', borderRadius: 4 }} />
+                    <Box sx={{ 
+                      width: `${loading ? 0 : Math.min((stats.avgResolution || 0) * 2, 100)}%`, 
+                      height: '100%', 
+                      background: 'linear-gradient(90deg, #32CD32 0%, #7CFC00 100%)', 
+                      borderRadius: 4 
+                    }} />
                   </Box>
                 </Box>
 
+                {/* Status Indicators */}
                 <Box sx={{ display: 'flex', gap: { xs: 0.5, sm: 1 }, flexWrap: 'wrap' }}>
-                  <Chip label="Online" color="success" size="small" sx={{ fontSize: { xs: '0.75rem', sm: '0.875rem' } }} />
-                  <Chip label="Secure" color="info" size="small" sx={{ fontSize: { xs: '0.75rem', sm: '0.875rem' } }} />
-                  <Chip label="Updated" color="primary" size="small" sx={{ fontSize: { xs: '0.75rem', sm: '0.875rem' } }} />
+                  <Chip 
+                    label={`${stats.activeCases || 0} Active Cases`} 
+                    color="warning" 
+                    size="small" 
+                    sx={{ fontSize: { xs: '0.75rem', sm: '0.875rem' } }} 
+                  />
+                  <Chip 
+                    label={`${stats.closedCases || 0} Completed`} 
+                    color="success" 
+                    size="small" 
+                    sx={{ fontSize: { xs: '0.75rem', sm: '0.875rem' } }} 
+                  />
+                  <Chip 
+                    label={`${roleStats.clinicians} Clinicians`} 
+                    color="info" 
+                    size="small" 
+                    sx={{ fontSize: { xs: '0.75rem', sm: '0.875rem' } }} 
+                  />
                 </Box>
               </CardContent>
             </Card>
         </Box>
 
         {/* Users Table */}
-        <Card sx={{ mt: 3, mx: { xs: 1, sm: 0 } }}>
+        <Card sx={{ mt: 3 }}>
           <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
             <Typography variant="h6" gutterBottom sx={{ 
               fontSize: { xs: '1.1rem', sm: '1.25rem' }

@@ -150,8 +150,6 @@ export interface RehabPlan {
     sets: number;
     reps: number;
     completed: boolean;
-    painLevel?: number;
-    painNotes?: string;
   }>;
   startDate: string;
   endDate: string | null;
@@ -160,6 +158,17 @@ export interface RehabPlan {
     completedDays?: number;
     totalDays?: number;
   };
+  dailyCompletions?: Array<{
+    date: string;
+    exercises: Array<{
+      exerciseId: string;
+      exerciseName: string;
+      completedAt: string;
+      painLevel?: number;
+      painNotes?: string;
+      status: string;
+    }>;
+  }>;
 }
 
 interface DashboardStats {
@@ -343,8 +352,12 @@ const ClinicianDashboardRedux: React.FC = memo(() => {
       const plans = (data || []).map(plan => {
         try {
           // Safe array access with type checking
+          // Get completed days from progress_stats or calculate from daily_completions
           const dailyCompletions = Array.isArray(plan.daily_completions) ? plan.daily_completions : [];
-          const completedDays = dailyCompletions.filter((dc: any) => {
+          const completedDaysFromStats = plan.progress_stats?.completedDays || 0;
+          
+          // Calculate completed days from daily_completions as backup
+          const completedDaysFromCompletions = dailyCompletions.filter((dc: any) => {
             if (!dc || typeof dc !== 'object') return false;
             
             const dayExercises = Array.isArray(dc.exercises) ? dc.exercises : [];
@@ -358,19 +371,41 @@ const ClinicianDashboardRedux: React.FC = memo(() => {
             
             return completedExercises === totalExercises;
           }).length;
+
+          // Use the larger value between stats and calculated completions
+          const completedDays = Math.max(completedDaysFromStats, completedDaysFromCompletions);
           
           const duration = Math.max(1, plan.duration || 7); // Ensure minimum duration of 1
           const progressPercentage = duration > 0 ? Math.min(100, Math.round((completedDays / duration) * 100)) : 0;
+          
+          console.log('Progress calculation:', {
+            planId: plan.id,
+            completedDaysFromStats,
+            completedDaysFromCompletions,
+            completedDays,
+            duration,
+            progressPercentage
+          });
+
+          // Ensure progress_stats has correct values
+          const updatedProgressStats = {
+            ...(plan.progress_stats || {}),
+            completedDays: completedDays,
+            totalDays: duration,
+            skippedDays: 0,
+            consecutiveCompletedDays: completedDays,
+            consecutiveSkippedDays: 0
+          };
 
           return {
             _id: plan.id,
             planName: sanitizeInput(plan.plan_name || ''),
             status: plan.status,
             duration,
-            worker_id: plan.worker_id, // Include worker_id from rehabilitation_plans table
+            worker_id: plan.worker_id,
             startDate: plan.start_date,
             endDate: plan.end_date || null,
-            progress: progressPercentage,
+            progress: progressPercentage, // Use calculated percentage
             case: plan.case ? {
               _id: plan.case.id,
               caseNumber: sanitizeInput(plan.case.case_number || ''),
@@ -381,26 +416,18 @@ const ClinicianDashboardRedux: React.FC = memo(() => {
                 lastName: sanitizeInput(plan.case.worker.last_name || '')
               } : undefined
             } : undefined,
-            exercises: Array.isArray(plan.exercises) ? plan.exercises.map((exercise: any, index: number) => {
-              // Get today's completion data for this exercise
-              const today = new Date().toISOString().split('T')[0];
-              const todayCompletion = dailyCompletions.find((dc: any) => dc.date === today);
-              const exerciseCompletion = todayCompletion?.exercises?.find((e: any) => e.exerciseId === `${plan.id}-ex-${index}`);
-              
-              return {
-                name: exercise.name || '',
-                sets: exercise.sets || 1,
-                reps: exercise.reps || 10,
-                completed: exerciseCompletion?.status === 'completed' || false,
-                painLevel: exerciseCompletion?.painLevel,
-                painNotes: exerciseCompletion?.painNotes
-              };
-            }) : [],
+            exercises: Array.isArray(plan.exercises) ? plan.exercises.map((exercise: any) => ({
+              name: exercise.name || '',
+              sets: exercise.sets || 1,
+              reps: exercise.reps || 10,
+              completed: false // Simplified - we don't need individual exercise completion status here
+            })) : [],
             progressStats: {
               completedDays,
               totalDays: duration,
               ...(plan.progress_stats || {})
-            }
+            },
+            dailyCompletions: dailyCompletions // Include all daily completion records
           };
         } catch (planError) {
           console.error('Error processing individual plan:', planError);
@@ -729,24 +756,91 @@ const ClinicianDashboardRedux: React.FC = memo(() => {
         return;
       }
 
-      // Prepare exercises data with sanitization
+      // Get current plan data first to preserve all important fields
+      const { data: currentPlan, error: fetchError } = await dataClient
+        .from('rehabilitation_plans')
+        .select(`
+          *,
+          case:cases!case_id(
+            id,
+            case_number,
+            status,
+            worker:users!worker_id(id, first_name, last_name)
+          )
+        `)
+        .eq('id', selectedPlan._id)
+        .single();
+
+      if (fetchError) {
+        console.error('Error fetching current plan:', fetchError);
+        throw fetchError;
+      }
+
+      // Get current exercises to preserve completion status
+      const currentExercises = currentPlan.exercises || [];
+      
+      // Prepare exercises data while preserving completion status
       const exercisesData = planForm.exercises
         .filter(ex => ex.name && ex.name.trim().length > 0)
-        .map((ex, index) => ({
-          name: sanitizeInput(ex.name.trim()),
-          repetitions: sanitizeInput(ex.repetitions || '10 reps'),
-          instructions: sanitizeInput(ex.instructions || ''),
-          videoUrl: ex.videoUrl ? sanitizeInput(ex.videoUrl.trim()) : '',
-          order: index
-        }));
+        .map((ex, index) => {
+          // Try to find matching exercise from current plan to preserve its status
+          const matchingExercise = currentExercises[index];
+          
+          return {
+            name: sanitizeInput(ex.name.trim()),
+            repetitions: sanitizeInput(ex.repetitions || '10 reps'),
+            instructions: sanitizeInput(ex.instructions || ''),
+            videoUrl: ex.videoUrl ? sanitizeInput(ex.videoUrl.trim()) : '',
+            order: index,
+            // Preserve completion status if exercise exists
+            completed: matchingExercise?.completed || false,
+            completedAt: matchingExercise?.completedAt || null,
+            // Preserve any pain/feedback data
+            painLevel: matchingExercise?.painLevel,
+            painNotes: matchingExercise?.painNotes,
+            // Preserve status for daily tracking
+            status: matchingExercise?.status || 'pending',
+            // Lock completed exercises
+            locked: matchingExercise?.status === 'completed' || false
+          };
+        });
 
-      // Update rehabilitation plan in Supabase
+      // Calculate proper progress percentage based on completed days
+      const completedDays = currentPlan.progress_stats?.completedDays || 0;
+      const totalDays = Math.min(Math.max(planForm.duration || 7, 1), 365);
+      const progressPercentage = Math.round((completedDays / totalDays) * 100);
+
+      // Update rehabilitation plan in Supabase while preserving all progress and state
       const { error } = await dataClient
         .from('rehabilitation_plans')
         .update({
           plan_name: sanitizeInput(planForm.planName.trim()),
           exercises: exercisesData,
-          duration: Math.min(Math.max(planForm.duration || 7, 1), 365) // Clamp between 1-365 days
+          duration: totalDays,
+          // Preserve and update progress data
+          progress_stats: {
+            ...currentPlan.progress_stats,
+            totalDays: totalDays,
+            completedDays: completedDays
+          },
+          // Preserve daily completions with locked status for completed days
+          daily_completions: (currentPlan.daily_completions || []).map((dc: any) => ({
+            ...dc,
+            // Mark completed days as locked to prevent re-enabling
+            locked: dc.exercises?.every((e: any) => e.status === 'completed') || false,
+            exercises: dc.exercises?.map((e: any) => ({
+              ...e,
+              // Keep exercise locked if it was completed
+              locked: e.status === 'completed' || false
+            }))
+          })),
+          start_date: currentPlan.start_date,
+          status: currentPlan.status,
+          case_id: currentPlan.case_id,
+          worker_id: currentPlan.worker_id,
+          clinician_id: currentPlan.clinician_id,
+          // Update progress percentage
+          progress: progressPercentage
         })
         .eq('id', selectedPlan._id);
 
@@ -976,6 +1070,64 @@ const ClinicianDashboardRedux: React.FC = memo(() => {
     setSelectedPlan(plan);
     setProgressDialog(true);
   }, []);
+
+  // Memoized progress timeline calculation for better performance
+  const progressTimelineData = useMemo(() => {
+    if (!selectedPlan) return [];
+    
+    const dailyCompletions = selectedPlan?.dailyCompletions || [];
+    const totalDays = selectedPlan.progressStats?.totalDays || selectedPlan.duration || 7;
+    const completedDays = selectedPlan.progressStats?.completedDays || 0;
+    
+    const timelineEntries = [];
+    
+    // Add completed days with actual data
+    dailyCompletions.forEach((completion: any, index: number) => {
+      const dayNumber = index + 1;
+      const completionDate = completion.date ? new Date(completion.date).toLocaleDateString() : `Day ${dayNumber}`;
+      
+      // Calculate pain statistics for this day
+      const dayExercises = completion.exercises || [];
+      const exercisesWithPain = dayExercises.filter((e: any) => e.painLevel !== null && e.painLevel !== undefined);
+      const painLevels = exercisesWithPain.map((e: any) => e.painLevel);
+      const averagePain = painLevels.length > 0 ? 
+        Math.round((painLevels.reduce((sum, level) => sum + level, 0) / painLevels.length) * 10) / 10 : 0;
+      const maxPain = painLevels.length > 0 ? Math.max(...painLevels) : 0;
+      const minPain = painLevels.length > 0 ? Math.min(...painLevels) : 0;
+      
+      timelineEntries.push({
+        dayNumber,
+        date: completionDate,
+        isCompleted: true,
+        isCurrent: false,
+        painData: {
+          average: averagePain,
+          min: minPain,
+          max: maxPain,
+          exerciseCount: exercisesWithPain.length,
+          hasData: painLevels.length > 0
+        },
+        exercises: dayExercises
+      });
+    });
+    
+    // Add remaining days (pending/current)
+    for (let i = completedDays; i < totalDays; i++) {
+      const dayNumber = i + 1;
+      const isCurrent = dayNumber === completedDays + 1;
+      
+      timelineEntries.push({
+        dayNumber,
+        date: `Day ${dayNumber}`,
+        isCompleted: false,
+        isCurrent,
+        painData: null,
+        exercises: []
+      });
+    }
+    
+    return timelineEntries;
+  }, [selectedPlan]);
 
   const handleNavigateToTasks = useCallback(() => {
     navigate('/clinician/tasks');
@@ -1440,71 +1592,6 @@ const ClinicianDashboardRedux: React.FC = memo(() => {
           </CardContent>
         </Card>
 
-                <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>
-                  Daily Progress & Pain Ratings
-                </Typography>
-                
-                {/* Daily Progress Timeline */}
-                {selectedPlan.progressStats && (
-                  <Card sx={{ mb: 3, bgcolor: '#f8fafc' }}>
-                    <CardContent>
-                      <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2 }}>
-                        📊 Progress Timeline
-                      </Typography>
-                      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                        {/* Calculate pain statistics */}
-                        {(() => {
-                          const completedExercises = selectedPlan.exercises.filter(ex => ex.completed);
-                          const painLevels = completedExercises.map(ex => ex.painLevel).filter(level => level !== undefined);
-                          const averagePain = painLevels.length > 0 ? 
-                            Math.round((painLevels.reduce((sum, level) => sum + level!, 0) / painLevels.length) * 10) / 10 : 0;
-                          const maxPain = painLevels.length > 0 ? Math.max(...painLevels) : 0;
-                          const minPain = painLevels.length > 0 ? Math.min(...painLevels) : 0;
-                          
-                          return (
-                            <Box sx={{ 
-                              p: 2, 
-                              bgcolor: averagePain <= 3 ? '#f0fdf4' : averagePain <= 6 ? '#fef3c7' : '#fef2f2', 
-                              borderRadius: 2, 
-                              border: `1px solid ${averagePain <= 3 ? '#bbf7d0' : averagePain <= 6 ? '#fde68a' : '#fecaca'}` 
-                            }}>
-                              <Typography variant="body2" sx={{ 
-                                fontWeight: 600, 
-                                color: averagePain <= 3 ? '#166534' : averagePain <= 6 ? '#92400e' : '#991b1b'
-                              }}>
-                                Today's Pain Assessment
-                                <Typography component="span" sx={{ 
-                                  fontSize: '0.75rem', 
-                                  fontWeight: 500, 
-                                  color: averagePain <= 3 ? '#15803d' : averagePain <= 6 ? '#b45309' : '#dc2626',
-                                  ml: 1
-                                }}>
-                                  (Day {selectedPlan.progressStats?.completedDays || 0})
-                                </Typography>
-                              </Typography>
-                              <Typography variant="caption" sx={{ 
-                                color: averagePain <= 3 ? '#15803d' : averagePain <= 6 ? '#b45309' : '#dc2626',
-                                display: 'block',
-                                mt: 0.5
-                              }}>
-                                {completedExercises.length > 0 ? (
-                                  <>
-                                    Average: {averagePain}/10 • Range: {minPain}-{maxPain}/10 • 
-                                    {averagePain <= 3 ? ' Excellent progress!' : 
-                                     averagePain <= 6 ? ' Manageable pain levels' : 
-                                     ' Monitor closely - high pain levels'}
-                                  </>
-                                ) : (
-                                  'No exercises completed today'
-                                )}
-                              </Typography>
-                            </Box>
-                          );
-                        })()}
-                      </Box>
-                    </CardContent>
-                  </Card>
-                )}
 
                 {/* Daily Progress Timeline */}
                 <Card sx={{ mb: 3, bgcolor: '#f8fafc' }}>
@@ -1513,50 +1600,58 @@ const ClinicianDashboardRedux: React.FC = memo(() => {
                       📅 Daily Progress Timeline
                     </Typography>
                     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                      {Array.from({ length: selectedPlan.progressStats?.totalDays || selectedPlan.duration || 7 }, (_, index) => {
-                        const dayNumber = index + 1;
-                        const isCompleted = dayNumber <= (selectedPlan.progressStats?.completedDays || 0);
-                        const isCurrent = dayNumber === (selectedPlan.progressStats?.completedDays || 0) + 1;
-                        
-                        return (
-                          <Box key={dayNumber} sx={{ 
+                      {progressTimelineData.map((entry) => (
+                        <Box key={entry.dayNumber} sx={{ 
+                          display: 'flex', 
+                          alignItems: 'center', 
+                          gap: 2, 
+                          p: 1.5,
+                          borderRadius: 1,
+                          bgcolor: entry.isCompleted ? '#f0fdf4' : entry.isCurrent ? '#fef3c7' : '#f8fafc',
+                          border: `1px solid ${entry.isCompleted ? '#bbf7d0' : entry.isCurrent ? '#fde68a' : '#e2e8f0'}`
+                        }}>
+                          <Box sx={{ 
+                            width: 24, 
+                            height: 24, 
+                            borderRadius: '50%', 
                             display: 'flex', 
                             alignItems: 'center', 
-                            gap: 2, 
-                            p: 1.5,
-                            borderRadius: 1,
-                            bgcolor: isCompleted ? '#f0fdf4' : isCurrent ? '#fef3c7' : '#f8fafc',
-                            border: `1px solid ${isCompleted ? '#bbf7d0' : isCurrent ? '#fde68a' : '#e2e8f0'}`
+                            justifyContent: 'center',
+                            bgcolor: entry.isCompleted ? '#10b981' : entry.isCurrent ? '#f59e0b' : '#e5e7eb',
+                            color: 'white',
+                            fontSize: '0.75rem',
+                            fontWeight: 600
                           }}>
-                            <Box sx={{ 
-                              width: 24, 
-                              height: 24, 
-                              borderRadius: '50%', 
-                              display: 'flex', 
-                              alignItems: 'center', 
-                              justifyContent: 'center',
-                              bgcolor: isCompleted ? '#10b981' : isCurrent ? '#f59e0b' : '#e5e7eb',
-                              color: 'white',
-                              fontSize: '0.75rem',
-                              fontWeight: 600
-                            }}>
-                              {isCompleted ? '✓' : dayNumber}
-                            </Box>
-                            <Typography variant="body2" sx={{ 
-                              fontWeight: isCurrent ? 600 : 500,
-                              color: isCompleted ? '#166534' : isCurrent ? '#92400e' : '#6b7280'
-                            }}>
-                              Day {dayNumber}
-                            </Typography>
-                            <Typography variant="caption" sx={{ 
-                              color: isCompleted ? '#15803d' : isCurrent ? '#b45309' : '#9ca3af',
-                              ml: 'auto'
-                            }}>
-                              {isCompleted ? 'Completed' : isCurrent ? 'Current' : 'Pending'}
-                            </Typography>
+                            {entry.isCompleted ? '✓' : entry.dayNumber}
                           </Box>
-                        );
-                      })}
+                          <Box sx={{ flex: 1 }}>
+                            <Typography variant="body2" sx={{ 
+                              fontWeight: entry.isCurrent ? 600 : 500,
+                              color: entry.isCompleted ? '#166534' : entry.isCurrent ? '#92400e' : '#6b7280'
+                            }}>
+                              {entry.date}
+                            </Typography>
+                            {entry.painData && entry.painData.hasData && (
+                              <Typography variant="caption" sx={{ 
+                                color: entry.painData.average <= 3 ? '#15803d' : 
+                                       entry.painData.average <= 6 ? '#b45309' : '#dc2626',
+                                display: 'block',
+                                mt: 0.5
+                              }}>
+                                Pain: {entry.painData.average}/10 
+                                {entry.painData.min !== entry.painData.max && ` (${entry.painData.min}-${entry.painData.max})`}
+                                • {entry.painData.exerciseCount} exercise{entry.painData.exerciseCount !== 1 ? 's' : ''}
+                              </Typography>
+                            )}
+                          </Box>
+                          <Typography variant="caption" sx={{ 
+                            color: entry.isCompleted ? '#15803d' : entry.isCurrent ? '#b45309' : '#9ca3af',
+                            fontWeight: 500
+                          }}>
+                            {entry.isCompleted ? 'Completed' : entry.isCurrent ? 'Current' : 'Pending'}
+                          </Typography>
+                        </Box>
+                      ))}
                     </Box>
                   </CardContent>
                 </Card>
@@ -1583,51 +1678,11 @@ const ClinicianDashboardRedux: React.FC = memo(() => {
                                   icon={<CheckCircle />}
                                 />
                               )}
-                              {/* Pain Rating Display */}
-                              {exercise.completed && exercise.painLevel !== undefined && (
-                                <Chip
-                                  label={`Pain: ${exercise.painLevel}/10`}
-                                  size="small"
-                                  color={
-                                    exercise.painLevel <= 3 ? 'success' : 
-                                    exercise.painLevel <= 6 ? 'warning' : 
-                                    'error'
-                                  }
-                                  sx={{ 
-                                    fontWeight: 600,
-                                    '& .MuiChip-label': {
-                                      fontSize: '0.75rem'
-                                    }
-                                  }}
-                                />
-                              )}
                             </Box>
                           </Box>
                           <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
                             Sets: {exercise.sets || 'N/A'} | Reps: {exercise.reps || 'N/A'}
                           </Typography>
-                          {/* Pain Notes Display */}
-                          {exercise.completed && exercise.painNotes && (
-                            <Box sx={{ 
-                              mt: 1, 
-                              p: 1.5, 
-                              bgcolor: '#f8fafc', 
-                              borderRadius: 1, 
-                              border: '1px solid #e2e8f0' 
-                            }}>
-                              <Typography variant="caption" sx={{ 
-                                fontWeight: 600, 
-                                color: '#64748b',
-                                display: 'block',
-                                mb: 0.5
-                              }}>
-                                💬 Pain Notes:
-                              </Typography>
-                              <Typography variant="body2" sx={{ color: '#374151' }}>
-                                {exercise.painNotes}
-                              </Typography>
-                            </Box>
-                          )}
                         </CardContent>
                       </Card>
                     ))}

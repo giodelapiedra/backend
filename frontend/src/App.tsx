@@ -14,7 +14,7 @@ import './styles/modern-dashboard.css';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import AdminDashboard from './pages/admin/AdminDashboard';
-import EnhancedAnalytics from './pages/admin/Analytics';
+import AdminAnalytics from './pages/admin/AdminAnalytics';
 import AuthenticationLogs from './pages/admin/AuthenticationLogs';
 import Users from './pages/admin/Users';
 import WorkerDashboardRedux from './pages/worker/WorkerDashboardRedux';
@@ -230,7 +230,7 @@ function App() {
             
             <Route path="/admin/analytics" element={
               <ProtectedRoute allowedRoles={['admin']}>
-                <EnhancedAnalytics />
+                <AdminAnalytics />
               </ProtectedRoute>
             } />
             

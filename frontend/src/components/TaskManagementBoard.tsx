@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -25,6 +25,8 @@ import {
   Select,
   MenuItem,
   Pagination,
+  Skeleton,
+  Alert,
 } from '@mui/material';
 import {
   Add,
@@ -39,7 +41,6 @@ import {
   ArrowUpward,
   ArrowDownward,
   Person as PersonIcon,
-  Refresh,
 } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext.supabase';
 import { dataClient } from '../lib/supabase';
@@ -171,7 +172,146 @@ interface CaseDetails {
   }>;
 }
 
-const TASKS_PER_PAGE = 8; // Number of tasks to show per column per page
+// Memoized TaskCard component for better performance
+const TaskCard = React.memo(({ 
+  task, 
+  onViewCase, 
+  getPriorityColor, 
+  user 
+}: { 
+  task: TaskProps; 
+  onViewCase: (id: string) => void; 
+  getPriorityColor: (priority: string) => string;
+  user: any;
+}) => (
+  <Card 
+    sx={{ 
+      borderRadius: '10px', 
+      boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
+      '&:hover': {
+        boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+        transform: 'translateY(-2px)',
+        cursor: 'pointer',
+      },
+      transition: 'all 0.2s ease',
+    }}
+    onClick={() => onViewCase(task._id)}
+  >
+    <CardContent sx={{ p: 2 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+        <Chip 
+          label={task.priority} 
+          size="small" 
+          sx={{ 
+            backgroundColor: getPriorityColor(task.priority),
+            color: 'white',
+            fontWeight: 600,
+            fontSize: '0.7rem',
+            height: '24px',
+          }} 
+        />
+        <IconButton size="small">
+          <MoreVert fontSize="small" />
+        </IconButton>
+      </Box>
+      
+      <Box sx={{ mb: 1 }}>
+        <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 0.5 }}>
+          {task.title}
+        </Typography>
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+          Case #{task.caseNumber}
+        </Typography>
+      </Box>
+
+      <Box sx={{ mb: 2 }}>
+        <Box sx={{ mb: 1 }}>
+          <Typography variant="body2" sx={{ 
+            color: 'primary.main',
+            fontWeight: 500,
+            mb: 0.5,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 0.5
+          }}>
+            <PersonIcon sx={{ fontSize: 16 }} />
+            Worker: {task.assignees[0]?.firstName} {task.assignees[0]?.lastName}
+          </Typography>
+          {user && (
+            <Typography variant="body2" sx={{ 
+              color: '#7B68EE',
+              fontWeight: 500,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 0.5
+            }}>
+              <LocalHospital sx={{ fontSize: 16 }} />
+              Clinician: {user.firstName} {user.lastName}
+            </Typography>
+          )}
+        </Box>
+        <Typography variant="body2" color="text.secondary" sx={{ 
+          height: '40px',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          display: '-webkit-box',
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: 'vertical'
+        }}>
+          {task.description}
+        </Typography>
+      </Box>
+      
+      <Box sx={{ mb: 2 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
+          <Typography variant="caption" color="text.secondary">Progress</Typography>
+          <Typography variant="caption" color="text.secondary">{task.progress}%</Typography>
+        </Box>
+        <LinearProgress 
+          variant="determinate" 
+          value={task.progress} 
+          sx={{ 
+            height: 6, 
+            borderRadius: 3,
+            backgroundColor: 'rgba(123, 104, 238, 0.1)',
+            '& .MuiLinearProgress-bar': {
+              backgroundColor: '#7B68EE',
+            }
+          }} 
+        />
+      </Box>
+      
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <Box sx={{ display: 'flex', gap: 0.5 }}>
+          {task.assignees.map((assignee, index) => (
+            <Tooltip key={assignee._id} title={`${assignee.firstName} ${assignee.lastName}`}>
+              <Avatar 
+                sx={{ 
+                  width: 28, 
+                  height: 28,
+                  fontSize: '0.75rem',
+                  bgcolor: `hsl(${index * 60}, 70%, 60%)`,
+                }}
+              >
+                {assignee.firstName[0]}{assignee.lastName[0]}
+              </Avatar>
+            </Tooltip>
+          ))}
+        </Box>
+        
+        <Typography variant="caption" color="text.secondary">
+          {new Date(task.dueDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+        </Typography>
+      </Box>
+    </CardContent>
+  </Card>
+));
+
+TaskCard.displayName = 'TaskCard';
+
+const TASKS_PER_PAGE = 6; // Reduced for better performance
+const DEBOUNCE_DELAY = 300; // Search debounce delay
+const MAX_TASKS_DISPLAY = 100; // Maximum tasks to display at once
 
 const TaskManagementBoard: React.FC = () => {
   const { user } = useAuth();
@@ -180,7 +320,7 @@ const TaskManagementBoard: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [tasks, setTasks] = useState<TaskProps[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [filteredTasks, setFilteredTasks] = useState<TaskProps[]>([]);
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [selectedCase, setSelectedCase] = useState<CaseDetails | null>(null);
   const [caseDialogOpen, setCaseDialogOpen] = useState(false);
   const [loadingCaseDetails, setLoadingCaseDetails] = useState(false);
@@ -199,9 +339,58 @@ const TaskManagementBoard: React.FC = () => {
     assignee: [] as string[]
   });
 
-  // Sort tasks based on current sort settings
-  const sortTasks = useCallback((tasksToSort: TaskProps[]) => {
-    return [...tasksToSort].sort((a, b) => {
+  // Debounced search effect
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, DEBOUNCE_DELAY);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  // Memoized filtered and sorted tasks for better performance
+  const filteredTasks = useMemo(() => {
+    if (tasks.length === 0) return [];
+    
+    let filtered = tasks;
+    
+    // Apply search filter
+    if (debouncedSearchQuery) {
+      const query = debouncedSearchQuery.toLowerCase();
+      filtered = filtered.filter(task => 
+        task.caseNumber.toLowerCase().includes(query) ||
+        task.title.toLowerCase().includes(query) ||
+        task.description.toLowerCase().includes(query) ||
+        task.assignees.some(assignee => 
+          `${assignee.firstName} ${assignee.lastName}`.toLowerCase().includes(query)
+        )
+      );
+    }
+
+    // Apply priority filter
+    if (filters.priority.length > 0) {
+      filtered = filtered.filter(task => filters.priority.includes(task.priority));
+    }
+
+    // Apply status filter
+    if (filters.status.length > 0) {
+      filtered = filtered.filter(task => filters.status.includes(task.status));
+    }
+
+    // Apply assignee filter
+    if (filters.assignee.length > 0) {
+      filtered = filtered.filter(task => 
+        task.assignees.some(assignee => filters.assignee.includes(assignee._id))
+      );
+    }
+
+    // Limit results for performance
+    if (filtered.length > MAX_TASKS_DISPLAY) {
+      filtered = filtered.slice(0, MAX_TASKS_DISPLAY);
+    }
+
+    // Sort tasks
+    return filtered.sort((a, b) => {
       let comparison = 0;
       
       switch (sortBy) {
@@ -220,18 +409,18 @@ const TaskManagementBoard: React.FC = () => {
       
       return sortOrder === 'asc' ? -comparison : comparison;
     });
-  }, [sortBy, sortOrder]);
+  }, [tasks, debouncedSearchQuery, filters, sortBy, sortOrder]);
 
-  // Get paginated tasks for a specific status
-  const getPaginatedTasks = (status: 'to_do' | 'in_progress' | 'revisions' | 'completed') => {
+  // Memoized paginated tasks for better performance
+  const getPaginatedTasks = useCallback((status: 'to_do' | 'in_progress' | 'revisions' | 'completed') => {
     const statusTasks = filteredTasks.filter(task => task.status === status);
     const startIndex = (currentPage - 1) * TASKS_PER_PAGE;
     const endIndex = startIndex + TASKS_PER_PAGE;
     return statusTasks.slice(startIndex, endIndex);
-  };
+  }, [filteredTasks, currentPage]);
 
-  // Calculate total pages
-  const getTotalPages = () => {
+  // Memoized total pages calculation
+  const totalPages = useMemo(() => {
     const maxTasksInColumn = Math.max(
       filteredTasks.filter(task => task.status === 'to_do').length,
       filteredTasks.filter(task => task.status === 'in_progress').length,
@@ -239,35 +428,7 @@ const TaskManagementBoard: React.FC = () => {
       filteredTasks.filter(task => task.status === 'completed').length
     );
     return Math.ceil(maxTasksInColumn / TASKS_PER_PAGE);
-  };
-
-  // Apply filters and search
-  const applyFilters = useCallback((tasksToFilter: TaskProps[]) => {
-    return tasksToFilter.filter((task) => {
-      // Search filter
-      const matchesSearch = searchQuery === '' || (
-        task.caseNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        task.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        task.description.toLowerCase().includes(searchQuery.toLowerCase())
-      );
-
-      // Priority filter
-      const matchesPriority = filters.priority.length === 0 || 
-        filters.priority.includes(task.priority);
-
-      // Status filter
-      const matchesStatus = filters.status.length === 0 || 
-        filters.status.includes(task.status);
-
-      // Assignee filter
-      const matchesAssignee = filters.assignee.length === 0 || 
-        filters.assignee.some(assigneeId => 
-          task.assignees.some(assignee => assignee._id === assigneeId)
-        );
-
-      return matchesSearch && matchesPriority && matchesStatus && matchesAssignee;
-    });
-  }, [searchQuery, filters]);
+  }, [filteredTasks]);
 
   const fetchAssignedCases = useCallback(async () => {
     try {
@@ -431,13 +592,10 @@ const TaskManagementBoard: React.FC = () => {
     };
   }, [user?.id, fetchAssignedCases]);
 
+  // Reset page when filters change
   useEffect(() => {
-    if (tasks.length > 0) {
-      const filtered = applyFilters(tasks);
-      const sorted = sortTasks(filtered);
-      setFilteredTasks(sorted);
-    }
-  }, [searchQuery, tasks, sortBy, sortOrder, filters, applyFilters, sortTasks]);
+    setCurrentPage(1);
+  }, [debouncedSearchQuery, filters, sortBy, sortOrder]);
 
   const transformCaseToTask = (caseItem: CaseTask): TaskProps => {
     // Map case status to task status
@@ -664,23 +822,77 @@ const TaskManagementBoard: React.FC = () => {
 
   if (loading) {
     return (
-      <Box display="flex" justifyContent="center" alignItems="center" height="50vh">
-        <CircularProgress />
+      <Box sx={{ p: 2, backgroundColor: '#f8fafc', minHeight: '100vh' }}>
+        <Box sx={{ mb: 3 }}>
+          <Skeleton variant="text" width={300} height={40} />
+          <Skeleton variant="text" width={400} height={24} />
+        </Box>
+        
+        <Box sx={{ display: 'flex', gap: 2, mb: 3 }}>
+          <Skeleton variant="rectangular" width={200} height={40} />
+          <Skeleton variant="rectangular" width={200} height={40} />
+          <Skeleton variant="rectangular" width={200} height={40} />
+        </Box>
+        
+        <Grid container spacing={2}>
+          {[1, 2, 3, 4].map((i) => (
+            <Grid item xs={12} sm={6} md={3} key={i}>
+              <Paper elevation={0} sx={{ p: 2, backgroundColor: '#f8fafc', borderRadius: '12px' }}>
+                <Skeleton variant="text" width={100} height={32} sx={{ mb: 2 }} />
+                {[1, 2, 3].map((j) => (
+                  <Card key={j} sx={{ mb: 2, borderRadius: '10px' }}>
+                    <CardContent sx={{ p: 2 }}>
+                      <Skeleton variant="rectangular" width={60} height={24} sx={{ mb: 1 }} />
+                      <Skeleton variant="text" width="80%" height={24} />
+                      <Skeleton variant="text" width="60%" height={16} />
+                      <Skeleton variant="rectangular" width="100%" height={6} sx={{ mt: 1 }} />
+                    </CardContent>
+                  </Card>
+                ))}
+              </Paper>
+            </Grid>
+          ))}
+        </Grid>
       </Box>
     );
   }
 
   if (error) {
-    // Check if it's a "case not found" error
-    if (error.includes('not found') || error.includes('Failed to load case details')) {
-      // Use navigate instead of NotFound component
-      navigate('/not-found');
-      return null;
-    }
-    
     return (
-      <Box p={3}>
-        <Typography color="error">{error}</Typography>
+      <Box sx={{ p: 3, backgroundColor: '#f8fafc', minHeight: '100vh' }}>
+        <Alert 
+          severity="error" 
+          sx={{ mb: 3 }}
+          action={
+            <Button 
+              color="inherit" 
+              size="small" 
+              onClick={() => {
+                setError(null);
+                fetchAssignedCases();
+              }}
+            >
+              Retry
+            </Button>
+          }
+        >
+          {error}
+        </Alert>
+        
+        <Box sx={{ textAlign: 'center', py: 8 }}>
+          <Typography variant="h6" color="text.secondary" sx={{ mb: 2 }}>
+            Unable to load tasks
+          </Typography>
+          <Button 
+            variant="contained" 
+            onClick={() => {
+              setError(null);
+              fetchAssignedCases();
+            }}
+          >
+            Retry
+          </Button>
+        </Box>
       </Box>
     );
   }
@@ -1070,7 +1282,7 @@ const TaskManagementBoard: React.FC = () => {
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', ml: 2 }}>
             <Typography variant="body2" color="text.secondary">Page:</Typography>
             <Pagination 
-              count={getTotalPages()} 
+              count={totalPages} 
               page={currentPage}
               onChange={(e, page) => setCurrentPage(page)}
               size="small"
@@ -1099,43 +1311,37 @@ const TaskManagementBoard: React.FC = () => {
             Filters
           </Button>
           
-          <Button 
-            variant="outlined" 
-            startIcon={<Refresh />}
-            onClick={() => {
-              console.log('Manual refresh triggered');
-              fetchAssignedCases();
-            }}
-            sx={{ 
-              borderRadius: '8px',
-              color: '#7B68EE',
-              borderColor: '#7B68EE',
-              '&:hover': { 
-                borderColor: '#6A5ACD', 
-                backgroundColor: 'rgba(123, 104, 238, 0.04)' 
-              }
-            }}
-          >
-            Refresh
-          </Button>
-          
-          <Button 
-            variant="contained" 
-            startIcon={<Add />}
-            sx={{ 
-              borderRadius: '8px',
-              backgroundColor: '#7B68EE',
-              '&:hover': { backgroundColor: '#6A5ACD' }
-            }}
-          >
-            New Project
-          </Button>
         </Box>
       </Box>
 
       {/* Task Content */}
-      {currentView === 'board' && (
-        <Grid container spacing={2}>
+      {filteredTasks.length === 0 && !loading ? (
+        <Box sx={{ textAlign: 'center', py: 8 }}>
+          <Assignment sx={{ fontSize: 64, color: '#7B68EE', mb: 2 }} />
+          <Typography variant="h5" sx={{ mb: 1, color: '#7B68EE' }}>
+            No Tasks Found
+          </Typography>
+          <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
+            {tasks.length === 0 
+              ? "You don't have any assigned tasks yet." 
+              : "No tasks match your current filters."}
+          </Typography>
+          {tasks.length > 0 && (
+            <Button 
+              variant="outlined" 
+              onClick={() => {
+                setSearchQuery('');
+                setFilters({ priority: [], status: [], assignee: [] });
+              }}
+            >
+              Clear Filters
+            </Button>
+          )}
+        </Box>
+      ) : (
+        <>
+          {currentView === 'board' && (
+            <Grid container spacing={2}>
           {/* Board View */}
         {/* To Do Column */}
         <Grid item xs={12} sm={6} md={3}>
@@ -1158,128 +1364,13 @@ const TaskManagementBoard: React.FC = () => {
             
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
               {getPaginatedTasks('to_do').map((task) => (
-                <Card 
-                  key={task._id} 
-                  sx={{ 
-                    borderRadius: '10px', 
-                    boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
-                    '&:hover': {
-                      boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-                      transform: 'translateY(-2px)',
-                      cursor: 'pointer',
-                    },
-                    transition: 'all 0.2s ease',
-                  }}
-                  onClick={() => handleViewCase(task._id)}
-                >
-                  <CardContent sx={{ p: 2 }}>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-                      <Chip 
-                        label={task.priority} 
-                        size="small" 
-                        sx={{ 
-                          backgroundColor: getPriorityColor(task.priority),
-                          color: 'white',
-                          fontWeight: 600,
-                          fontSize: '0.7rem',
-                          height: '24px',
-                        }} 
-                      />
-                      <IconButton size="small">
-                        <MoreVert fontSize="small" />
-                      </IconButton>
-                    </Box>
-                    
-                    <Box sx={{ mb: 1 }}>
-                      <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 0.5 }}>
-                        {task.title}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                        Case #{task.caseNumber}
-                      </Typography>
-                    </Box>
-
-                    <Box sx={{ mb: 2 }}>
-                      <Box sx={{ mb: 1 }}>
-                        <Typography variant="body2" sx={{ 
-                          color: 'primary.main',
-                          fontWeight: 500,
-                          mb: 0.5,
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 0.5
-                        }}>
-                          <PersonIcon sx={{ fontSize: 16 }} />
-                          Worker: {task.assignees[0]?.firstName} {task.assignees[0]?.lastName}
-                        </Typography>
-                        {user && (
-                          <Typography variant="body2" sx={{ 
-                            color: '#7B68EE',
-                            fontWeight: 500,
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 0.5
-                          }}>
-                            <LocalHospital sx={{ fontSize: 16 }} />
-                            Clinician: {user.firstName} {user.lastName}
-                          </Typography>
-                        )}
-                      </Box>
-                      <Typography variant="body2" color="text.secondary" sx={{ 
-                        height: '40px',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        display: '-webkit-box',
-                        WebkitLineClamp: 2,
-                        WebkitBoxOrient: 'vertical'
-                      }}>
-                        {task.description}
-                      </Typography>
-                    </Box>
-                    
-                    <Box sx={{ mb: 2 }}>
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
-                        <Typography variant="caption" color="text.secondary">Progress</Typography>
-                        <Typography variant="caption" color="text.secondary">{task.progress}%</Typography>
-                      </Box>
-                      <LinearProgress 
-                        variant="determinate" 
-                        value={task.progress} 
-                        sx={{ 
-                          height: 6, 
-                          borderRadius: 3,
-                          backgroundColor: 'rgba(123, 104, 238, 0.1)',
-                          '& .MuiLinearProgress-bar': {
-                            backgroundColor: '#7B68EE',
-                          }
-                        }} 
-                      />
-                    </Box>
-                    
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <Box sx={{ display: 'flex', gap: 0.5 }}>
-                        {task.assignees.map((assignee, index) => (
-                          <Tooltip key={assignee._id} title={`${assignee.firstName} ${assignee.lastName}`}>
-                            <Avatar 
-                              sx={{ 
-                                width: 28, 
-                                height: 28,
-                                fontSize: '0.75rem',
-                                bgcolor: `hsl(${index * 60}, 70%, 60%)`,
-                              }}
-                            >
-                              {assignee.firstName[0]}{assignee.lastName[0]}
-                            </Avatar>
-                          </Tooltip>
-                        ))}
-                      </Box>
-                      
-                      <Typography variant="caption" color="text.secondary">
-                        {new Date(task.dueDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                      </Typography>
-                    </Box>
-                  </CardContent>
-                </Card>
+                <TaskCard 
+                  key={task._id}
+                  task={task}
+                  onViewCase={handleViewCase}
+                  getPriorityColor={getPriorityColor}
+                  user={user}
+                />
               ))}
             </Box>
           </Paper>
@@ -1306,128 +1397,13 @@ const TaskManagementBoard: React.FC = () => {
             
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
               {getPaginatedTasks('in_progress').map((task) => (
-                <Card 
-                  key={task._id} 
-                  sx={{ 
-                    borderRadius: '10px', 
-                    boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
-                    '&:hover': {
-                      boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-                      transform: 'translateY(-2px)',
-                      cursor: 'pointer',
-                    },
-                    transition: 'all 0.2s ease',
-                  }}
-                  onClick={() => handleViewCase(task._id)}
-                >
-                  <CardContent sx={{ p: 2 }}>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-                      <Chip 
-                        label={task.priority} 
-                        size="small" 
-                        sx={{ 
-                          backgroundColor: getPriorityColor(task.priority),
-                          color: 'white',
-                          fontWeight: 600,
-                          fontSize: '0.7rem',
-                          height: '24px',
-                        }} 
-                      />
-                      <IconButton size="small">
-                        <MoreVert fontSize="small" />
-                      </IconButton>
-                    </Box>
-                    
-                    <Box sx={{ mb: 1 }}>
-                      <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 0.5 }}>
-                        {task.title}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                        Case #{task.caseNumber}
-                      </Typography>
-                    </Box>
-
-                    <Box sx={{ mb: 2 }}>
-                      <Box sx={{ mb: 1 }}>
-                        <Typography variant="body2" sx={{ 
-                          color: 'primary.main',
-                          fontWeight: 500,
-                          mb: 0.5,
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 0.5
-                        }}>
-                          <PersonIcon sx={{ fontSize: 16 }} />
-                          Worker: {task.assignees[0]?.firstName} {task.assignees[0]?.lastName}
-                        </Typography>
-                        {user && (
-                          <Typography variant="body2" sx={{ 
-                            color: '#7B68EE',
-                            fontWeight: 500,
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 0.5
-                          }}>
-                            <LocalHospital sx={{ fontSize: 16 }} />
-                            Clinician: {user.firstName} {user.lastName}
-                          </Typography>
-                        )}
-                      </Box>
-                      <Typography variant="body2" color="text.secondary" sx={{ 
-                        height: '40px',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        display: '-webkit-box',
-                        WebkitLineClamp: 2,
-                        WebkitBoxOrient: 'vertical'
-                      }}>
-                        {task.description}
-                      </Typography>
-                    </Box>
-                    
-                    <Box sx={{ mb: 2 }}>
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
-                        <Typography variant="caption" color="text.secondary">Progress</Typography>
-                        <Typography variant="caption" color="text.secondary">{task.progress}%</Typography>
-                      </Box>
-                      <LinearProgress 
-                        variant="determinate" 
-                        value={task.progress} 
-                        sx={{ 
-                          height: 6, 
-                          borderRadius: 3,
-                          backgroundColor: 'rgba(123, 104, 238, 0.1)',
-                          '& .MuiLinearProgress-bar': {
-                            backgroundColor: '#7B68EE',
-                          }
-                        }} 
-                      />
-                    </Box>
-                    
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <Box sx={{ display: 'flex', gap: 0.5 }}>
-                        {task.assignees.map((assignee, index) => (
-                          <Tooltip key={assignee._id} title={`${assignee.firstName} ${assignee.lastName}`}>
-                            <Avatar 
-                              sx={{ 
-                                width: 28, 
-                                height: 28,
-                                fontSize: '0.75rem',
-                                bgcolor: `hsl(${index * 60}, 70%, 60%)`,
-                              }}
-                            >
-                              {assignee.firstName[0]}{assignee.lastName[0]}
-                            </Avatar>
-                          </Tooltip>
-                        ))}
-                      </Box>
-                      
-                      <Typography variant="caption" color="text.secondary">
-                        {new Date(task.dueDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                      </Typography>
-                    </Box>
-                  </CardContent>
-                </Card>
+                <TaskCard 
+                  key={task._id}
+                  task={task}
+                  onViewCase={handleViewCase}
+                  getPriorityColor={getPriorityColor}
+                  user={user}
+                />
               ))}
             </Box>
           </Paper>
@@ -1454,128 +1430,13 @@ const TaskManagementBoard: React.FC = () => {
             
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
               {getPaginatedTasks('revisions').map((task) => (
-                <Card 
-                  key={task._id} 
-                  sx={{ 
-                    borderRadius: '10px', 
-                    boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
-                    '&:hover': {
-                      boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-                      transform: 'translateY(-2px)',
-                      cursor: 'pointer',
-                    },
-                    transition: 'all 0.2s ease',
-                  }}
-                  onClick={() => handleViewCase(task._id)}
-                >
-                  <CardContent sx={{ p: 2 }}>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-                      <Chip 
-                        label={task.priority} 
-                        size="small" 
-                        sx={{ 
-                          backgroundColor: getPriorityColor(task.priority),
-                          color: 'white',
-                          fontWeight: 600,
-                          fontSize: '0.7rem',
-                          height: '24px',
-                        }} 
-                      />
-                      <IconButton size="small">
-                        <MoreVert fontSize="small" />
-                      </IconButton>
-                    </Box>
-                    
-                    <Box sx={{ mb: 1 }}>
-                      <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 0.5 }}>
-                        {task.title}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                        Case #{task.caseNumber}
-                      </Typography>
-                    </Box>
-
-                    <Box sx={{ mb: 2 }}>
-                      <Box sx={{ mb: 1 }}>
-                        <Typography variant="body2" sx={{ 
-                          color: 'primary.main',
-                          fontWeight: 500,
-                          mb: 0.5,
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 0.5
-                        }}>
-                          <PersonIcon sx={{ fontSize: 16 }} />
-                          Worker: {task.assignees[0]?.firstName} {task.assignees[0]?.lastName}
-                        </Typography>
-                        {user && (
-                          <Typography variant="body2" sx={{ 
-                            color: '#7B68EE',
-                            fontWeight: 500,
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 0.5
-                          }}>
-                            <LocalHospital sx={{ fontSize: 16 }} />
-                            Clinician: {user.firstName} {user.lastName}
-                          </Typography>
-                        )}
-                      </Box>
-                      <Typography variant="body2" color="text.secondary" sx={{ 
-                        height: '40px',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        display: '-webkit-box',
-                        WebkitLineClamp: 2,
-                        WebkitBoxOrient: 'vertical'
-                      }}>
-                        {task.description}
-                      </Typography>
-                    </Box>
-                    
-                    <Box sx={{ mb: 2 }}>
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
-                        <Typography variant="caption" color="text.secondary">Progress</Typography>
-                        <Typography variant="caption" color="text.secondary">{task.progress}%</Typography>
-                      </Box>
-                      <LinearProgress 
-                        variant="determinate" 
-                        value={task.progress} 
-                        sx={{ 
-                          height: 6, 
-                          borderRadius: 3,
-                          backgroundColor: 'rgba(123, 104, 238, 0.1)',
-                          '& .MuiLinearProgress-bar': {
-                            backgroundColor: '#7B68EE',
-                          }
-                        }} 
-                      />
-                    </Box>
-                    
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <Box sx={{ display: 'flex', gap: 0.5 }}>
-                        {task.assignees.map((assignee, index) => (
-                          <Tooltip key={assignee._id} title={`${assignee.firstName} ${assignee.lastName}`}>
-                            <Avatar 
-                              sx={{ 
-                                width: 28, 
-                                height: 28,
-                                fontSize: '0.75rem',
-                                bgcolor: `hsl(${index * 60}, 70%, 60%)`,
-                              }}
-                            >
-                              {assignee.firstName[0]}{assignee.lastName[0]}
-                            </Avatar>
-                          </Tooltip>
-                        ))}
-                      </Box>
-                      
-                      <Typography variant="caption" color="text.secondary">
-                        {new Date(task.dueDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                      </Typography>
-                    </Box>
-                  </CardContent>
-                </Card>
+                <TaskCard 
+                  key={task._id}
+                  task={task}
+                  onViewCase={handleViewCase}
+                  getPriorityColor={getPriorityColor}
+                  user={user}
+                />
               ))}
             </Box>
           </Paper>
@@ -1602,128 +1463,13 @@ const TaskManagementBoard: React.FC = () => {
             
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
               {getPaginatedTasks('completed').map((task) => (
-                <Card 
-                  key={task._id} 
-                  sx={{ 
-                    borderRadius: '10px', 
-                    boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
-                    '&:hover': {
-                      boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-                      transform: 'translateY(-2px)',
-                      cursor: 'pointer',
-                    },
-                    transition: 'all 0.2s ease',
-                  }}
-                  onClick={() => handleViewCase(task._id)}
-                >
-                  <CardContent sx={{ p: 2 }}>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-                      <Chip 
-                        label={task.priority} 
-                        size="small" 
-                        sx={{ 
-                          backgroundColor: getPriorityColor(task.priority),
-                          color: 'white',
-                          fontWeight: 600,
-                          fontSize: '0.7rem',
-                          height: '24px',
-                        }} 
-                      />
-                      <IconButton size="small">
-                        <MoreVert fontSize="small" />
-                      </IconButton>
-                    </Box>
-                    
-                    <Box sx={{ mb: 1 }}>
-                      <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 0.5 }}>
-                        {task.title}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                        Case #{task.caseNumber}
-                      </Typography>
-                    </Box>
-
-                    <Box sx={{ mb: 2 }}>
-                      <Box sx={{ mb: 1 }}>
-                        <Typography variant="body2" sx={{ 
-                          color: 'primary.main',
-                          fontWeight: 500,
-                          mb: 0.5,
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 0.5
-                        }}>
-                          <PersonIcon sx={{ fontSize: 16 }} />
-                          Worker: {task.assignees[0]?.firstName} {task.assignees[0]?.lastName}
-                        </Typography>
-                        {user && (
-                          <Typography variant="body2" sx={{ 
-                            color: '#7B68EE',
-                            fontWeight: 500,
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 0.5
-                          }}>
-                            <LocalHospital sx={{ fontSize: 16 }} />
-                            Clinician: {user.firstName} {user.lastName}
-                          </Typography>
-                        )}
-                      </Box>
-                      <Typography variant="body2" color="text.secondary" sx={{ 
-                        height: '40px',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        display: '-webkit-box',
-                        WebkitLineClamp: 2,
-                        WebkitBoxOrient: 'vertical'
-                      }}>
-                        {task.description}
-                      </Typography>
-                    </Box>
-                    
-                    <Box sx={{ mb: 2 }}>
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
-                        <Typography variant="caption" color="text.secondary">Progress</Typography>
-                        <Typography variant="caption" color="text.secondary">{task.progress}%</Typography>
-                      </Box>
-                      <LinearProgress 
-                        variant="determinate" 
-                        value={task.progress} 
-                        sx={{ 
-                          height: 6, 
-                          borderRadius: 3,
-                          backgroundColor: 'rgba(123, 104, 238, 0.1)',
-                          '& .MuiLinearProgress-bar': {
-                            backgroundColor: '#7B68EE',
-                          }
-                        }} 
-                      />
-                    </Box>
-                    
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <Box sx={{ display: 'flex', gap: 0.5 }}>
-                        {task.assignees.map((assignee, index) => (
-                          <Tooltip key={assignee._id} title={`${assignee.firstName} ${assignee.lastName}`}>
-                            <Avatar 
-                              sx={{ 
-                                width: 28, 
-                                height: 28,
-                                fontSize: '0.75rem',
-                                bgcolor: `hsl(${index * 60}, 70%, 60%)`,
-                              }}
-                            >
-                              {assignee.firstName[0]}{assignee.lastName[0]}
-                            </Avatar>
-                          </Tooltip>
-                        ))}
-                      </Box>
-                      
-                      <Typography variant="caption" color="text.secondary">
-                        {new Date(task.dueDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                      </Typography>
-                    </Box>
-                  </CardContent>
-                </Card>
+                <TaskCard 
+                  key={task._id}
+                  task={task}
+                  onViewCase={handleViewCase}
+                  getPriorityColor={getPriorityColor}
+                  user={user}
+                />
               ))}
             </Box>
           </Paper>
@@ -1793,6 +1539,8 @@ const TaskManagementBoard: React.FC = () => {
             Calendar view will be available in a future update
           </Typography>
         </Box>
+      )}
+        </>
       )}
 
       {/* Filter Dialog */}

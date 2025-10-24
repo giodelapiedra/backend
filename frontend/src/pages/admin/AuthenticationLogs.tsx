@@ -48,32 +48,33 @@ import {
   Lock as LockIcon
 } from '@mui/icons-material';
 import LayoutWithSidebar from '../../components/LayoutWithSidebar';
-import api from '../../utils/api';
+import { dataClient } from '../../lib/supabase';
 
 interface AuthLog {
-  _id: string;
-  userId?: {
-    _id: string;
-    firstName: string;
-    lastName: string;
-    email: string;
-    role: string;
-  };
-  userEmail: string;
-  userName: string;
-  userRole: string;
-  action: 'login' | 'logout' | 'login_failed' | 'password_reset' | 'account_locked' | 'account_unlocked';
-  ipAddress: string;
-  userAgent: string;
+  id: string;
+  user_id: string | null;
+  user_email: string;
+  user_name: string;
+  user_role: string;
+  action: 'login' | 'logout' | 'password_reset' | 'account_locked' | 'account_unlocked';
+  ip_address: string;
+  user_agent: string;
+  location: {
+    country?: string;
+    city?: string;
+    region?: string;
+  } | null;
   success: boolean;
-  failureReason?: string;
-  deviceInfo: {
+  failure_reason: 'invalid_credentials' | 'account_deactivated' | 'account_locked' | 'invalid_token' | 'session_expired' | null;
+  session_id: string | null;
+  device_info: {
     deviceType: string;
     browser: string;
     os: string;
-  };
-  createdAt: string;
-  formattedDate: string;
+  } | null;
+  additional_data: any | null;
+  created_at: string;
+  updated_at: string;
 }
 
 interface AuthLogsResponse {
@@ -140,14 +141,21 @@ const AuthenticationLogs: React.FC = () => {
       setVerifyingPassword(true);
       setPasswordError(null);
       
-      // Skip password verification - using Supabase auth
-      console.log('Password verification skipped - using Supabase auth');
+      // Verify admin access using Supabase RLS policy
+      const { data: adminCheck, error: adminError } = await dataClient
+        .from('users')
+        .select('role')
+        .eq('role', 'admin')
+        .single();
+
+      if (adminError || !adminCheck) {
+        throw new Error('Unauthorized access');
+      }
+
       setPasswordVerified(true);
       setPasswordDialogOpen(false);
       setPassword('');
-      // Save verification state to session storage
       sessionStorage.setItem('authLogsPasswordVerified', 'true');
-      // useEffect will handle fetching logs
     } catch (err: any) {
       console.error('Password verification error:', err);
       setPasswordError('Password verification failed');
@@ -195,44 +203,89 @@ const AuthenticationLogs: React.FC = () => {
         if (value) params.append(key, value.toString());
       });
       
-      // Skip API call - using Supabase auth
-      console.log('Auth logs fetch skipped - using Supabase auth');
+      // Build base query for filtering
+      let baseQuery = dataClient
+        .from('authentication_logs')
+        .select('*', { count: 'exact' });
+
+      // Apply filters consistently to both count and data queries
+      if (filters.action) {
+        baseQuery = baseQuery.eq('action', filters.action);
+      }
+      if (filters.success !== '') {
+        baseQuery = baseQuery.eq('success', filters.success === 'true');
+      }
+      if (filters.userRole) {
+        baseQuery = baseQuery.eq('user_role', filters.userRole);
+      }
+      if (filters.startDate) {
+        baseQuery = baseQuery.gte('created_at', `${filters.startDate}T00:00:00.000Z`);
+      }
+      if (filters.endDate) {
+        baseQuery = baseQuery.lte('created_at', `${filters.endDate}T23:59:59.999Z`);
+      }
+      if (filters.search) {
+        baseQuery = baseQuery.or(
+          `user_email.ilike.%${filters.search}%,` +
+          `user_name.ilike.%${filters.search}%,` +
+          `ip_address.ilike.%${filters.search}%`
+        );
+      }
+
+      // Get total count with filters
+      const { count: totalCount, error: countError } = await baseQuery;
+      
+      if (countError) throw countError;
+
+      // Calculate pagination
+      const totalPages = Math.ceil((totalCount || 0) / filters.limit);
+      const offset = (filters.page - 1) * filters.limit;
+
+      // Get paginated data with same filters
+      const { data: logs, error: logsError } = await baseQuery
+        .order('created_at', { ascending: false })
+        .range(offset, offset + filters.limit - 1);
+
+      if (logsError) throw logsError;
+
+      // Get stats using optimized count queries
+      const statsPromises = [
+        dataClient
+          .from('authentication_logs')
+          .select('*', { count: 'exact', head: true })
+          .eq('action', 'login')
+          .eq('success', true),
+        dataClient
+          .from('authentication_logs')
+          .select('*', { count: 'exact', head: true })
+          .eq('action', 'logout')
+      ];
+
+      const [loginStats, logoutStats] = await Promise.all(statsPromises);
+
+      const successfulLogins = loginStats.count || 0;
+      const logouts = logoutStats.count || 0;
+
       setData({
-        logs: [],
+        logs: logs || [],
         pagination: {
-          currentPage: 1,
-          totalPages: 0,
-          totalLogs: 0,
-          hasNext: false,
-          hasPrev: false
+          currentPage: filters.page,
+          totalPages,
+          totalLogs: totalCount || 0,
+          hasNext: filters.page < totalPages,
+          hasPrev: filters.page > 1
         },
         stats: {
-          totalLogs: 0,
-          successfulLogins: 0,
-          logouts: 0
+          totalLogs: totalCount || 0,
+          successfulLogins,
+          logouts
         },
         activityByRole: [],
         recentActivity: 0
       });
     } catch (err: any) {
-      console.log('No auth logs data found');
-      setData({
-        logs: [],
-        pagination: {
-          currentPage: 1,
-          totalPages: 0,
-          totalLogs: 0,
-          hasNext: false,
-          hasPrev: false
-        },
-        stats: {
-          totalLogs: 0,
-          successfulLogins: 0,
-          logouts: 0
-        },
-        activityByRole: [],
-        recentActivity: 0
-      });
+      console.error('Error fetching auth logs:', err);
+      setError(err.message || 'Failed to fetch authentication logs');
     } finally {
       setLoading(false);
     }
@@ -325,7 +378,7 @@ const AuthenticationLogs: React.FC = () => {
 
   // Memoized table row component for better performance
   const LogTableRow = React.memo(({ log }: { log: AuthLog }) => (
-    <TableRow hover key={log._id}>
+    <TableRow hover key={log.id}>
       <TableCell>
         <Box display="flex" alignItems="center" gap={1}>
           {getActionIcon(log.action, log.success)}
@@ -337,16 +390,16 @@ const AuthenticationLogs: React.FC = () => {
       <TableCell>
         <Box>
           <Typography variant="body2" sx={{ fontWeight: 500 }}>
-            {log.userName}
+            {log.user_name}
           </Typography>
           <Typography variant="caption" color="text.secondary">
-            {log.userEmail}
+            {log.user_email}
           </Typography>
         </Box>
       </TableCell>
       <TableCell>
         <Chip 
-          label={log.userRole.replace('_', ' ')} 
+          label={log.user_role.replace('_', ' ')} 
           size="small" 
           color="primary" 
           variant="outlined"
@@ -354,22 +407,22 @@ const AuthenticationLogs: React.FC = () => {
       </TableCell>
       <TableCell>
         <Typography variant="body2" fontFamily="monospace">
-          {log.ipAddress}
+          {log.ip_address}
         </Typography>
       </TableCell>
       <TableCell>
         <Box>
           <Typography variant="body2">
-            {log.deviceInfo.deviceType} • {log.deviceInfo.browser}
+            {log.device_info?.deviceType || 'Unknown'} • {log.device_info?.browser || 'Unknown'}
           </Typography>
           <Typography variant="caption" color="text.secondary">
-            {log.deviceInfo.os}
+            {log.device_info?.os || 'Unknown'}
           </Typography>
         </Box>
       </TableCell>
       <TableCell>
         <Typography variant="body2">
-          {formatDate(log.createdAt)}
+          {formatDate(log.created_at)}
         </Typography>
       </TableCell>
       <TableCell>
@@ -711,7 +764,7 @@ const AuthenticationLogs: React.FC = () => {
                     <LoadingSkeleton />
                   ) : data?.logs && data.logs.length > 0 ? (
                     data.logs.map((log) => (
-                      <LogTableRow key={log._id} log={log} />
+                      <LogTableRow key={log.id} log={log} />
                     ))
                   ) : (
                     <TableRow>
@@ -835,15 +888,15 @@ const AuthenticationLogs: React.FC = () => {
                     <Grid container spacing={2}>
                       <Grid item xs={6}>
                         <Typography variant="body2" color="text.secondary">User</Typography>
-                        <Typography variant="body1">{selectedLog.userName}</Typography>
+                        <Typography variant="body1">{selectedLog.user_name}</Typography>
                       </Grid>
                       <Grid item xs={6}>
                         <Typography variant="body2" color="text.secondary">Email</Typography>
-                        <Typography variant="body1">{selectedLog.userEmail}</Typography>
+                        <Typography variant="body1">{selectedLog.user_email}</Typography>
                       </Grid>
                       <Grid item xs={6}>
                         <Typography variant="body2" color="text.secondary">Role</Typography>
-                        <Typography variant="body1">{selectedLog.userRole.replace('_', ' ')}</Typography>
+                        <Typography variant="body1">{selectedLog.user_role.replace('_', ' ')}</Typography>
                       </Grid>
                       <Grid item xs={6}>
                         <Typography variant="body2" color="text.secondary">Action</Typography>
@@ -859,7 +912,7 @@ const AuthenticationLogs: React.FC = () => {
                       </Grid>
                       <Grid item xs={6}>
                         <Typography variant="body2" color="text.secondary">Date/Time</Typography>
-                        <Typography variant="body1">{formatDate(selectedLog.createdAt)}</Typography>
+                        <Typography variant="body1">{formatDate(selectedLog.created_at)}</Typography>
                       </Grid>
                     </Grid>
                   </AccordionDetails>
@@ -873,31 +926,31 @@ const AuthenticationLogs: React.FC = () => {
                     <Grid container spacing={2}>
                       <Grid item xs={12}>
                         <Typography variant="body2" color="text.secondary">IP Address</Typography>
-                        <Typography variant="body1" fontFamily="monospace">{selectedLog.ipAddress}</Typography>
+                        <Typography variant="body1" fontFamily="monospace">{selectedLog.ip_address}</Typography>
                       </Grid>
                       <Grid item xs={4}>
                         <Typography variant="body2" color="text.secondary">Device Type</Typography>
-                        <Typography variant="body1">{selectedLog.deviceInfo.deviceType}</Typography>
+                        <Typography variant="body1">{selectedLog.device_info?.deviceType || 'Unknown'}</Typography>
                       </Grid>
                       <Grid item xs={4}>
                         <Typography variant="body2" color="text.secondary">Browser</Typography>
-                        <Typography variant="body1">{selectedLog.deviceInfo.browser}</Typography>
+                        <Typography variant="body1">{selectedLog.device_info?.browser || 'Unknown'}</Typography>
                       </Grid>
                       <Grid item xs={4}>
                         <Typography variant="body2" color="text.secondary">Operating System</Typography>
-                        <Typography variant="body1">{selectedLog.deviceInfo.os}</Typography>
+                        <Typography variant="body1">{selectedLog.device_info?.os || 'Unknown'}</Typography>
                       </Grid>
                       <Grid item xs={12}>
                         <Typography variant="body2" color="text.secondary">User Agent</Typography>
                         <Typography variant="body2" fontFamily="monospace" sx={{ wordBreak: 'break-all' }}>
-                          {selectedLog.userAgent}
+                          {selectedLog.user_agent}
                         </Typography>
                       </Grid>
-                      {selectedLog.failureReason && (
+                      {selectedLog.failure_reason && (
                         <Grid item xs={12}>
                           <Typography variant="body2" color="text.secondary">Failure Reason</Typography>
                           <Typography variant="body1" color="error.main">
-                            {selectedLog.failureReason.replace('_', ' ')}
+                            {selectedLog.failure_reason.replace('_', ' ')}
                           </Typography>
                         </Grid>
                       )}

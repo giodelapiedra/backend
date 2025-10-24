@@ -4,6 +4,7 @@ const { authenticateToken, requireRole } = require('../middleware/authSupabase')
 const { asyncHandler } = require('../middleware/errorHandler');
 const { adminLimiter } = require('../middleware/rateLimiter');
 const {
+  getStatistics,
   getAdminAnalytics,
   getAuthLogs,
   createUser,
@@ -11,7 +12,8 @@ const {
   updateUser,
   deleteUser,
   testAdmin,
-  testUserCreation
+  testUserCreation,
+  getAnalytics
 } = require('../controllers/adminController');
 
 console.log('🔍 Admin routes (Supabase) loaded');
@@ -28,8 +30,11 @@ router.post('/users', adminLimiter, authenticateToken, requireRole('admin'), asy
 router.put('/users/:id', adminLimiter, authenticateToken, requireRole('admin'), asyncHandler(updateUser));
 router.delete('/users/:id', adminLimiter, authenticateToken, requireRole('admin'), asyncHandler(deleteUser));
 
-// Analytics endpoint for admin
-router.get('/analytics', adminLimiter, authenticateToken, requireRole('admin'), asyncHandler(getAdminAnalytics));
+// Analytics endpoint for admin - using new optimized endpoint
+router.get('/analytics', adminLimiter, authenticateToken, requireRole('admin'), asyncHandler(getAnalytics));
+
+// Statistics endpoint for dashboard
+router.get('/statistics', adminLimiter, authenticateToken, requireRole('admin'), asyncHandler(getStatistics));
 
 // Authentication logs endpoint
 router.get('/auth-logs', adminLimiter, authenticateToken, requireRole('admin'), asyncHandler(getAuthLogs));
