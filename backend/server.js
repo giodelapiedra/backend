@@ -42,14 +42,7 @@ app.use(securityHeaders());             // why: security headers should come fir
 app.use(additionalSecurityHeaders);
 
 // ---------- CORS BEFORE BODY/COMPRESSION ----------
-app.options('/*', (req, res) => {
-  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Origin, Accept, X-CSRF-Token');
-  res.header('Access-Control-Allow-Credentials', 'true'); // ✅ FIXED: Enable credentials
-  res.header('Access-Control-Max-Age', '86400');
-  res.status(200).end();
-});
+// CORS options will be handled by the CORS middleware below
 
 app.use(
   cors({
